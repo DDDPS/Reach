@@ -16,6 +16,13 @@ const base = process.env.BASE_PATH ?? '/';
 // https://astro.build/config
 export default defineConfig({
 	site,
+	vite: {
+		// This site's own tsconfig, named outright. Without it Vite looks for one
+		// by walking up from each file, and reaches the app's tsconfig in the
+		// repository root, which extends .svelte-kit/tsconfig.json: a file that
+		// exists only after the app has been set up, never in this build.
+		tsconfig: './tsconfig.json',
+	},
 	base,
 	integrations: [
 		starlight({

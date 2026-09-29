@@ -121,3 +121,23 @@ jobs:
           script: |
             adb push "$RUNNER_TEMP/android-test/." /data/local/tmp/reach/
             adb shell "cd /data/local/tmp/reach && chmod +x reach-tests && HOME=/data/local/tmp/reach TMPDIR=/data/local/tmp/reach LD_LIBRARY_PATH=/data/local/tmp/reach ./reach-tests"
+
+  # The documentation site, built the way its deploy builds it: from docs/
+  # alone, with the app never set up.
+  docs:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Build the site
+        run: |
+          npm ci
+          npm run build
