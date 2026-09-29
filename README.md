@@ -21,6 +21,12 @@
   <a href="https://reachssh.com/"><strong>Documentation</strong></a> · <a href="https://github.com/alexandrosnt/Reach/releases">Download</a> · <a href="https://discord.gg/CSbEybvDVV">Discord</a> · <a href="https://github.com/alexandrosnt/Reach/issues">Report a Bug</a>
 </p>
 
+<p align="center">
+  <a href="https://alternativeto.net/software/reach-ssh/about/?utm_source=badge&utm_medium=referral">
+    <img src="https://alternativeto.net/static/badges/badge-compact-color.svg" alt="Reach SSH | AlternativeTo" width="244" height="79" />
+  </a>
+</p>
+
 ---
 
 <p align="center">
