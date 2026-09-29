@@ -9,6 +9,7 @@ pub mod schema;
 pub mod sharing;
 pub mod sync;
 pub mod turso_api;
+pub mod turso_tls;
 pub mod types;
 
 pub use error::VaultError;
