@@ -3,7 +3,6 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
 };
 use hkdf::Hkdf;
-use rand::RngCore;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
@@ -13,7 +12,7 @@ use crate::vault::types::{Dek, UserIdentity, WrappedDek};
 
 /// Generate a new X25519 keypair.
 pub fn generate_identity_keypair() -> (StaticSecret, PublicKey) {
-    let secret = StaticSecret::random_from_rng(rand::thread_rng());
+    let secret = StaticSecret::random_from_rng(&mut rand::rng());
     let public = PublicKey::from(&secret);
     (secret, public)
 }
@@ -22,8 +21,8 @@ pub fn generate_identity_keypair() -> (StaticSecret, PublicKey) {
 pub fn encrypt_identity_key(kek: &[u8; 32], secret_key: &StaticSecret) -> Result<(Vec<u8>, [u8; 24]), VaultError> {
     let cipher = XChaCha20Poly1305::new(kek.into());
     let mut nonce = [0u8; 24];
-    rand::thread_rng().fill_bytes(&mut nonce);
-    let xnonce = XNonce::from_slice(&nonce);
+    rand::fill(&mut nonce[..]);
+    let xnonce = &XNonce::from(nonce);
 
     let ciphertext = cipher
         .encrypt(xnonce, secret_key.as_bytes().as_ref())
@@ -35,7 +34,7 @@ pub fn encrypt_identity_key(kek: &[u8; 32], secret_key: &StaticSecret) -> Result
 /// Decrypt identity key with KEK.
 pub fn decrypt_identity_key(kek: &[u8; 32], ciphertext: &[u8], nonce: &[u8; 24]) -> Result<StaticSecret, VaultError> {
     let cipher = XChaCha20Poly1305::new(kek.into());
-    let xnonce = XNonce::from_slice(nonce);
+    let xnonce = &XNonce::from(*nonce);
 
     let plaintext = cipher
         .decrypt(xnonce, ciphertext)
@@ -57,7 +56,7 @@ pub fn decrypt_identity_key(kek: &[u8; 32], ciphertext: &[u8], nonce: &[u8; 24])
 /// Used when inviting someone to a shared vault.
 pub fn wrap_dek_for_member(dek: &Dek, member_public_key: &[u8; 32]) -> Result<WrappedDek, VaultError> {
     // Generate ephemeral X25519 keypair
-    let ephemeral_secret = StaticSecret::random_from_rng(rand::thread_rng());
+    let ephemeral_secret = StaticSecret::random_from_rng(&mut rand::rng());
     let ephemeral_public = PublicKey::from(&ephemeral_secret);
 
     // Compute shared secret
@@ -71,10 +70,10 @@ pub fn wrap_dek_for_member(dek: &Dek, member_public_key: &[u8; 32]) -> Result<Wr
         .map_err(|e: hkdf::InvalidLength| VaultError::EncryptionError(e.to_string()))?;
 
     // Encrypt DEK with wrapping key
-    let cipher = XChaCha20Poly1305::new(wrapping_key.as_ref().into());
+    let cipher = XChaCha20Poly1305::new((&*wrapping_key).into());
     let mut nonce = [0u8; 24];
-    rand::thread_rng().fill_bytes(&mut nonce);
-    let xnonce = XNonce::from_slice(&nonce);
+    rand::fill(&mut nonce[..]);
+    let xnonce = &XNonce::from(nonce);
 
     // Prepend ephemeral public key to ciphertext
     let mut plaintext_with_context = Vec::with_capacity(32 + dek.expose().len());
@@ -117,8 +116,8 @@ pub fn unwrap_dek_for_member(identity: &UserIdentity, wrapped: &WrappedDek) -> R
         .map_err(|e: hkdf::InvalidLength| VaultError::DecryptionError(e.to_string()))?;
 
     // Decrypt DEK
-    let cipher = XChaCha20Poly1305::new(wrapping_key.as_ref().into());
-    let xnonce = XNonce::from_slice(&wrapped.nonce);
+    let cipher = XChaCha20Poly1305::new((&*wrapping_key).into());
+    let xnonce = &XNonce::from(wrapped.nonce);
 
     let plaintext = cipher
         .decrypt(xnonce, &wrapped.ciphertext[32..])

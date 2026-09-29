@@ -28,7 +28,7 @@ const MAX_RECIPE_BYTES: usize = 512 * 1024;
 fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
+        crate::http::client_builder()
             .timeout(Duration::from_secs(30))
             .build()
             .expect("reqwest client build should not fail with default features")

@@ -46,7 +46,7 @@ struct ApiError {
 pub async fn ai_chat(request: AiChatRequest) -> Result<String, String> {
     tracing::info!("ai_chat called: model={}, messages={}", request.model, request.messages.len());
 
-    let client = reqwest::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
@@ -154,7 +154,7 @@ struct ModelEntryPricing {
 
 #[tauri::command]
 pub async fn ai_fetch_models(request: AiFetchModelsRequest) -> Result<Vec<ModelInfo>, String> {
-    let client = reqwest::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;

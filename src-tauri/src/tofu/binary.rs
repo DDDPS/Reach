@@ -253,7 +253,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 async fn client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
+    crate::http::client_builder()
         .user_agent("Reach (https://github.com/alexandrosnt/Reach)")
         .build()
         .map_err(|e| e.to_string())

@@ -100,7 +100,7 @@ pub fn inspect(private_key: &str) -> Result<KeyFacts, String> {
     let looks_encrypted = trimmed.contains("ENCRYPTED")
         || trimmed.contains("Proc-Type: 4,ENCRYPTED")
         || trimmed.contains("DEK-Info:");
-    if russh_keys::decode_secret_key(trimmed, None).is_ok() {
+    if russh::keys::decode_secret_key(trimmed, None).is_ok() {
         return Ok(KeyFacts {
             algo: None,
             fingerprint: None,

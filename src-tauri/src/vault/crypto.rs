@@ -2,7 +2,6 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
     XChaCha20Poly1305, XNonce,
 };
-use rand::RngCore;
 use secrecy::SecretBox;
 use zeroize::Zeroizing;
 
@@ -12,14 +11,14 @@ use crate::vault::types::{Dek, EncryptedPayload, Kek, WrappedDek};
 /// Generate a random 32-byte DEK.
 pub fn generate_dek() -> Dek {
     let mut key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut key);
+    rand::fill(&mut key[..]);
     Dek::new(key)
 }
 
 /// Generate a random 24-byte nonce for XChaCha20.
 fn generate_nonce() -> [u8; 24] {
     let mut nonce = [0u8; 24];
-    rand::thread_rng().fill_bytes(&mut nonce);
+    rand::fill(&mut nonce[..]);
     nonce
 }
 
@@ -27,7 +26,7 @@ fn generate_nonce() -> [u8; 24] {
 pub fn wrap_dek(kek: &Kek, dek: &Dek) -> Result<WrappedDek, VaultError> {
     let cipher = XChaCha20Poly1305::new(kek.expose().into());
     let nonce = generate_nonce();
-    let xnonce = XNonce::from_slice(&nonce);
+    let xnonce = &XNonce::from(nonce);
 
     let ciphertext = cipher
         .encrypt(xnonce, dek.expose().as_ref())
@@ -39,7 +38,7 @@ pub fn wrap_dek(kek: &Kek, dek: &Dek) -> Result<WrappedDek, VaultError> {
 /// Unwrap a DEK using a KEK.
 pub fn unwrap_dek(kek: &Kek, wrapped: &WrappedDek) -> Result<Dek, VaultError> {
     let cipher = XChaCha20Poly1305::new(kek.expose().into());
-    let xnonce = XNonce::from_slice(&wrapped.nonce);
+    let xnonce = &XNonce::from(wrapped.nonce);
 
     let plaintext = cipher
         .decrypt(xnonce, wrapped.ciphertext.as_ref())
@@ -66,7 +65,7 @@ pub fn encrypt_secret(master_dek: &Dek, plaintext: &[u8]) -> Result<EncryptedPay
     // Encrypt payload with DEK
     let cipher = XChaCha20Poly1305::new(dek.expose().into());
     let nonce = generate_nonce();
-    let xnonce = XNonce::from_slice(&nonce);
+    let xnonce = &XNonce::from(nonce);
 
     let ciphertext = cipher
         .encrypt(xnonce, plaintext)
@@ -86,7 +85,7 @@ pub fn encrypt_secret(master_dek: &Dek, plaintext: &[u8]) -> Result<EncryptedPay
 pub fn wrap_dek_with_dek(master_dek: &Dek, dek: &Dek) -> Result<WrappedDek, VaultError> {
     let cipher = XChaCha20Poly1305::new(master_dek.expose().into());
     let nonce = generate_nonce();
-    let xnonce = XNonce::from_slice(&nonce);
+    let xnonce = &XNonce::from(nonce);
 
     let ciphertext = cipher
         .encrypt(xnonce, dek.expose().as_ref())
@@ -105,7 +104,7 @@ pub fn decrypt_secret(
 
     // Decrypt payload with DEK
     let cipher = XChaCha20Poly1305::new(dek.expose().into());
-    let xnonce = XNonce::from_slice(&payload.nonce);
+    let xnonce = &XNonce::from(payload.nonce);
 
     let plaintext = cipher
         .decrypt(xnonce, payload.ciphertext.as_ref())
@@ -117,7 +116,7 @@ pub fn decrypt_secret(
 /// Unwrap a DEK using master DEK.
 pub fn unwrap_dek_with_dek(master_dek: &Dek, wrapped: &WrappedDek) -> Result<Dek, VaultError> {
     let cipher = XChaCha20Poly1305::new(master_dek.expose().into());
-    let xnonce = XNonce::from_slice(&wrapped.nonce);
+    let xnonce = &XNonce::from(wrapped.nonce);
 
     let plaintext = cipher
         .decrypt(xnonce, wrapped.ciphertext.as_ref())
@@ -139,7 +138,7 @@ pub fn unwrap_dek_with_dek(master_dek: &Dek, wrapped: &WrappedDek) -> Result<Dek
 pub fn wrap_dek_with_key(wrapping_key: &[u8; 32], dek: &Dek) -> Result<WrappedDek, VaultError> {
     let cipher = XChaCha20Poly1305::new(wrapping_key.into());
     let nonce = generate_nonce();
-    let xnonce = XNonce::from_slice(&nonce);
+    let xnonce = &XNonce::from(nonce);
 
     let ciphertext = cipher
         .encrypt(xnonce, dek.expose().as_ref())
@@ -151,7 +150,7 @@ pub fn wrap_dek_with_key(wrapping_key: &[u8; 32], dek: &Dek) -> Result<WrappedDe
 /// Unwrap a DEK using a raw 32-byte key (for X25519 shared secret derived keys).
 pub fn unwrap_dek_with_key(wrapping_key: &[u8; 32], wrapped: &WrappedDek) -> Result<Dek, VaultError> {
     let cipher = XChaCha20Poly1305::new(wrapping_key.into());
-    let xnonce = XNonce::from_slice(&wrapped.nonce);
+    let xnonce = &XNonce::from(wrapped.nonce);
 
     let plaintext = cipher
         .decrypt(xnonce, wrapped.ciphertext.as_ref())

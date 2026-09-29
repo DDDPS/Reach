@@ -9,6 +9,7 @@ pub mod rdp;
 pub mod db;
 pub mod devops;
 pub mod dragout;
+pub mod http;
 pub mod recipe;
 pub mod share;
 #[cfg(desktop)]
@@ -153,6 +154,11 @@ pub fn run() {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    // TLS for HTTPS (reqwest) and every other rustls user: ring, which the
+    // database drivers already build in. reqwest is compiled without a
+    // provider of its own and asks for this one at its first request.
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     tracing::info!("Starting Reach application");
 

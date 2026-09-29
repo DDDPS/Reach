@@ -1,6 +1,5 @@
 //! Turso Platform API client for creating databases and tokens.
 
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::vault::error::VaultError;
@@ -15,7 +14,7 @@ pub async fn create_database(
     db_name: &str,
     group: &str,
 ) -> Result<TursoDbInfo, VaultError> {
-    let client = Client::new();
+    let client = crate::http::client();
     let url = format!("{}/organizations/{}/databases", TURSO_API_BASE, org);
 
     #[derive(Serialize)]
@@ -72,7 +71,7 @@ pub async fn create_database_token(
     api_token: &str,
     db_name: &str,
 ) -> Result<String, VaultError> {
-    let client = Client::new();
+    let client = crate::http::client();
     let url = format!(
         "{}/organizations/{}/databases/{}/auth/tokens",
         TURSO_API_BASE, org, db_name

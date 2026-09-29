@@ -1,0 +1,63 @@
+name: Build check
+
+# Builds and tests on every desktop platform without releasing anything, so a
+# change (a dependency update above all) is known to build on macOS and Linux
+# before it is merged, not when a release tag is pushed.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system dependencies (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libudev-dev libasound2-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check and build the frontend
+        run: |
+          npm run check
+          npm run i18n:check
+          npm run build
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --lib
+
+      # The runner is Apple silicon; Intel Macs get their own release build.
+      - name: Build for Intel Macs
+        if: matrix.platform == 'macos-latest'
+        working-directory: src-tauri
+        run: cargo build --lib --target x86_64-apple-darwin

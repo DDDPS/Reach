@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod compat_tests;
 pub mod crypto;
 pub mod error;
 pub mod export;
