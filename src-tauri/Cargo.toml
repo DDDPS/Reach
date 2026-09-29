@@ -28,33 +28,34 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 
 # SSH
-russh = { version = "0.46", default-features = false }
-russh-keys = { version = "0.46", default-features = false }
-# Same version russh-keys already pulls in: used to read what a key says
+# ring, the crypto the rest of the app installs for rustls (see run() in
+# lib.rs). rsa keeps RSA keys working.
+russh = { version = "0.63", default-features = false, features = ["ring", "rsa"] }
+# Used to read what a key says
 # about itself (algorithm, fingerprint, whether it is encrypted) without
 # needing the passphrase.
 ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption"] }
-async-trait = "0.1"
-ssh2-config = "0.7"
+ssh2-config = "0.8"
 
 # Encryption
-aes-gcm = "0.10"
-argon2 = { version = "0.5", features = ["std"] }
-rand = "0.8"
+argon2 = "0.6"
+rand = "0.10"
 zeroize = { version = "1", features = ["derive"] }
-base64 = "0.22"
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
-x25519-dalek = { version = "2", features = ["static_secrets"] }
+base64 = "0.23"
+chacha20poly1305 = "0.11"
+hkdf = "0.13"
+x25519-dalek = { version = "3", features = ["static_secrets"] }
 secrecy = { version = "0.10", features = ["serde"] }
 
 # Vault storage
-libsql = "0.6"
-dirs = "5"
-sha2 = "0.10"
+libsql = "0.9"
+dirs = "7"
+sha2 = "0.11"
 # Keychain/credential storage
 # NOTE: Not available on Android - needs tauri-plugin-biometric for Android Keystore
-keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
+# The OS credential store holds the key for auto-unlock. keyring-core plus one
+# store per platform (see keychain_entry in src/vault/manager.rs).
+keyring-core = "1"
 
 # Databases workspace. sqlx for PostgreSQL and MySQL/MariaDB, tiberius for SQL
 # Server; SQLite files go through libsql above, because a second bundled SQLite
@@ -70,10 +71,16 @@ tokio-util = { version = "0.7", features = ["compat"] }
 futures-util = "0.3"
 
 # Toolchain detection & installation
-which = "7"
+which = "8"
 
 # HTTP (AI API proxy)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# rustls without a provider of its own: Redis and the WebSocket client already
+# build both ring and aws-lc-rs into rustls, so none is chosen by default and
+# run() in lib.rs installs ring for the whole process. See src/http.rs for
+# Android's root certificates.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "stream"] }
+# The process-wide crypto provider reqwest asks for; installed in run().
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 # SOCKS5/SOCKS4 proxy (Tor, etc.)
 tokio-socks = "0.5"
@@ -86,17 +93,17 @@ tokio-socks = "0.5"
 # Axum 0.6 is already in the tree transitively via Tauri; declared explicitly at
 # 0.8 so the server does not silently change behaviour when Tauri bumps its own.
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
-tower-http = { version = "0.6", default-features = false, features = ["cors"] }
+tower-http = { version = "0.7", default-features = false, features = ["cors"] }
 
 # Regex (dependency graph)
 regex = "1"
 
 # Lua plugin engine
-mlua = { version = "0.10", features = ["luau", "vendored", "async", "serialize", "send"] }
-toml = "0.8"
+mlua = { version = "0.12", features = ["luau", "vendored", "async", "serialize", "send"] }
+toml = "1"
 # Plugin marketplace: download + extract release zips. Pinned >= 2.3 to avoid
 # CVE-2025-29787 (symlink-based path traversal) which affects 1.3.0–2.2.x.
-zip = "2.3"
+zip = "8"
 flate2 = "1"
 tar = "0.4"
 tauri-plugin-process = "2.3.1"
@@ -114,15 +121,15 @@ tauri-plugin-process = "2.3.1"
 # difference between a cursor blink costing a few hundred bytes and costing
 # eight megabytes. All three crates come from the same revision so their types
 # agree. Move back to versions when the next release carries this.
-ironrdp-client = { git = "https://github.com/Devolutions/IronRDP", rev = "9b151c4c2e47c6014e1e8e55909d4180aa8bdb99", default-features = false, features = ["rustls", "clipboard", "rdpdr"] }
-ironrdp-cliprdr = { git = "https://github.com/Devolutions/IronRDP", rev = "9b151c4c2e47c6014e1e8e55909d4180aa8bdb99" }
-ironrdp-rdpdr = { git = "https://github.com/Devolutions/IronRDP", rev = "9b151c4c2e47c6014e1e8e55909d4180aa8bdb99" }
-ironrdp-svc = { git = "https://github.com/Devolutions/IronRDP", rev = "9b151c4c2e47c6014e1e8e55909d4180aa8bdb99" }
-ironrdp-tls = { git = "https://github.com/Devolutions/IronRDP", rev = "9b151c4c2e47c6014e1e8e55909d4180aa8bdb99", default-features = false, features = ["rustls"] }
+ironrdp-client = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59", default-features = false, features = ["rustls", "clipboard", "rdpdr"] }
+ironrdp-cliprdr = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59" }
+ironrdp-rdpdr = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59" }
+ironrdp-svc = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59" }
+ironrdp-tls = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59", default-features = false, features = ["rustls"] }
 # H.264 for the graphics pipeline: OpenH264 compiled in (the user's call; see the changelog).
-ironrdp-egfx = { git = "https://github.com/Devolutions/IronRDP", rev = "9b151c4c2e47c6014e1e8e55909d4180aa8bdb99", features = ["openh264-bundled"] }
-ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP", rev = "9b151c4c2e47c6014e1e8e55909d4180aa8bdb99" }
-ironrdp-graphics = { git = "https://github.com/Devolutions/IronRDP", rev = "9b151c4c2e47c6014e1e8e55909d4180aa8bdb99" }
+ironrdp-egfx = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59", features = ["openh264-bundled"] }
+ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59" }
+ironrdp-graphics = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59" }
 smallvec = "1"
 
 # PTY, Serial, Autostart, Updater, native drag-out (desktop only)
@@ -132,8 +139,8 @@ arboard = { version = "3.6", default-features = false }
 # Sound for RDP. The same crate again with one more feature: Cargo unions the
 # features, so playback (cpal + a bundled Opus) is built for the desktops only.
 # Android would need the NDK C++ toolchain for cpal and has no listener yet.
-ironrdp-client = { git = "https://github.com/Devolutions/IronRDP", rev = "9b151c4c2e47c6014e1e8e55909d4180aa8bdb99", default-features = false, features = ["sound"] }
-portable-pty = "0.8"
+ironrdp-client = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59", default-features = false, features = ["sound"] }
+portable-pty = "0.9"
 serialport = "4"
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
@@ -165,12 +172,15 @@ tauri-plugin-drag = "2"
 # Dragging a remote file out without downloading it first. Explorer pulls the
 # bytes through an IStream on drop, so nothing is fetched while dragging.
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.61", features = [
+windows-native-keyring-store = "1"
+windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_DataExchange",
     "Win32_System_Ole",
+    "Win32_System_Variant",
     "Win32_System_Memory",
     "Win32_System_SystemServices",
     "Win32_UI_Shell",
@@ -182,11 +192,12 @@ windows = { version = "0.61", features = [
 ] }
 # The #[implement] macro expands to paths rooted at this crate, so it has to
 # be a direct dependency even though everything else comes through `windows`.
-windows-core = "0.61"
+windows-core = "0.62"
 # Reaching the WebView2 controller to tell it focus moved (issue #49).
-webview2-com = "0.38"
+webview2-com = "0.39"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+linux-keyutils-keyring-store = "1"
 openssl-sys = { version = "0.9", features = ["vendored"] }
 
 # macOS only, and only to turn one user default off at launch: holding a key in
@@ -197,6 +208,7 @@ openssl-sys = { version = "0.9", features = ["vendored"] }
 # `disable_press_and_hold` in lib.rs. objc2 is already in the tree under
 # tao/wry, so naming it here downloads nothing new.
 [target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
 objc2 = "0.6"
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
@@ -221,7 +233,14 @@ strip = true
 # The client crate with one addition of ours, `with_h264_decoder`; see vendor/ironrdp-client/Cargo.toml.
 [patch."https://github.com/Devolutions/IronRDP"]
 ironrdp-client = { path = "vendor/ironrdp-client" }
+# sspi 0.22 and picky rc.26, so russh can take the RustCrypto releases it
+# needs; see the header of vendor/ironrdp-connector/Cargo.toml.
+ironrdp-connector = { path = "vendor/ironrdp-connector" }
 
 # Free space of the volume a shared RDP folder is on.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Root certificates for HTTPS on Android; see src/http.rs.
+[target.'cfg(target_os = "android")'.dependencies]
+webpki-root-certs = "1"

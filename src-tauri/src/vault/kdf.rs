@@ -1,5 +1,4 @@
 use argon2::{Algorithm, Argon2, Params, Version};
-use rand::RngCore;
 use zeroize::Zeroizing;
 
 use crate::vault::error::VaultError;
@@ -33,7 +32,7 @@ pub fn derive_kek(password: &[u8], salt: &[u8; 32]) -> Result<Kek, VaultError> {
 /// Generate a random 32-byte salt.
 pub fn generate_salt() -> [u8; 32] {
     let mut salt = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut salt);
+    rand::fill(&mut salt[..]);
     salt
 }
 

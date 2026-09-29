@@ -2938,6 +2938,10 @@ enum RdpControlFlow {
 struct ActiveSessionIteration {
     outputs: Vec<ActiveStageOutput>,
     dvc_batch: Option<DvcMessageBatch>,
+    /// The tunnel the DVC batch answers a request from. MS-RDPEDYC responses go back on the
+    /// transport their request arrived on, which the Soft-Sync routing table cannot tell for a
+    /// Create Request received on the tunnel and declined: that channel is never bound.
+    reply_tunnel: Option<SoftSyncTunnelType>,
 }
 
 impl ActiveSessionIteration {
@@ -2945,6 +2949,7 @@ impl ActiveSessionIteration {
         Self {
             outputs,
             dvc_batch: None,
+            reply_tunnel: None,
         }
     }
 
@@ -2952,6 +2957,7 @@ impl ActiveSessionIteration {
         Self {
             outputs: Vec::new(),
             dvc_batch: Some(dvc_batch),
+            reply_tunnel: None,
         }
     }
 
@@ -2959,6 +2965,18 @@ impl ActiveSessionIteration {
         Self {
             outputs,
             dvc_batch: Some(dvc_batch),
+            reply_tunnel: None,
+        }
+    }
+
+    fn tunnel(
+        tunnel_type: SoftSyncTunnelType,
+        (dvc_batch, outputs): (DvcMessageBatch, Vec<ActiveStageOutput>),
+    ) -> Self {
+        Self {
+            outputs,
+            dvc_batch: Some(dvc_batch),
+            reply_tunnel: Some(tunnel_type),
         }
     }
 }
@@ -3192,8 +3210,9 @@ async fn active_session(
         };
         let buffered_udp_iteration = if initial_outputs.is_none() && active_stage.reliable_udp_dvc_tunnel_in_use() {
             match pending_udp_payload.take() {
-                Some(payload) => Some(ActiveSessionIteration::dvc(
-                    active_stage.process_dvc_tunnel(SoftSyncTunnelType::RELIABLE_UDP, &payload)?,
+                Some(payload) => Some(ActiveSessionIteration::tunnel(
+                    SoftSyncTunnelType::RELIABLE_UDP,
+                    active_stage.process_dvc_tunnel(&mut image, SoftSyncTunnelType::RELIABLE_UDP, &payload)?,
                 )),
                 None => None,
             }
@@ -3333,9 +3352,14 @@ async fn active_session(
                     }
                     Some(payload) => {
                         if active_stage.reliable_udp_dvc_tunnel_in_use() {
-                            let batch =
-                                active_stage.process_dvc_tunnel(SoftSyncTunnelType::RELIABLE_UDP, &payload)?;
-                            ActiveSessionIteration::dvc(batch)
+                            ActiveSessionIteration::tunnel(
+                                SoftSyncTunnelType::RELIABLE_UDP,
+                                active_stage.process_dvc_tunnel(
+                                    &mut image,
+                                    SoftSyncTunnelType::RELIABLE_UDP,
+                                    &payload,
+                                )?,
+                            )
                         } else {
                             // The server can send on UDP immediately after its Soft-Sync request,
                             // before the independently ordered request arrives over TCP. Stop
@@ -3765,11 +3789,11 @@ async fn active_session(
             let channel_id = batch.channel_id();
             let messages = batch.into_messages();
             #[cfg(feature = "udp")]
-            let route_over_udp =
-                active_stage.dvc_tunnel_for_channel(channel_id) == Some(SoftSyncTunnelType::RELIABLE_UDP);
+            let route_over_udp = iteration.reply_tunnel == Some(SoftSyncTunnelType::RELIABLE_UDP)
+                || active_stage.dvc_tunnel_for_channel(channel_id) == Some(SoftSyncTunnelType::RELIABLE_UDP);
             #[cfg(not(feature = "udp"))]
             let route_over_udp = {
-                let _ = channel_id;
+                let _ = (channel_id, iteration.reply_tunnel);
                 false
             };
             if route_over_udp {

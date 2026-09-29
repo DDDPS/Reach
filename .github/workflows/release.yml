@@ -99,6 +99,19 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "macOS signing enabled."
 
+      # The release description, and the notes the in-app updater shows (they
+      # reach latest.json from releaseBody). The dialog prints them as plain
+      # text, so the file is kept short and free of markup.
+      - name: Read the release notes
+        id: notes
+        shell: bash
+        run: |
+          {
+            echo 'body<<RELEASE_NOTES_EOF'
+            cat .github/release-notes.md
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and release
         uses: tauri-apps/tauri-action@v1
         env:
@@ -110,7 +123,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Reach ${{ github.ref_name }}'
-          releaseBody: 'See the assets to download and install.'
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           updaterJsonPreferNsis: true

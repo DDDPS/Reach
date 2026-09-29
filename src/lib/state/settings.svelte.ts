@@ -35,6 +35,11 @@ export interface Settings {
 
 	setupComplete: boolean;
 	pendingTursoOrg: string;
+	/**
+	 * Held in memory only, between the setup wizard and the Sync tab, which
+	 * moves it into the encrypted vault. Never written to localStorage: a
+	 * token there sits on disk in the clear.
+	 */
 	pendingTursoApiToken: string;
 
 	/**
@@ -141,6 +146,9 @@ export function loadSettings(): void {
 
 		if (stored) {
 			const parsed = JSON.parse(stored) as Partial<Settings>;
+			// Earlier versions wrote the pending Turso token here in the clear; the
+			// next save leaves it out, so save once now to take it off the disk.
+			if (parsed.pendingTursoApiToken) queueMicrotask(saveSettings);
 			settings.theme = parsed.theme ?? defaults.theme;
 			settings.fontSize = parsed.fontSize ?? defaults.fontSize;
 			settings.fontFamily = parsed.fontFamily ?? defaults.fontFamily;
@@ -153,7 +161,6 @@ export function loadSettings(): void {
 			settings.rdpHardwareRendering = parsed.rdpHardwareRendering ?? defaults.rdpHardwareRendering;
 			settings.rdpGraphicsPipeline = parsed.rdpGraphicsPipeline ?? defaults.rdpGraphicsPipeline;
 			settings.pendingTursoOrg = parsed.pendingTursoOrg ?? defaults.pendingTursoOrg;
-			settings.pendingTursoApiToken = parsed.pendingTursoApiToken ?? defaults.pendingTursoApiToken;
 			settings.launches = parsed.launches ?? defaults.launches;
 			settings.communityPromptDismissed =
 				parsed.communityPromptDismissed ?? defaults.communityPromptDismissed;
@@ -240,7 +247,7 @@ export function saveSettings(): void {
 	if (typeof localStorage === 'undefined') return;
 
 	try {
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+		localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...settings, pendingTursoApiToken: undefined }));
 	} catch {
 		// Storage might be full or unavailable
 	}

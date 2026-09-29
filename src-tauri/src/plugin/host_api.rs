@@ -16,7 +16,7 @@ use crate::vault::VaultManager;
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
+        crate::http::client_builder()
             .timeout(Duration::from_millis(HTTP_REQUEST_TIMEOUT_MS))
             .build()
             .expect("reqwest client build should not fail with default features")

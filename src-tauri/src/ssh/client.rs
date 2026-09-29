@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use async_trait::async_trait;
+use russh::keys::PrivateKeyWithHashAlg;
 use serde::{Deserialize, Serialize};
 use russh::ChannelMsg;
 use tauri::{Emitter, Manager};
@@ -344,13 +344,21 @@ async fn cascade_authenticate(
             "SSH key loaded successfully, attempting publickey auth as '{}'",
             username
         );
+        // An RSA key signs with whichever SHA-2 the server says it accepts;
+        // left unset it would sign with SHA-1, which current servers refuse.
+        let hash_alg = if key.algorithm().is_rsa() {
+            handle.best_supported_rsa_hash().await.ok().flatten().flatten()
+        } else {
+            None
+        };
         let accepted = handle
-            .authenticate_publickey(username, Arc::new(key))
+            .authenticate_publickey(username, PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg))
             .await
             .map_err(|e| {
                 tracing::error!("SSH publickey auth error: {}", e);
                 SshError::ConnectionFailed(format!("Auth error: {}", e))
-            })?;
+            })?
+            .success();
         tracing::info!("SSH publickey auth result: {}", accepted);
         if accepted {
             return Ok(true);
@@ -379,7 +387,8 @@ async fn cascade_authenticate(
             .map_err(|e| {
                 tracing::error!("SSH password auth error: {}", e);
                 SshError::ConnectionFailed(format!("Auth error: {}", e))
-            })?;
+            })?
+            .success();
         tracing::info!("SSH password auth result: {}", accepted);
         if accepted {
             return Ok(true);
@@ -399,7 +408,7 @@ async fn try_agent_auth(
 ) -> Result<bool, String> {
     #[cfg(unix)]
     {
-        let agent = russh_keys::agent::client::AgentClient::connect_env()
+        let agent = russh::keys::agent::client::AgentClient::connect_env()
             .await
             .map_err(|e| format!("ssh-agent unavailable (SSH_AUTH_SOCK): {}", e))?;
         try_agent_auth_inner(handle, username, agent).await
@@ -407,7 +416,7 @@ async fn try_agent_auth(
     #[cfg(windows)]
     {
         // Try OpenSSH for Windows agent named pipe first (most common on Win10+).
-        match russh_keys::agent::client::AgentClient::connect_named_pipe(
+        match russh::keys::agent::client::AgentClient::connect_named_pipe(
             r"\\.\pipe\openssh-ssh-agent",
         )
         .await
@@ -422,7 +431,9 @@ async fn try_agent_auth(
                 if !pageant_is_running() {
                     return Err("no SSH agent running (OpenSSH agent or Pageant)".into());
                 }
-                let pageant = russh_keys::agent::client::AgentClient::connect_pageant().await;
+                let pageant = russh::keys::agent::client::AgentClient::connect_pageant()
+                    .await
+                    .map_err(|e| format!("Pageant unavailable: {}", e))?;
                 try_agent_auth_inner(handle, username, pageant).await
             }
         }
@@ -442,7 +453,7 @@ fn pageant_is_running() -> bool {
 async fn try_agent_auth_inner<S>(
     handle: &mut russh::client::Handle<SshClientHandler>,
     username: String,
-    mut agent: russh_keys::agent::client::AgentClient<S>,
+    mut agent: russh::keys::agent::client::AgentClient<S>,
 ) -> Result<bool, String>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
@@ -459,17 +470,19 @@ where
         identities.len(),
         if identities.len() == 1 { "y" } else { "ies" }
     );
-    let mut current_agent = agent;
-    for (idx, key) in identities.into_iter().enumerate() {
+    let rsa_hash = handle.best_supported_rsa_hash().await.ok().flatten().flatten();
+    for (idx, identity) in identities.iter().enumerate() {
+        let key = identity.public_key().into_owned();
         tracing::info!(
             "SSH agent: trying identity #{} (type: {})",
             idx + 1,
-            key.name()
+            key.algorithm()
         );
-        let (returned, result) = handle
-            .authenticate_future(username.clone(), key, current_agent)
-            .await;
-        current_agent = returned;
+        let hash_alg = if key.algorithm().is_rsa() { rsa_hash } else { None };
+        let result = handle
+            .authenticate_publickey_with(username.clone(), key, hash_alg, &mut agent)
+            .await
+            .map(|r| r.success());
         match result {
             Ok(true) => {
                 tracing::info!("SSH agent: identity #{} accepted by server", idx + 1);
@@ -564,11 +577,11 @@ impl KeyAuth {
 pub fn decode_key(
     material: &str,
     passphrase: Option<&str>,
-) -> Result<russh_keys::key::KeyPair, russh_keys::Error> {
+) -> Result<russh::keys::PrivateKey, russh::keys::Error> {
     let pass = passphrase.filter(|p| !p.is_empty());
-    match russh_keys::decode_secret_key(material, pass) {
+    match russh::keys::decode_secret_key(material, pass) {
         Ok(key) => Ok(key),
-        Err(e) if pass.is_some() => russh_keys::decode_secret_key(material, None).map_err(|_| e),
+        Err(e) if pass.is_some() => russh::keys::decode_secret_key(material, None).map_err(|_| e),
         Err(e) => Err(e),
     }
 }
@@ -1525,20 +1538,28 @@ struct KnownHosts {
     entries: HashMap<String, String>,
 }
 
-#[async_trait]
 impl russh::client::Handler for SshClientHandler {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh_keys::key::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         let host_id = format!("{}:{}", self.host, self.port);
-        let fingerprint = server_public_key.fingerprint().to_string();
-        let key_type = server_public_key.name().to_string();
+        let key = server_public_key.public_key();
+        let fingerprint = host_key_fingerprint(&key);
+        let key_type = key.algorithm().to_string();
 
         Ok(verify_host_identity(self.app_handle.clone(), &self.host, self.port, &host_id, &fingerprint, &key_type).await)
     }
+}
+
+/// SHA-256 of the key, base64 without padding and without the `SHA256:`
+/// prefix: the form russh-keys produced, which every fingerprint already
+/// saved in known_hosts.json is in.
+fn host_key_fingerprint(key: &russh::keys::PublicKey) -> String {
+    let fingerprint = key.fingerprint(russh::keys::HashAlg::Sha256).to_string();
+    fingerprint.strip_prefix("SHA256:").map(str::to_owned).unwrap_or(fingerprint)
 }
 
 /// Trust on first use, shared by SSH and RDP. The identity is remembered

@@ -1,0 +1,123 @@
+name: Build check
+
+# Builds and tests on every desktop platform without releasing anything, so a
+# change (a dependency update above all) is known to build on macOS and Linux
+# before it is merged, not when a release tag is pushed.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system dependencies (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libudev-dev libasound2-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check and build the frontend
+        run: |
+          npm run check
+          npm run i18n:check
+          npm run build
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --lib
+
+      # The runner is Apple silicon; Intel Macs get their own release build.
+      - name: Build for Intel Macs
+        if: matrix.platform == 'macos-latest'
+        working-directory: src-tauri
+        run: cargo build --lib --target x86_64-apple-darwin
+
+  # The Rust tests on a real Android system image. They cannot run on the
+  # desktop runners: Android has its own C library, and system libraries such
+  # as zlib that the app links against come from the device.
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # tauri-build wants the built frontend to exist.
+      - name: Build the frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build the test binary for Android
+        working-directory: src-tauri
+        run: |
+          BIN="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_x86_64_linux_android="$BIN/x86_64-linux-android24-clang"
+          export CXX_x86_64_linux_android="$BIN/x86_64-linux-android24-clang++"
+          export AR_x86_64_linux_android="$BIN/llvm-ar"
+          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$BIN/x86_64-linux-android24-clang"
+          TEST_BIN=$(cargo test --lib --no-run --target x86_64-linux-android --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' | tail -1)
+          mkdir -p "$RUNNER_TEMP/android-test"
+          cp "$TEST_BIN" "$RUNNER_TEMP/android-test/reach-tests"
+          cp "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android/libc++_shared.so" "$RUNNER_TEMP/android-test/"
+
+      - name: Run the tests on an Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: |
+            adb push "$RUNNER_TEMP/android-test/." /data/local/tmp/reach/
+            adb shell "cd /data/local/tmp/reach && chmod +x reach-tests && HOME=/data/local/tmp/reach TMPDIR=/data/local/tmp/reach LD_LIBRARY_PATH=/data/local/tmp/reach ./reach-tests"

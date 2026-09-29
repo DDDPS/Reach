@@ -3,7 +3,6 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
     XChaCha20Poly1305, XNonce,
 };
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -152,16 +151,16 @@ pub fn seal_bundle(bundle: &ExportBundle, password: &str) -> Result<Vec<u8>, Vau
 
     // Generate salt and nonce
     let mut salt = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut salt);
+    rand::fill(&mut salt[..]);
     let mut nonce = [0u8; 24];
-    rand::thread_rng().fill_bytes(&mut nonce);
+    rand::fill(&mut nonce[..]);
 
     // Derive key from password
     let key = derive_export_key(password.as_bytes(), &salt)?;
 
     // Encrypt JSON with XChaCha20-Poly1305
-    let cipher = XChaCha20Poly1305::new(key.as_ref().into());
-    let xnonce = XNonce::from_slice(&nonce);
+    let cipher = XChaCha20Poly1305::new((&*key).into());
+    let xnonce = &XNonce::from(nonce);
     let ciphertext = cipher
         .encrypt(xnonce, json.as_ref())
         .map_err(|e| VaultError::EncryptionError(e.to_string()))?;
@@ -213,8 +212,8 @@ pub fn unseal_bundle(data: &[u8], password: &str) -> Result<ExportBundle, VaultE
     let key = derive_export_key(password.as_bytes(), &salt)?;
 
     // Decrypt
-    let cipher = XChaCha20Poly1305::new(key.as_ref().into());
-    let xnonce = XNonce::from_slice(&nonce);
+    let cipher = XChaCha20Poly1305::new((&*key).into());
+    let xnonce = &XNonce::from(nonce);
     let plaintext = cipher
         .decrypt(xnonce, ciphertext)
         .map_err(|_| VaultError::DecryptionError("Invalid export password".to_string()))?;

@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use hkdf::Hkdf;
 use libsql::{Connection, Database};
-use rand::RngCore;
 use secrecy::{ExposeSecret, SecretBox};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -315,7 +314,7 @@ impl VaultManager {
         tracing::info!("init_identity: starting");
 
         // Generate X25519 keypair
-        let secret_key = StaticSecret::random_from_rng(rand::thread_rng());
+        let secret_key = StaticSecret::random_from_rng(&mut rand::rng());
         let public_key = PublicKey::from(&secret_key);
 
         // Generate user UUID
@@ -2744,7 +2743,7 @@ impl VaultManager {
 /// Generate a random 32-byte salt.
 fn generate_salt() -> [u8; 32] {
     let mut salt = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut salt);
+    rand::fill(&mut salt[..]);
     salt
 }
 
@@ -2786,8 +2785,8 @@ fn encrypt_with_password(kek: &Kek, plaintext: &[u8]) -> Result<(String, String)
 
     let cipher = XChaCha20Poly1305::new(kek.expose().into());
     let mut nonce = [0u8; 24];
-    rand::thread_rng().fill_bytes(&mut nonce);
-    let xnonce = XNonce::from_slice(&nonce);
+    rand::fill(&mut nonce[..]);
+    let xnonce = &XNonce::from(nonce);
 
     let ciphertext = cipher
         .encrypt(xnonce, plaintext)
@@ -2801,17 +2800,45 @@ fn decrypt_with_password(kek: &Kek, ciphertext: &[u8], nonce: &[u8]) -> Result<V
     use chacha20poly1305::{aead::Aead, KeyInit, XChaCha20Poly1305, XNonce};
 
     let cipher = XChaCha20Poly1305::new(kek.expose().into());
-    let xnonce = XNonce::from_slice(nonce);
+    let xnonce = &XNonce::try_from(nonce)
+        .map_err(|_| VaultError::DecryptionError("Invalid nonce length".to_string()))?;
 
     cipher
         .decrypt(xnonce, ciphertext)
         .map_err(|e| VaultError::DecryptionError(e.to_string()))
 }
 
+/// The vault's entry in the OS credential store, which is set up on first use.
+/// The names match what keyring 3 wrote, so a key saved by an earlier Reach is
+/// still found: `{user}.{service}` in the Windows Credential Manager, service
+/// and account in the macOS login keychain, `keyring-rs:{user}@{service}` in
+/// the Linux kernel keyring. Android has no store of its own here; as before,
+/// a key saved there lasts only until the app closes.
+fn keychain_entry(user_uuid: &str) -> Result<keyring_core::Entry, VaultError> {
+    static STORE: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    STORE
+        .get_or_init(|| {
+            #[cfg(target_os = "windows")]
+            let store = windows_native_keyring_store::Store::new();
+            #[cfg(target_os = "macos")]
+            let store = apple_native_keyring_store::keychain::Store::new();
+            #[cfg(target_os = "linux")]
+            let store = linux_keyutils_keyring_store::Store::new_with_configuration(&HashMap::from([(
+                "prefix",
+                "keyring-rs:",
+            )]));
+            #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+            let store = keyring_core::mock::Store::new();
+            store.map(|s| keyring_core::set_default_store(s)).map_err(|e| e.to_string())
+        })
+        .clone()
+        .map_err(VaultError::KeychainUnavailable)?;
+    keyring_core::Entry::new("reach-vault", user_uuid).map_err(|e| VaultError::KeychainError(e.to_string()))
+}
+
 /// Store key in OS keychain.
 fn store_key_in_keychain(user_uuid: &str, key: &[u8]) -> Result<(), VaultError> {
-    let entry = keyring::Entry::new("reach-vault", user_uuid)
-        .map_err(|e| VaultError::KeychainError(e.to_string()))?;
+    let entry = keychain_entry(user_uuid)?;
     entry
         .set_password(&BASE64.encode(key))
         .map_err(|e| VaultError::KeychainError(e.to_string()))?;
@@ -2820,14 +2847,13 @@ fn store_key_in_keychain(user_uuid: &str, key: &[u8]) -> Result<(), VaultError> 
 
 /// Get key from OS keychain.
 fn get_key_from_keychain(user_uuid: &str) -> Result<Vec<u8>, VaultError> {
-    let entry = keyring::Entry::new("reach-vault", user_uuid)
-        .map_err(|e| VaultError::KeychainError(e.to_string()))?;
+    let entry = keychain_entry(user_uuid)?;
     let password = entry.get_password().map_err(|e| match e {
-        keyring::Error::NoEntry => VaultError::KeychainKeyMissing,
-        keyring::Error::NoStorageAccess(ref inner) => {
+        keyring_core::Error::NoEntry => VaultError::KeychainKeyMissing,
+        keyring_core::Error::NoStorageAccess(ref inner) => {
             VaultError::KeychainUnavailable(inner.to_string())
         }
-        keyring::Error::PlatformFailure(ref inner) => {
+        keyring_core::Error::PlatformFailure(ref inner) => {
             VaultError::KeychainUnavailable(inner.to_string())
         }
         other => VaultError::KeychainError(other.to_string()),
