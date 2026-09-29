@@ -251,3 +251,8 @@ libc = "0.2"
 # Root certificates for HTTPS on Android; see src/http.rs.
 [target.'cfg(target_os = "android")'.dependencies]
 webpki-root-certs = "1"
+
+# libsql with its double close of a local connection fixed; see the header of
+# vendor/libsql/Cargo.toml.
+[patch.crates-io]
+libsql = { path = "vendor/libsql" }
