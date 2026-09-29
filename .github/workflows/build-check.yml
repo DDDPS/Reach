@@ -6,6 +6,10 @@ name: Build check
 on:
   pull_request:
     branches: [main]
+  # Also on main itself: a pull request can only restore build caches saved
+  # on its own branch or on main, so this is what lets a new one start warm.
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
