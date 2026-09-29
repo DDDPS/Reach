@@ -15,6 +15,12 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # SvelteKit and svelte-check support TypeScript up to 6; 7 works in
+      # svelte-check only behind an experimental flag. Lift this once
+      # SvelteKit lists 7 in its peer dependencies.
+      - dependency-name: "typescript"
+        versions: [">=7"]
     groups:
       npm-minor:
         update-types: ["minor", "patch"]
