@@ -47,8 +47,9 @@ const PLATFORMS = [
 	{
 		id: 'android',
 		name: 'Android',
-		note: 'Universal build',
-		match: ['.apk'],
+		note: '64-bit ARM, nearly every phone',
+		// Releases before 0.6.9 shipped one universal APK instead.
+		match: ['_android_arm64.apk', '.apk'],
 		label: 'APK',
 	},
 ];
@@ -56,6 +57,7 @@ const PLATFORMS = [
 /** Secondary formats, shown under the cards for people who want them. */
 const ALSO = [
 	{ id: 'msi', name: 'Windows MSI', match: ['_en-US.msi'] },
+	{ id: 'apk-armv7', name: 'Android, older 32-bit phones', match: ['_android_armv7.apk'] },
 	{ id: 'deb', name: 'Debian / Ubuntu (.deb)', match: ['_amd64.deb'] },
 	{ id: 'rpm', name: 'Fedora / RHEL (.rpm)', match: ['.x86_64.rpm'] },
 ];

@@ -212,6 +212,12 @@ custom-protocol = ["tauri/custom-protocol"]
 [profile.dev.package."*"]
 opt-level = 3
 
+# Release builds ship without symbol tables. Nothing reads them on a user's
+# machine, and on Android the library is copied once per processor type into
+# the APK, so every megabyte of symbols was paid for on every download.
+[profile.release]
+strip = true
+
 # The client crate with one addition of ours, `with_h264_decoder`; see vendor/ironrdp-client/Cargo.toml.
 [patch."https://github.com/Devolutions/IronRDP"]
 ironrdp-client = { path = "vendor/ironrdp-client" }

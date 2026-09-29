@@ -80,9 +80,15 @@ async function load(): Promise<Release | null> {
 }
 
 /** The first asset whose name ends with one of `patterns`. */
+/** The first pattern that matches wins, so a list can name the preferred
+ *  file first and a fallback after it (older releases named files differently). */
 export function findAsset(release: Release | null, patterns: string[]): Asset | undefined {
 	if (!release?.assets) return undefined;
-	return release.assets.find((a) => patterns.some((p) => p && a.name.endsWith(p)));
+	for (const p of patterns) {
+		const hit = p && release.assets.find((a) => a.name.endsWith(p));
+		if (hit) return hit;
+	}
+	return undefined;
 }
 
 export function megabytes(bytes: number): string {

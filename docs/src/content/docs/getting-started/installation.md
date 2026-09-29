@@ -58,9 +58,14 @@ sudo dnf install webkit2gtk4.1 libappindicator-gtk3
 
 ## Android
 
-Download the `.apk` file from the releases page and sideload it. Reach isn't on the Play Store yet.
+Download the APK from the releases page and sideload it. Reach isn't on the Play Store yet.
+
+- `Reach_x.y.z_android_arm64.apk` fits almost every phone and tablet made in the last several years. Pick this one.
+- `Reach_x.y.z_android_armv7.apk` is for older 32-bit phones only.
 
 You'll need to enable "Install from unknown sources" in your device settings if you haven't already.
+
+**Updating from 0.6.8 or earlier:** releases before 0.6.9 were signed with a different key each time, so Android refuses to install 0.6.9 over them ("App not installed"). Uninstall the old Reach first, once. From 0.6.9 on, updates install over the previous version as they should.
 
 ## Auto-updates
 
