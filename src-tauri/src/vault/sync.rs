@@ -21,10 +21,13 @@ pub async fn create_replica(
         Some(config) => {
             // Remote-only connection to Turso (no local replica due to Windows bug)
             tracing::info!("Creating remote database connection: {}", config.sync_url);
+            let connector = super::turso_tls::TursoConnector::new()
+                .map_err(|e| VaultError::SyncError(format!("TLS setup failed: {}", e)))?;
             Builder::new_remote(
                 config.sync_url.clone(),
                 config.auth_token.clone(),
             )
+            .connector(connector)
             .build()
             .await
             .map_err(|e| VaultError::SyncError(format!("Failed to connect to Turso: {}", e)))?
