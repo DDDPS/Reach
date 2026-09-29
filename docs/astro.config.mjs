@@ -68,6 +68,7 @@ export default defineConfig({
 						{ label: 'What is Reach?', slug: 'getting-started/introduction' },
 						{ label: 'Installation', slug: 'getting-started/installation' },
 						{ label: 'First Run & Setup', slug: 'getting-started/first-run' },
+						{ label: 'Privacy', slug: 'privacy' },
 					],
 				},
 				{
