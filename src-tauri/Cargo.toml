@@ -28,8 +28,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 
 # SSH
-# ring rather than the default aws-lc-rs, which needs cmake and NASM to
-# cross-compile for Android. rsa keeps RSA keys working.
+# ring, the crypto the rest of the app installs for rustls (see run() in
+# lib.rs). rsa keeps RSA keys working.
 russh = { version = "0.63", default-features = false, features = ["ring", "rsa"] }
 # Used to read what a key says
 # about itself (algorithm, fingerprint, whether it is encrypted) without
@@ -74,9 +74,10 @@ futures-util = "0.3"
 which = "8"
 
 # HTTP (AI API proxy)
-# rustls with whichever crypto provider the rest of the app already built in
-# (ring); the default would add aws-lc-rs, which Android cannot cross-compile
-# without cmake and NASM. See src/http.rs for Android's roots.
+# rustls without a provider of its own: Redis and the WebSocket client already
+# build both ring and aws-lc-rs into rustls, so none is chosen by default and
+# run() in lib.rs installs ring for the whole process. See src/http.rs for
+# Android's root certificates.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "stream"] }
 # The process-wide crypto provider reqwest asks for; installed in run().
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
