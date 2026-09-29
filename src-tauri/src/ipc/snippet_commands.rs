@@ -50,16 +50,13 @@ pub async fn snippet_list(state: State<'_, AppState>) -> Result<Vec<Snippet>, St
     };
 
     let secrets = manager
-        .list_secrets(&vault_id)
+        .read_secrets_in(&vault_id, &["custom:snippet"])
         .await
         .map_err(|e| e.to_string())?;
 
     let mut snippets = Vec::new();
-    for secret in secrets {
-        if secret.category != "custom:snippet" {
-            continue;
-        }
-        if let Ok(plaintext) = manager.read_secret(&vault_id, &secret.id).await {
+    for (_, plaintext) in secrets {
+        if let Ok(plaintext) = plaintext {
             use secrecy::ExposeSecret;
             if let Ok(json) = String::from_utf8(plaintext.expose_secret().clone()) {
                 if let Ok(snippet) = serde_json::from_str::<Snippet>(&json) {

@@ -405,3 +405,7 @@ version = "0.4"
 
 [dev-dependencies.tracing-subscriber]
 version = "0.3"
+
+# Upstream's own style warnings, which Cargo shows for a path dependency.
+[lints.rust]
+mismatched_lifetime_syntaxes = "allow"

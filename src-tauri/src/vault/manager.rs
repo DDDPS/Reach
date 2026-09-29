@@ -107,6 +107,22 @@ pub struct VaultConnection {
     pub auth_token: Option<String>,
 }
 
+/// Decrypt one secret as the `secrets` table stores it: its nonce, its
+/// ciphertext, and its data key wrapped by the vault's master key, as JSON.
+fn decrypt_stored(
+    master_dek: &Dek,
+    nonce: Vec<u8>,
+    ciphertext: Vec<u8>,
+    wrapped_dek_json: String,
+) -> Result<SecretBox<Vec<u8>>, VaultError> {
+    let nonce: [u8; 24] = nonce.try_into().map_err(|n: Vec<u8>| VaultError::InvalidNonceLength {
+        expected: 24,
+        got: n.len(),
+    })?;
+    let wrapped_dek: WrappedDek = serde_json::from_str(&wrapped_dek_json)?;
+    decrypt_secret(master_dek, &EncryptedPayload { nonce, ciphertext, wrapped_dek })
+}
+
 impl VaultConnection {
     /// A connection that will actually answer right now.
     ///
@@ -1732,28 +1748,53 @@ impl VaultManager {
             .await?
             .ok_or_else(|| VaultError::SecretNotFound(secret_id.to_string()))?;
 
-        let nonce: Vec<u8> = row.get(0)?;
-        let ciphertext: Vec<u8> = row.get(1)?;
-        let wrapped_dek_json: String = row.get(2)?;
+        decrypt_stored(master_dek, row.get(0)?, row.get(1)?, row.get(2)?)
+    }
 
-        if nonce.len() != 24 {
-            return Err(VaultError::InvalidNonceLength {
-                expected: 24,
-                got: nonce.len(),
-            });
+    /// Every secret of the given categories, decrypted, in one query.
+    ///
+    /// Lists used to be built as `list_secrets` and then a `read_secret` per
+    /// item. On a synced vault each query is a round trip to Turso, so a list
+    /// of thirty sessions cost thirty-one of them in a row, several seconds.
+    /// This is one. An item that does not decrypt comes back as its error,
+    /// beside the others, so one bad row never hides the rest.
+    pub async fn read_secrets_in(
+        &self,
+        vault_id: &str,
+        categories: &[&str],
+    ) -> Result<Vec<(SecretMetadata, Result<SecretBox<Vec<u8>>, VaultError>)>, VaultError> {
+        let vault = self
+            .vaults
+            .get(vault_id)
+            .ok_or_else(|| VaultError::NotFound(vault_id.to_string()))?;
+        let master_dek = vault
+            .master_dek
+            .as_ref()
+            .ok_or_else(|| VaultError::NotUnlocked(vault_id.to_string()))?;
+        if categories.is_empty() {
+            return Ok(Vec::new());
         }
-        let mut nonce_arr = [0u8; 24];
-        nonce_arr.copy_from_slice(&nonce);
 
-        let wrapped_dek: WrappedDek = serde_json::from_str(&wrapped_dek_json)?;
+        let placeholders = vec!["?"; categories.len()].join(", ");
+        let sql = format!(
+            "SELECT id, name, category, created_at, updated_at, nonce, ciphertext, wrapped_dek              FROM secrets WHERE category IN ({placeholders})"
+        );
+        let params: Vec<libsql::Value> = categories.iter().map(|c| libsql::Value::Text(c.to_string())).collect();
+        let mut rows = vault.query(&sql, params).await?;
 
-        let payload = EncryptedPayload {
-            nonce: nonce_arr,
-            ciphertext,
-            wrapped_dek,
-        };
-
-        decrypt_secret(master_dek, &payload)
+        let mut secrets = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let meta = SecretMetadata {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                category: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            };
+            let plaintext = decrypt_stored(master_dek, row.get(5)?, row.get(6)?, row.get(7)?);
+            secrets.push((meta, plaintext));
+        }
+        Ok(secrets)
     }
 
     /// Update a secret.
@@ -3054,6 +3095,50 @@ mod password_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// A list is read in one query, and it is the same list, with the same
+    /// plaintexts, that one `read_secret` per item gives.
+    #[tokio::test]
+    async fn a_list_of_one_category_is_read_in_one_go() {
+        let dir = tmp_dir("batch-read");
+        let mut mgr = VaultManager::new(dir.clone());
+        mgr.init_identity("batch-read-pass").await.unwrap();
+        let vault = mgr.create_vault("batch", VaultType::Private, None, None).await.unwrap();
+
+        let put = |text: &str| SecretBox::new(Box::new(text.as_bytes().to_vec()));
+        let a = mgr.create_secret(&vault.id, "a", SecretCategory::Session, put("session a")).await.unwrap();
+        let b = mgr.create_secret(&vault.id, "b", SecretCategory::Session, put("session b")).await.unwrap();
+        mgr.create_secret(&vault.id, "f", SecretCategory::Folder, put("a folder")).await.unwrap();
+        mgr.create_secret(&vault.id, "s", SecretCategory::Custom("snippet".into()), put("a snippet")).await.unwrap();
+
+        let mut sessions: Vec<(String, Vec<u8>)> = mgr
+            .read_secrets_in(&vault.id, &["session"])
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(meta, plain)| (meta.id, plain.unwrap().expose_secret().clone()))
+            .collect();
+        sessions.sort();
+        let mut expected = vec![
+            (a.clone(), mgr.read_secret(&vault.id, &a).await.unwrap().expose_secret().clone()),
+            (b.clone(), mgr.read_secret(&vault.id, &b).await.unwrap().expose_secret().clone()),
+        ];
+        expected.sort();
+        assert_eq!(sessions, expected);
+
+        let mut names: Vec<String> = mgr
+            .read_secrets_in(&vault.id, &["folder", "custom:snippet"])
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(meta, _)| meta.name)
+            .collect();
+        names.sort();
+        assert_eq!(names, ["f", "s"]);
+
+        assert!(mgr.read_secrets_in(&vault.id, &[]).await.unwrap().is_empty());
+        assert!(mgr.read_secrets_in(&vault.id, &["no-such-category"]).await.unwrap().is_empty());
     }
 
     /// Regression test for issue #25: the password-encrypted secret key was

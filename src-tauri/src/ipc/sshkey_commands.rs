@@ -158,20 +158,24 @@ pub async fn ssh_key_list(state: State<'_, AppState>) -> Result<Vec<StoredKeyInf
         return Ok(Vec::new());
     };
 
+    // The keys vault shares storage with the other internal vaults when
+    // personal sync is on, so ask for the key category rather than assuming
+    // everything here is a key.
+    let category = SecretCategory::SshKey.to_string();
     let secrets = manager
-        .list_secrets(&vault_id)
+        .read_secrets_in(&vault_id, &[category.as_str()])
         .await
         .map_err(|e| e.to_string())?;
 
     let mut keys = Vec::new();
-    for meta in secrets {
-        // The keys vault shares storage with the other internal vaults when
-        // personal sync is on, so filter by category rather than assuming
-        // everything here is a key.
-        if meta.category != SecretCategory::SshKey.to_string() {
-            continue;
-        }
-        match read_material(&manager, &vault_id, &meta.id).await {
+    for (meta, plaintext) in secrets {
+        let material = plaintext
+            .map_err(|_| "That key is not in the vault.".to_string())
+            .and_then(|p| {
+                serde_json::from_slice::<StoredKeyMaterial>(p.expose_secret())
+                    .map_err(|e| format!("The stored key could not be read: {}", e))
+            });
+        match material {
             Ok(material) => {
                 keys.push(keystore::describe(&meta.id, &meta.name, meta.created_at, &material))
             }
