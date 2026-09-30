@@ -767,6 +767,11 @@ impl VaultManager {
         self.identity = None;
         for vault in self.vaults.values_mut() {
             vault.master_dek = None;
+            // The cache's key is derived from the identity, and its rows carry
+            // names in the clear once opened: neither stays in memory while
+            // locked. The key is wiped as it drops; unlocking reads the sealed
+            // file again.
+            vault.cache = None;
         }
     }
 
@@ -1665,6 +1670,18 @@ impl VaultManager {
     }
 
     async fn unlock_vault_keys(&mut self, vault_id: &str) -> Result<(), VaultError> {
+        // Locking dropped the cache from memory; take it up again from disk.
+        let reload = self
+            .vaults
+            .get(vault_id)
+            .is_some_and(|v| v.cache.is_none() && v.sync_url.is_some());
+        if reload {
+            let cache_state = self.open_cache(vault_id);
+            if let Some(vault) = self.vaults.get_mut(vault_id) {
+                vault.cache = cache_state;
+            }
+        }
+
         let kek = self.kek.as_ref().ok_or(VaultError::Locked)?;
         let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;
         let my_uuid = self.user_uuid.clone().ok_or(VaultError::IdentityNotInitialized)?;
@@ -3486,6 +3503,14 @@ mod password_tests {
             .collect();
         listed.sort();
         assert_eq!(listed, vec![b"one".to_vec(), b"two".to_vec()]);
+        assert_eq!(offline.read_secret(&vault.id, &keep).await.unwrap().expose_secret(), b"one");
+
+        // Locked, nothing of the cache stays in memory; unlocked again, it is
+        // read back from the sealed file, still without the server.
+        offline.lock();
+        assert!(offline.vaults.values().all(|v| v.cache.is_none()));
+        offline.unlock("cache-e2e-pass").await.unwrap();
+        offline.unlock_vault(&vault.id).await.unwrap();
         assert_eq!(offline.read_secret(&vault.id, &keep).await.unwrap().expose_secret(), b"one");
         drop(offline);
 
