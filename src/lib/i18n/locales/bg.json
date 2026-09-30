@@ -1665,5 +1665,6 @@
   "security.biometric": "Отключване с {{method}}",
   "security.biometric_desc": "Отваряне на трезора с {{method}}. Главната парола винаги работи.",
   "security.biometric_needs_password": "Първо задайте главна парола, за да можете да влезете и без {{method}}.",
-  "security.biometric_unavailable": "{{method}} не е настроен на това устройство."
+  "security.biometric_unavailable": "{{method}} не е настроен на това устройство.",
+  "lock.set_password_hint": "Всеки на този компютър може да отвори това заключване. Задайте главна парола в {{place}}, за да го защитите."
 }

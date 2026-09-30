@@ -1665,5 +1665,6 @@
   "security.biometric": "Ξεκλείδωμα με {{method}}",
   "security.biometric_desc": "Άνοιγμα του θησαυροφυλακίου με {{method}}. Ο κύριος κωδικός σας λειτουργεί πάντα.",
   "security.biometric_needs_password": "Ορίστε πρώτα κύριο κωδικό, ώστε να μπαίνετε ακόμη κι αν το {{method}} δεν είναι διαθέσιμο.",
-  "security.biometric_unavailable": "Το {{method}} δεν έχει ρυθμιστεί σε αυτή τη συσκευή."
+  "security.biometric_unavailable": "Το {{method}} δεν έχει ρυθμιστεί σε αυτή τη συσκευή.",
+  "lock.set_password_hint": "Οποιοσδήποτε σε αυτόν τον υπολογιστή μπορεί να ανοίξει αυτό το κλείδωμα. Ορίστε κύριο κωδικό στις {{place}} για να το προστατέψετε."
 }

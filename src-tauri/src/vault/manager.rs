@@ -871,9 +871,14 @@ impl VaultManager {
         Ok(())
     }
 
-    /// The user's own act of unlocking with the keychain (the unlock button,
-    /// or a biometric check that has already passed): lift the hold and open.
+    /// The unlock button on the lock screen: lift the hold and open with the
+    /// keychain. Only while there is nothing better to ask for: once a master
+    /// password is set, a lock asks for it (or biometrics), or anyone at the
+    /// computer could undo the lock with one click.
     pub async fn resume(&mut self) -> Result<bool, VaultError> {
+        if self.has_password().await {
+            return Ok(false);
+        }
         self.held = false;
         let opened = self.auto_unlock().await?;
         if !opened {
@@ -3714,11 +3719,11 @@ mod password_tests {
         biometric::save(&dir, &biometric::Sealed::for_test(&uuid)).unwrap();
 
         // Turning it off needs the keychain; where it can be written, the
-        // keychain opens the vault again afterwards.
+        // keychain opens the vault again at the next start.
         if mgr.disable_biometric().is_ok() {
             assert!(mgr.biometric_seal().is_none());
-            mgr.hold();
-            assert!(mgr.resume().await.unwrap());
+            let mut restarted = VaultManager::new(dir.clone());
+            assert!(restarted.auto_unlock().await.unwrap());
         } else {
             eprintln!("skipped the turn-off check: this machine's keychain cannot be written");
             assert!(mgr.biometric_seal().is_some());
@@ -3768,18 +3773,10 @@ mod password_tests {
         assert!(!mgr.auto_unlock().await.unwrap());
         assert!(mgr.is_locked());
 
-        // The unlock button opens with the OS keychain, where the keychain
-        // can be written; some sandboxes and CI machines refuse that.
-        let uuid = mgr.get_user_uuid().unwrap();
-        if get_key_from_keychain(&uuid).is_ok() {
-            assert!(mgr.resume().await.unwrap());
-            assert!(!mgr.is_locked() && !mgr.is_held());
-            mgr.hold();
-        } else {
-            eprintln!("skipped the unlock-button check: this machine's keychain cannot be written");
-            // Still held after a resume that could not open it.
-            assert!(mgr.resume().await.is_err() || mgr.is_held());
-        }
+        // With a master password set, the one-click unlock button is refused:
+        // the lock would otherwise protect nothing.
+        assert!(!mgr.resume().await.unwrap());
+        assert!(mgr.is_locked() && mgr.is_held());
 
         // Opened by password.
         assert!(mgr.unlock("held-vault-pass").await.unwrap());

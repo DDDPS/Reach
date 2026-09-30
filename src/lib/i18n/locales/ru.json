@@ -445,7 +445,7 @@
   "settings.paste_threshold_desc": "Вставки с меньшим числом строк идут прямо в терминал.",
   "settings.general": "Основные",
   "settings.appearance": "Внешний вид",
-  "settings.security": "Security",
+  "settings.security": "Безопасность",
   "settings.sync": "Sync",
   "settings.backup": "Backup",
   "settings.ai": "AI",
@@ -1665,5 +1665,6 @@
   "security.biometric": "Разблокировка с {{method}}",
   "security.biometric_desc": "Открывать хранилище с помощью {{method}}. Мастер-пароль всегда работает.",
   "security.biometric_needs_password": "Сначала задайте мастер-пароль, чтобы войти, даже если {{method}} недоступен.",
-  "security.biometric_unavailable": "{{method}} не настроен на этом устройстве."
+  "security.biometric_unavailable": "{{method}} не настроен на этом устройстве.",
+  "lock.set_password_hint": "Любой за этим компьютером может снять эту блокировку. Задайте мастер-пароль в {{place}}, чтобы защитить её."
 }

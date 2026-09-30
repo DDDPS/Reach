@@ -286,6 +286,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Asks the real platform; run by hand: `cargo test hello_probe -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn hello_probe() {
+        let t = std::time::Instant::now();
+        println!("method={:?} available={} in {:?}", method(), available(), t.elapsed());
+    }
+
     #[test]
     fn a_seal_is_bound_to_its_user() {
         // The cipher half of seal/open, without the Hello prompt.

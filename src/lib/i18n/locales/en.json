@@ -1665,5 +1665,6 @@
   "security.biometric": "Unlock with {{method}}",
   "security.biometric_desc": "Open the vault with {{method}}. Your master password always works too.",
   "security.biometric_needs_password": "Set a master password first, so you can still get in if {{method}} is unavailable.",
-  "security.biometric_unavailable": "{{method}} is not set up on this device."
+  "security.biometric_unavailable": "{{method}} is not set up on this device.",
+  "lock.set_password_hint": "Anyone at this computer can open this lock. Set a master password in {{place}} to protect it."
 }

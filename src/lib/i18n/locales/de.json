@@ -1665,5 +1665,6 @@
   "security.biometric": "Mit {{method}} entsperren",
   "security.biometric_desc": "Den Tresor mit {{method}} öffnen. Ihr Master-Passwort funktioniert weiterhin.",
   "security.biometric_needs_password": "Legen Sie zuerst ein Master-Passwort fest, damit Sie auch ohne {{method}} hineinkommen.",
-  "security.biometric_unavailable": "{{method}} ist auf diesem Gerät nicht eingerichtet."
+  "security.biometric_unavailable": "{{method}} ist auf diesem Gerät nicht eingerichtet.",
+  "lock.set_password_hint": "Jeder an diesem Computer kann diese Sperre öffnen. Legen Sie unter {{place}} ein Master-Passwort fest, um sie zu schützen."
 }

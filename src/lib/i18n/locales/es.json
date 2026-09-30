@@ -1665,5 +1665,6 @@
   "security.biometric": "Desbloquear con {{method}}",
   "security.biometric_desc": "Abre la bóveda con {{method}}. Tu contraseña maestra también sigue funcionando.",
   "security.biometric_needs_password": "Primero establece una contraseña maestra, para poder entrar aunque {{method}} no esté disponible.",
-  "security.biometric_unavailable": "{{method}} no está configurado en este dispositivo."
+  "security.biometric_unavailable": "{{method}} no está configurado en este dispositivo.",
+  "lock.set_password_hint": "Cualquiera frente a este equipo puede abrir este bloqueo. Establece una contraseña maestra en {{place}} para protegerlo."
 }

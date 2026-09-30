@@ -413,7 +413,7 @@
   "vault.type_selection": "Selection du type de coffre",
   "vault.password_required": "Le mot de passe est requis",
   "vault.passwords_mismatch": "Les mots de passe ne correspondent pas",
-  "settings.title": "Parametres",
+  "settings.title": "Paramètres",
   "settings.language": "Langue",
   "settings.language_search": "Rechercher des langues...",
   "settings.language_no_match": "Aucune langue ne correspond",
@@ -445,7 +445,7 @@
   "settings.paste_threshold_desc": "Les collages comptant moins de lignes vont directement au terminal.",
   "settings.general": "General",
   "settings.appearance": "Apparence",
-  "settings.security": "Securite",
+  "settings.security": "Sécurité",
   "settings.sync": "Synchronisation",
   "settings.backup": "Sauvegarde",
   "settings.ai": "AI",
@@ -1665,5 +1665,6 @@
   "security.biometric": "Déverrouiller avec {{method}}",
   "security.biometric_desc": "Ouvrir le coffre avec {{method}}. Votre mot de passe maître fonctionne toujours.",
   "security.biometric_needs_password": "Définissez d’abord un mot de passe maître, pour pouvoir entrer même sans {{method}}.",
-  "security.biometric_unavailable": "{{method}} n’est pas configuré sur cet appareil."
+  "security.biometric_unavailable": "{{method}} n’est pas configuré sur cet appareil.",
+  "lock.set_password_hint": "Toute personne devant cet ordinateur peut ouvrir ce verrou. Définissez un mot de passe maître dans {{place}} pour le protéger."
 }

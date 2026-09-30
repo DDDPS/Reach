@@ -19,6 +19,9 @@
 	let biometric = $state<BiometricStatus | null>(null);
 	const biometricOn = $derived(!!biometric?.enabled);
 	const method = $derived(biometricName(biometric?.method ?? null));
+	// With a master password set, a lock is only undone by it or biometrics,
+	// never by one click: the backend refuses that too.
+	const showPasswordForm = $derived(usePassword || (passwordAvailable && !biometricOn));
 
 	$effect(() => {
 		if (vaultState.held) {
@@ -83,7 +86,7 @@
 			<h2 id="lock-title">{t('lock.title')}</h2>
 			<p class="subtitle">{t('lock.subtitle')}</p>
 
-			{#if usePassword}
+			{#if showPasswordForm}
 				<form
 					onsubmit={(e) => {
 						e.preventDefault();
@@ -93,7 +96,9 @@
 					<Input type="password" placeholder={t('lock.password_placeholder')} bind:value={password} />
 					<Button type="submit" disabled={busy || !password}>{t('lock.unlock')}</Button>
 				</form>
-				<button class="link" onclick={() => (usePassword = false)}>{t('lock.back')}</button>
+				{#if biometricOn}
+					<button class="link" onclick={() => (usePassword = false)}>{t('lock.back')}</button>
+				{/if}
 			{:else}
 				{#if biometricOn}
 					<Button onclick={() => void openWithBiometric()} disabled={busy}>
@@ -101,8 +106,9 @@
 					</Button>
 				{:else}
 					<Button onclick={() => void openWithKeychain()} disabled={busy}>{t('lock.unlock')}</Button>
+					<p class="hint">{t('lock.set_password_hint')}</p>
 				{/if}
-				{#if passwordAvailable}
+				{#if passwordAvailable && biometricOn}
 					<button class="link" onclick={() => (usePassword = true)}>{t('lock.use_password')}</button>
 				{/if}
 			{/if}
@@ -170,6 +176,12 @@
 		color: var(--color-accent, #4c8bf5);
 		cursor: pointer;
 		font-size: 0.85em;
+	}
+
+	.hint {
+		margin: 0;
+		font-size: 0.8em;
+		color: var(--color-text-secondary, #aaa);
 	}
 
 	.error {

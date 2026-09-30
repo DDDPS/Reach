@@ -1665,5 +1665,6 @@
   "security.biometric": "使用 {{method}} 解锁",
   "security.biometric_desc": "使用 {{method}} 打开保险库。主密码始终可用。",
   "security.biometric_needs_password": "请先设置主密码，这样即使 {{method}} 不可用也能进入。",
-  "security.biometric_unavailable": "此设备未设置 {{method}}。"
+  "security.biometric_unavailable": "此设备未设置 {{method}}。",
+  "lock.set_password_hint": "这台电脑前的任何人都能打开此锁。请在 {{place}} 中设置主密码来保护它。"
 }
