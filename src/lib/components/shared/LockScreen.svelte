@@ -7,14 +7,18 @@
 	import Button from '$lib/components/shared/Button.svelte';
 	import Input from '$lib/components/shared/Input.svelte';
 	import { hasMasterPassword } from '$lib/ipc/credentials';
+	import { biometricStatus, type BiometricStatus } from '$lib/ipc/vault';
 	import { t } from '$lib/state/i18n.svelte';
-	import { resume, unlock, vaultState } from '$lib/state/vault.svelte';
+	import { biometricName, resume, unlock, vaultState } from '$lib/state/vault.svelte';
 
 	let usePassword = $state(false);
 	let password = $state('');
 	let error = $state('');
 	let busy = $state(false);
 	let passwordAvailable = $state(false);
+	let biometric = $state<BiometricStatus | null>(null);
+	const biometricOn = $derived(!!biometric?.enabled);
+	const method = $derived(biometricName(biometric?.method ?? null));
 
 	$effect(() => {
 		if (vaultState.held) {
@@ -23,8 +27,23 @@
 			hasMasterPassword()
 				.then((has) => (passwordAvailable = has))
 				.catch(() => (passwordAvailable = false));
+			biometricStatus()
+				.then((status) => (biometric = status))
+				.catch(() => (biometric = null));
 		}
 	});
+
+	async function openWithBiometric(): Promise<void> {
+		busy = true;
+		error = '';
+		try {
+			if (!(await resume(true))) error = t('lock.biometric_failed', { method });
+		} catch {
+			error = t('lock.biometric_failed', { method });
+		} finally {
+			busy = false;
+		}
+	}
 
 	async function openWithKeychain(): Promise<void> {
 		busy = true;
@@ -76,7 +95,13 @@
 				</form>
 				<button class="link" onclick={() => (usePassword = false)}>{t('lock.back')}</button>
 			{:else}
-				<Button onclick={() => void openWithKeychain()} disabled={busy}>{t('lock.unlock')}</Button>
+				{#if biometricOn}
+					<Button onclick={() => void openWithBiometric()} disabled={busy}>
+						{t('lock.unlock_biometric', { method })}
+					</Button>
+				{:else}
+					<Button onclick={() => void openWithKeychain()} disabled={busy}>{t('lock.unlock')}</Button>
+				{/if}
 				{#if passwordAvailable}
 					<button class="link" onclick={() => (usePassword = true)}>{t('lock.use_password')}</button>
 				{/if}

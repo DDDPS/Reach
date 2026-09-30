@@ -10,7 +10,8 @@
 	import Dropdown from '$lib/components/shared/Dropdown.svelte';
 	import Toggle from '$lib/components/shared/Toggle.svelte';
 	import { getSettings, updateSetting } from '$lib/state/settings.svelte';
-	import { lock as lockVault } from '$lib/state/vault.svelte';
+	import { biometricName, lock as lockVault } from '$lib/state/vault.svelte';
+	import { biometricDisable, biometricEnable, biometricStatus, type BiometricStatus } from '$lib/ipc/vault';
 
 	const settings = getSettings();
 	const autoLockOptions = $derived([
@@ -28,6 +29,33 @@
 	let error = $state('');
 	let saving = $state(false);
 
+	let biometric = $state<BiometricStatus | null>(null);
+	let biometricBusy = $state(false);
+	let biometricError = $state('');
+	const method = $derived(biometricName(biometric?.method ?? null));
+	const biometricNote = $derived.by(() => {
+		if (!biometric?.available) return t('security.biometric_unavailable', { method });
+		if (!hasPassword) return t('security.biometric_needs_password', { method });
+		return t('security.biometric_desc', { method });
+	});
+
+	async function toggleBiometric(on: boolean) {
+		biometricBusy = true;
+		biometricError = '';
+		try {
+			if (on) await biometricEnable();
+			else await biometricDisable();
+		} catch (e) {
+			biometricError = String(e);
+		}
+		try {
+			biometric = await biometricStatus();
+		} catch {
+			// Keep the last known state
+		}
+		biometricBusy = false;
+	}
+
 	$effect(() => {
 		loadStatus();
 	});
@@ -37,6 +65,7 @@
 		try {
 			hasPassword = await hasMasterPassword();
 			locked = await checkIsLocked();
+			biometric = await biometricStatus().catch(() => null);
 		} catch {
 			// IPC not available in dev, set safe defaults
 			hasPassword = false;
@@ -187,6 +216,27 @@
 			/>
 		</div>
 	</div>
+
+	{#if biometric?.method}
+		<div class="setting-row">
+			<div class="setting-info">
+				<span class="setting-label">{t('security.biometric', { method })}</span>
+				<span class="setting-description">{biometricNote}</span>
+				{#if biometricError}
+					<span class="form-error">{biometricError}</span>
+				{/if}
+			</div>
+			<div class="setting-control">
+				<Toggle
+					hideLabel
+					checked={biometric.enabled}
+					label={t('security.biometric', { method })}
+					disabled={biometricBusy || locked || (!biometric.enabled && (!biometric.available || !hasPassword))}
+					onchange={(checked) => void toggleBiometric(checked)}
+				/>
+			</div>
+		</div>
+	{/if}
 
 	<div class="action-row">
 		{#if !showPasswordForm}

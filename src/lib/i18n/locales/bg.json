@@ -1659,5 +1659,11 @@
   "security.auto_lock_never": "Никога",
   "security.auto_lock_minutes": "След {{count}} мин",
   "security.lock_on_system_lock": "Заключване при заключване на компютъра",
-  "security.lock_on_system_lock_desc": "Заключване на Reach, когато заключите компютъра или той заспи."
+  "security.lock_on_system_lock_desc": "Заключване на Reach, когато заключите компютъра или той заспи.",
+  "lock.unlock_biometric": "Отключване с {{method}}",
+  "lock.biometric_failed": "{{method}} не отключи трезора. Опитайте отново или използвайте главната парола.",
+  "security.biometric": "Отключване с {{method}}",
+  "security.biometric_desc": "Отваряне на трезора с {{method}}. Главната парола винаги работи.",
+  "security.biometric_needs_password": "Първо задайте главна парола, за да можете да влезете и без {{method}}.",
+  "security.biometric_unavailable": "{{method}} не е настроен на това устройство."
 }

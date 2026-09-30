@@ -1659,5 +1659,11 @@
   "security.auto_lock_never": "Никогда",
   "security.auto_lock_minutes": "Через {{count}} мин",
   "security.lock_on_system_lock": "Блокировать при блокировке компьютера",
-  "security.lock_on_system_lock_desc": "Блокировать Reach, когда вы блокируете компьютер или он уходит в сон."
+  "security.lock_on_system_lock_desc": "Блокировать Reach, когда вы блокируете компьютер или он уходит в сон.",
+  "lock.unlock_biometric": "Разблокировать с {{method}}",
+  "lock.biometric_failed": "{{method}} не разблокировал хранилище. Попробуйте снова или используйте мастер-пароль.",
+  "security.biometric": "Разблокировка с {{method}}",
+  "security.biometric_desc": "Открывать хранилище с помощью {{method}}. Мастер-пароль всегда работает.",
+  "security.biometric_needs_password": "Сначала задайте мастер-пароль, чтобы войти, даже если {{method}} недоступен.",
+  "security.biometric_unavailable": "{{method}} не настроен на этом устройстве."
 }

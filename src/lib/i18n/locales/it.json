@@ -1659,5 +1659,11 @@
   "security.auto_lock_never": "Mai",
   "security.auto_lock_minutes": "Dopo {{count}} min",
   "security.lock_on_system_lock": "Blocca quando il computer si blocca",
-  "security.lock_on_system_lock_desc": "Blocca Reach quando blocchi il computer o va in sospensione."
+  "security.lock_on_system_lock_desc": "Blocca Reach quando blocchi il computer o va in sospensione.",
+  "lock.unlock_biometric": "Sblocca con {{method}}",
+  "lock.biometric_failed": "{{method}} non ha sbloccato la cassaforte. Riprova o usa la password principale.",
+  "security.biometric": "Sblocca con {{method}}",
+  "security.biometric_desc": "Apri la cassaforte con {{method}}. La password principale funziona sempre.",
+  "security.biometric_needs_password": "Imposta prima una password principale, così potrai entrare anche senza {{method}}.",
+  "security.biometric_unavailable": "{{method}} non è configurato su questo dispositivo."
 }

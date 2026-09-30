@@ -74,6 +74,33 @@ export async function resume(): Promise<boolean> {
 	return invoke<boolean>('vault_resume');
 }
 
+/** Biometric unlock on this device: the method this build offers (if any),
+ * whether it is set up now, and whether it is on. */
+export interface BiometricStatus {
+	method: 'windows_hello' | 'touch_id' | 'android' | null;
+	available: boolean;
+	enabled: boolean;
+}
+
+export async function biometricStatus(): Promise<BiometricStatus> {
+	return invoke<BiometricStatus>('vault_biometric_status');
+}
+
+/** Turn biometric unlock on; shows the system prompt. */
+export async function biometricEnable(): Promise<void> {
+	return invoke<void>('vault_biometric_enable');
+}
+
+/** Turn biometric unlock off; the key goes back into the keychain. */
+export async function biometricDisable(): Promise<void> {
+	return invoke<void>('vault_biometric_disable');
+}
+
+/** Open the vault with a biometric check; shows the system prompt. */
+export async function biometricUnlock(): Promise<boolean> {
+	return invoke<boolean>('vault_biometric_unlock');
+}
+
 /** Export identity for backup/multi-device (returns base64 secret key).
  * WARNING: This is SENSITIVE! Protect this value! */
 export async function exportIdentity(): Promise<string> {

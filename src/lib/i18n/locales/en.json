@@ -1659,5 +1659,11 @@
   "security.auto_lock_never": "Never",
   "security.auto_lock_minutes": "After {{count}} min",
   "security.lock_on_system_lock": "Lock when the computer locks",
-  "security.lock_on_system_lock_desc": "Lock Reach when you lock your computer or it goes to sleep."
+  "security.lock_on_system_lock_desc": "Lock Reach when you lock your computer or it goes to sleep.",
+  "lock.unlock_biometric": "Unlock with {{method}}",
+  "lock.biometric_failed": "{{method}} did not unlock the vault. Try again or use your master password.",
+  "security.biometric": "Unlock with {{method}}",
+  "security.biometric_desc": "Open the vault with {{method}}. Your master password always works too.",
+  "security.biometric_needs_password": "Set a master password first, so you can still get in if {{method}} is unavailable.",
+  "security.biometric_unavailable": "{{method}} is not set up on this device."
 }

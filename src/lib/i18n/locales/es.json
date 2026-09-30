@@ -1659,5 +1659,11 @@
   "security.auto_lock_never": "Nunca",
   "security.auto_lock_minutes": "Tras {{count}} min",
   "security.lock_on_system_lock": "Bloquear cuando se bloquee el equipo",
-  "security.lock_on_system_lock_desc": "Bloquear Reach cuando bloquees el equipo o entre en suspensión."
+  "security.lock_on_system_lock_desc": "Bloquear Reach cuando bloquees el equipo o entre en suspensión.",
+  "lock.unlock_biometric": "Desbloquear con {{method}}",
+  "lock.biometric_failed": "{{method}} no desbloqueó la bóveda. Inténtalo de nuevo o usa tu contraseña maestra.",
+  "security.biometric": "Desbloquear con {{method}}",
+  "security.biometric_desc": "Abre la bóveda con {{method}}. Tu contraseña maestra también sigue funcionando.",
+  "security.biometric_needs_password": "Primero establece una contraseña maestra, para poder entrar aunque {{method}} no esté disponible.",
+  "security.biometric_unavailable": "{{method}} no está configurado en este dispositivo."
 }

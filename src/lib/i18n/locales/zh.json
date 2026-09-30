@@ -1659,5 +1659,11 @@
   "security.auto_lock_never": "从不",
   "security.auto_lock_minutes": "{{count}} 分钟后",
   "security.lock_on_system_lock": "电脑锁定时锁定",
-  "security.lock_on_system_lock_desc": "在你锁定电脑或电脑进入睡眠时锁定 Reach。"
+  "security.lock_on_system_lock_desc": "在你锁定电脑或电脑进入睡眠时锁定 Reach。",
+  "lock.unlock_biometric": "使用 {{method}} 解锁",
+  "lock.biometric_failed": "{{method}} 未能解锁保险库。请重试或使用主密码。",
+  "security.biometric": "使用 {{method}} 解锁",
+  "security.biometric_desc": "使用 {{method}} 打开保险库。主密码始终可用。",
+  "security.biometric_needs_password": "请先设置主密码，这样即使 {{method}} 不可用也能进入。",
+  "security.biometric_unavailable": "此设备未设置 {{method}}。"
 }

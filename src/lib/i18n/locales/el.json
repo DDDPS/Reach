@@ -1659,5 +1659,11 @@
   "security.auto_lock_never": "Ποτέ",
   "security.auto_lock_minutes": "Μετά από {{count}} λεπτά",
   "security.lock_on_system_lock": "Κλείδωμα όταν κλειδώνει ο υπολογιστής",
-  "security.lock_on_system_lock_desc": "Κλείδωμα του Reach όταν κλειδώνετε τον υπολογιστή ή μπαίνει σε αναστολή."
+  "security.lock_on_system_lock_desc": "Κλείδωμα του Reach όταν κλειδώνετε τον υπολογιστή ή μπαίνει σε αναστολή.",
+  "lock.unlock_biometric": "Ξεκλείδωμα με {{method}}",
+  "lock.biometric_failed": "Το {{method}} δεν ξεκλείδωσε το θησαυροφυλάκιο. Δοκιμάστε ξανά ή χρησιμοποιήστε τον κύριο κωδικό.",
+  "security.biometric": "Ξεκλείδωμα με {{method}}",
+  "security.biometric_desc": "Άνοιγμα του θησαυροφυλακίου με {{method}}. Ο κύριος κωδικός σας λειτουργεί πάντα.",
+  "security.biometric_needs_password": "Ορίστε πρώτα κύριο κωδικό, ώστε να μπαίνετε ακόμη κι αν το {{method}} δεν είναι διαθέσιμο.",
+  "security.biometric_unavailable": "Το {{method}} δεν έχει ρυθμιστεί σε αυτή τη συσκευή."
 }

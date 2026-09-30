@@ -1659,5 +1659,11 @@
   "security.auto_lock_never": "Jamais",
   "security.auto_lock_minutes": "Après {{count}} min",
   "security.lock_on_system_lock": "Verrouiller quand l’ordinateur se verrouille",
-  "security.lock_on_system_lock_desc": "Verrouiller Reach quand vous verrouillez l’ordinateur ou qu’il se met en veille."
+  "security.lock_on_system_lock_desc": "Verrouiller Reach quand vous verrouillez l’ordinateur ou qu’il se met en veille.",
+  "lock.unlock_biometric": "Déverrouiller avec {{method}}",
+  "lock.biometric_failed": "{{method}} n’a pas déverrouillé le coffre. Réessayez ou utilisez votre mot de passe maître.",
+  "security.biometric": "Déverrouiller avec {{method}}",
+  "security.biometric_desc": "Ouvrir le coffre avec {{method}}. Votre mot de passe maître fonctionne toujours.",
+  "security.biometric_needs_password": "Définissez d’abord un mot de passe maître, pour pouvoir entrer même sans {{method}}.",
+  "security.biometric_unavailable": "{{method}} n’est pas configuré sur cet appareil."
 }

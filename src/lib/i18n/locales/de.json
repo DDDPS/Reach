@@ -1659,5 +1659,11 @@
   "security.auto_lock_never": "Nie",
   "security.auto_lock_minutes": "Nach {{count}} Min.",
   "security.lock_on_system_lock": "Sperren, wenn der Computer gesperrt wird",
-  "security.lock_on_system_lock_desc": "Reach sperren, wenn Sie den Computer sperren oder er in den Ruhezustand geht."
+  "security.lock_on_system_lock_desc": "Reach sperren, wenn Sie den Computer sperren oder er in den Ruhezustand geht.",
+  "lock.unlock_biometric": "Mit {{method}} entsperren",
+  "lock.biometric_failed": "{{method}} hat den Tresor nicht entsperrt. Versuchen Sie es erneut oder verwenden Sie Ihr Master-Passwort.",
+  "security.biometric": "Mit {{method}} entsperren",
+  "security.biometric_desc": "Den Tresor mit {{method}} öffnen. Ihr Master-Passwort funktioniert weiterhin.",
+  "security.biometric_needs_password": "Legen Sie zuerst ein Master-Passwort fest, damit Sie auch ohne {{method}} hineinkommen.",
+  "security.biometric_unavailable": "{{method}} ist auf diesem Gerät nicht eingerichtet."
 }

@@ -35,6 +35,7 @@ const PREKEY_LEN: usize = 4 * 4096;
 
 struct Prekey {
     bytes: Box<[u8; PREKEY_LEN]>,
+    #[cfg(test)]
     locked: bool,
 }
 
@@ -49,12 +50,17 @@ fn prekey() -> &'static Prekey {
         if !locked {
             tracing::warn!("Could not lock the key-shielding prekey into RAM; keys stay encrypted in memory");
         }
-        Prekey { bytes, locked }
+        Prekey {
+            bytes,
+            #[cfg(test)]
+            locked,
+        }
     })
 }
 
 /// Whether the prekey is locked into RAM. For the tests.
-pub(crate) fn prekey_locked() -> bool {
+#[cfg(test)]
+fn prekey_locked() -> bool {
     prekey().locked
 }
 

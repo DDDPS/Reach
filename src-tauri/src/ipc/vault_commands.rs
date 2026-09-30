@@ -53,6 +53,63 @@ pub async fn vault_resume(state: State<'_, AppState>) -> Result<bool, String> {
     manager.resume().await.map_err(|e| e.to_string())
 }
 
+/// Biometric unlock on this device: which method, whether it can be used
+/// now, and whether it is on.
+#[derive(serde::Serialize)]
+pub struct BiometricStatus {
+    method: Option<&'static str>,
+    available: bool,
+    enabled: bool,
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn vault_biometric_status(state: State<'_, AppState>) -> Result<BiometricStatus, String> {
+    let enabled = state.vault_manager.lock().await.biometric_seal().is_some();
+    let method = crate::vault::biometric::method();
+    let available = method.is_some()
+        && tokio::task::spawn_blocking(crate::vault::biometric::available).await.unwrap_or(false);
+    Ok(BiometricStatus { method, available, enabled })
+}
+
+/// Turn biometric unlock on. The vault must be open and a master password
+/// set. The manager is not held while the system prompt is up.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn vault_biometric_enable(state: State<'_, AppState>) -> Result<(), String> {
+    let (user_uuid, secret) = state.vault_manager.lock().await.biometric_enrolment().await.map_err(|e| e.to_string())?;
+    let sealed = tokio::task::spawn_blocking(move || crate::vault::biometric::seal(&user_uuid, &*secret))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.vault_manager.lock().await.biometric_enrolled(&sealed).map_err(|e| e.to_string())
+}
+
+/// Turn biometric unlock off; the key goes back into the keychain.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn vault_biometric_disable(state: State<'_, AppState>) -> Result<(), String> {
+    state.vault_manager.lock().await.disable_biometric().map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(crate::vault::biometric::forget).await.map_err(|e| e.to_string())
+}
+
+/// Open the vault with a biometric check.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn vault_biometric_unlock(state: State<'_, AppState>) -> Result<bool, String> {
+    let sealed = state
+        .vault_manager
+        .lock()
+        .await
+        .biometric_seal()
+        .ok_or("Biometric unlock is not turned on")?;
+    let prompt = sealed.clone();
+    let secret = tokio::task::spawn_blocking(move || crate::vault::biometric::open(&prompt))
+        .await
+        .map_err(|e| e.to_string())??;
+    let mut manager = state.vault_manager.lock().await;
+    manager.unlock_with_biometric(sealed, &secret).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 #[tracing::instrument(skip(state))]
 pub async fn vault_is_locked(state: State<'_, AppState>) -> Result<bool, String> {

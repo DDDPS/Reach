@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod compat_tests;
+pub mod biometric;
 pub mod cache;
 pub mod crypto;
 pub mod error;
