@@ -1,19 +1,23 @@
-//! Unlocking the vault with the device's own biometrics (Settings → Security).
+//! Opening the vault with something on this device instead of the keychain:
+//! Windows Hello, or FIDO2 security keys (Settings → Security).
 //!
-//! Windows Hello follows Bitwarden's desktop client
-//! (`desktop_native/biometric/src/windows.rs`): a Hello key credential signs a
-//! fixed random challenge, and the SHA-256 of that signature is the key that
-//! seals the vault identity's secret key. Hello's keys are RSA with PKCS#1
-//! v1.5 signatures, which are deterministic, so the same challenge always
-//! yields the same key, and only a Hello check (face, fingerprint or PIN) on
-//! this Windows account can produce it. The sealed key lives in
-//! `vault_biometric.json` next to the identity; nothing stored on disk opens
-//! it without Hello.
+//! Each method produces a key only it can produce, and that key seals a copy
+//! of the vault identity's secret key (XChaCha20-Poly1305). The seals live in
+//! `vault_unlock.json` next to the identity; nothing stored there opens
+//! anything without the method itself.
 //!
-//! Turning it on never takes away another way in: a master password must be
-//! set first, and the plain copy of the key in the OS keychain is only
-//! removed after Hello has actually opened the vault once
-//! ([`Sealed::proven`]). Turning it off puts that copy back.
+//! - Windows Hello follows Bitwarden's desktop client
+//!   (`desktop_native/biometric/src/windows.rs`): a Hello key credential signs
+//!   a fixed random challenge, and the SHA-256 of that signature is the key.
+//!   Hello's keys are RSA with PKCS#1 v1.5 signatures, which are
+//!   deterministic, so the same challenge always gives the same key.
+//! - A security key gives its `hmac-secret` over a stored salt (see
+//!   [`super::fido2`]); HKDF-SHA256 turns that into the key.
+//!
+//! Turning a method on never takes away another way in: a master password must
+//! be set first, and the plain copy of the key in the OS keychain is removed
+//! only after a method has actually opened the vault once
+//! ([`Unlockers::proven`]). Removing the last method puts that copy back.
 
 use std::path::Path;
 
@@ -22,43 +26,225 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
     XChaCha20Poly1305, XNonce,
 };
+use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use zeroize::Zeroizing;
 
-const FILE: &str = "vault_biometric.json";
+use super::fido2;
 
-/// What protects the key, as stored and as shown in Settings.
+const FILE: &str = "vault_unlock.json";
+
 pub const WINDOWS_HELLO: &str = "windows_hello";
+pub const FIDO2: &str = "fido2";
 
-/// The identity's secret key, sealed by a biometric check.
+/// Every way this device can open the vault besides the password.
 #[derive(Serialize, Deserialize, Clone)]
-pub struct Sealed {
+pub struct Unlockers {
     pub user_uuid: String,
-    pub method: String,
-    challenge: String,
-    nonce: String,
-    ciphertext: String,
-    /// Set once the biometric check has opened the vault for real. Until
-    /// then the plain keychain copy stays, in case the seal cannot be opened.
+    /// Set once a method has opened the vault for real. Until then the plain
+    /// keychain copy stays, in case a seal cannot be opened after all.
     #[serde(default)]
     pub proven: bool,
+    /// The salt every security key is asked to HMAC.
+    fido_salt: String,
+    #[serde(default)]
+    seals: Vec<Seal>,
 }
 
-/// Which method this build offers on this platform, or `None`.
-pub fn method() -> Option<&'static str> {
-    if cfg!(windows) { Some(WINDOWS_HELLO) } else { None }
+/// The identity's secret key, sealed by one method.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Seal {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    #[serde(default)]
+    pub created: i64,
+    /// Windows Hello: the challenge Hello signs.
+    #[serde(default)]
+    challenge: String,
+    /// Security key: the credential it holds for Reach.
+    #[serde(default)]
+    credential_id: String,
+    nonce: String,
+    ciphertext: String,
 }
 
-/// Whether the method can be used now (a Hello PIN or better is set up).
-/// Blocking.
-pub fn available() -> bool {
-    platform::available()
+/// A seal as Settings lists it.
+#[derive(Serialize, Clone)]
+pub struct SealInfo {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub created: i64,
 }
 
-pub fn load(app_dir: &Path) -> Option<Sealed> {
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+impl Unlockers {
+    pub fn new(user_uuid: &str) -> Self {
+        let salt: [u8; 32] = rand::random();
+        Unlockers { user_uuid: user_uuid.into(), proven: false, fido_salt: BASE64.encode(salt), seals: Vec::new() }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.seals.is_empty()
+    }
+
+    pub fn has(&self, kind: &str) -> bool {
+        self.seals.iter().any(|s| s.kind == kind)
+    }
+
+    pub fn list(&self) -> Vec<SealInfo> {
+        self.seals
+            .iter()
+            .map(|s| SealInfo { id: s.id.clone(), kind: s.kind.clone(), label: s.label.clone(), created: s.created })
+            .collect()
+    }
+
+    /// Add a seal. Windows Hello has one seal at most; a new one replaces it.
+    pub fn add(&mut self, seal: Seal) {
+        if seal.kind == WINDOWS_HELLO {
+            self.seals.retain(|s| s.kind != WINDOWS_HELLO);
+        }
+        self.seals.push(seal);
+    }
+
+    /// Remove a seal; returns what it was, if there was one.
+    pub fn remove(&mut self, id: &str) -> Option<Seal> {
+        let at = self.seals.iter().position(|s| s.id == id)?;
+        Some(self.seals.remove(at))
+    }
+
+    fn fido_salt(&self) -> Result<[u8; 32], String> {
+        BASE64
+            .decode(&self.fido_salt)
+            .ok()
+            .and_then(|s| s.try_into().ok())
+            .ok_or_else(|| "The security key salt is damaged".to_string())
+    }
+
+    fn credential_ids(&self) -> Vec<Vec<u8>> {
+        self.seals
+            .iter()
+            .filter(|s| s.kind == FIDO2)
+            .filter_map(|s| BASE64.decode(&s.credential_id).ok())
+            .collect()
+    }
+
+    fn aad(&self, kind: &str) -> Vec<u8> {
+        format!("reach-unlock-v1:{kind}:{}", self.user_uuid).into_bytes()
+    }
+
+    fn seal_with(&self, key: &[u8; 32], kind: &str, label: &str, secret: &[u8]) -> Result<Seal, String> {
+        let nonce: [u8; 24] = rand::random();
+        let ciphertext = XChaCha20Poly1305::new(key.into())
+            .encrypt(&XNonce::from(nonce), Payload { msg: secret, aad: &self.aad(kind) })
+            .map_err(|e| e.to_string())?;
+        Ok(Seal {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: kind.into(),
+            label: label.into(),
+            created: now(),
+            challenge: String::new(),
+            credential_id: String::new(),
+            nonce: BASE64.encode(nonce),
+            ciphertext: BASE64.encode(ciphertext),
+        })
+    }
+
+    fn open_with(&self, key: &[u8; 32], seal: &Seal) -> Result<Zeroizing<Vec<u8>>, String> {
+        let nonce: [u8; 24] = BASE64
+            .decode(&seal.nonce)
+            .ok()
+            .and_then(|n| n.try_into().ok())
+            .ok_or_else(|| "A seal is damaged".to_string())?;
+        let ciphertext = BASE64.decode(&seal.ciphertext).map_err(|e| e.to_string())?;
+        XChaCha20Poly1305::new(key.into())
+            .decrypt(&XNonce::from(nonce), Payload { msg: &ciphertext, aad: &self.aad(&seal.kind) })
+            .map(Zeroizing::new)
+            .map_err(|_| "The key did not open the vault key".to_string())
+    }
+
+    /// Seal `secret` behind Windows Hello. Blocking; shows the system prompt.
+    pub fn seal_with_hello(&self, secret: &[u8]) -> Result<Seal, String> {
+        let challenge: [u8; 32] = rand::random();
+        let key = hello::key_for(&challenge, true)?;
+        let mut seal = self.seal_with(&key, WINDOWS_HELLO, "Windows Hello", secret)?;
+        seal.challenge = BASE64.encode(challenge);
+        Ok(seal)
+    }
+
+    /// Open the Windows Hello seal. Blocking; shows the system prompt.
+    pub fn open_with_hello(&self) -> Result<Zeroizing<Vec<u8>>, String> {
+        let seal = self
+            .seals
+            .iter()
+            .find(|s| s.kind == WINDOWS_HELLO)
+            .ok_or("Windows Hello is not turned on")?;
+        let challenge = BASE64.decode(&seal.challenge).map_err(|e| e.to_string())?;
+        let key = hello::key_for(&challenge, false)?;
+        self.open_with(&key, seal)
+    }
+
+    /// Seal `secret` behind a security key. Blocking: the user touches the
+    /// key twice (and gives its PIN), once to add Reach's credential and once
+    /// to get the secret, as systemd-cryptenroll does.
+    pub fn seal_with_key(&self, label: &str, secret: &[u8], pin: Option<&str>) -> Result<Seal, String> {
+        let user_id = self.user_uuid.as_bytes();
+        let credential = fido2::make_credential(user_id, label, &self.credential_ids(), pin)?;
+        let (_, output) = fido2::hmac_secret(std::slice::from_ref(&credential), &self.fido_salt()?, pin)?;
+        let mut seal = self.seal_with(&fido_key(&output), FIDO2, label, secret)?;
+        seal.credential_id = BASE64.encode(credential);
+        Ok(seal)
+    }
+
+    /// Open with whichever added security key is plugged in. Blocking.
+    pub fn open_with_key(&self, pin: Option<&str>) -> Result<Zeroizing<Vec<u8>>, String> {
+        let (credential, output) = fido2::hmac_secret(&self.credential_ids(), &self.fido_salt()?, pin)?;
+        let credential = BASE64.encode(credential);
+        let seal = self
+            .seals
+            .iter()
+            .find(|s| s.kind == FIDO2 && s.credential_id == credential)
+            .ok_or("This key is not one added to Reach")?;
+        self.open_with(&fido_key(&output), seal)
+    }
+}
+
+/// The sealing key from a security key's `hmac-secret` output.
+fn fido_key(output: &[u8; 32]) -> Zeroizing<[u8; 32]> {
+    let mut key = Zeroizing::new([0u8; 32]);
+    Hkdf::<Sha256>::new(None, output)
+        .expand(b"reach-fido2-seal-v1", &mut *key)
+        .expect("32 bytes is a valid HKDF-SHA256 length");
+    key
+}
+
+/// Whether this build offers Windows Hello.
+pub fn hello_offered() -> bool {
+    cfg!(windows)
+}
+
+/// Whether Windows Hello can be used now (a PIN or better is set up). Blocking.
+pub fn hello_available() -> bool {
+    hello::available()
+}
+
+/// Delete Reach's Windows Hello credential. Best-effort; blocking.
+pub fn hello_forget() {
+    hello::forget();
+}
+
+pub fn load(app_dir: &Path) -> Option<Unlockers> {
     let data = std::fs::read(app_dir.join(FILE)).ok()?;
     match serde_json::from_slice(&data) {
-        Ok(sealed) => Some(sealed),
+        Ok(unlockers) => Some(unlockers),
         Err(e) => {
             tracing::warn!("Ignoring an unreadable {}: {}", FILE, e);
             None
@@ -66,9 +252,9 @@ pub fn load(app_dir: &Path) -> Option<Sealed> {
     }
 }
 
-pub fn save(app_dir: &Path, sealed: &Sealed) -> std::io::Result<()> {
+pub fn save(app_dir: &Path, unlockers: &Unlockers) -> std::io::Result<()> {
     let tmp = app_dir.join(format!("{FILE}.tmp"));
-    std::fs::write(&tmp, serde_json::to_vec_pretty(sealed)?)?;
+    std::fs::write(&tmp, serde_json::to_vec_pretty(unlockers)?)?;
     std::fs::rename(&tmp, app_dir.join(FILE))
 }
 
@@ -79,48 +265,8 @@ pub fn remove(app_dir: &Path) -> std::io::Result<()> {
     }
 }
 
-fn aad(user_uuid: &str) -> Vec<u8> {
-    [b"reach-biometric-v1:".as_slice(), user_uuid.as_bytes()].concat()
-}
-
-/// Seal `secret` behind a biometric check. Blocking; shows the system prompt.
-pub fn seal(user_uuid: &str, secret: &[u8]) -> Result<Sealed, String> {
-    let challenge: [u8; 32] = rand::random();
-    let key = platform::key_for(&challenge, true)?;
-    let nonce: [u8; 24] = rand::random();
-    let ciphertext = XChaCha20Poly1305::new((&*key).into())
-        .encrypt(&XNonce::from(nonce), Payload { msg: secret, aad: &aad(user_uuid) })
-        .map_err(|e| e.to_string())?;
-    Ok(Sealed {
-        user_uuid: user_uuid.to_string(),
-        method: WINDOWS_HELLO.to_string(),
-        challenge: BASE64.encode(challenge),
-        nonce: BASE64.encode(nonce),
-        ciphertext: BASE64.encode(ciphertext),
-        proven: false,
-    })
-}
-
-/// Open a seal made by [`seal`]. Blocking; shows the system prompt.
-pub fn open(sealed: &Sealed) -> Result<Zeroizing<Vec<u8>>, String> {
-    let decode = |s: &str| BASE64.decode(s).map_err(|e| e.to_string());
-    let challenge = decode(&sealed.challenge)?;
-    let nonce: [u8; 24] = decode(&sealed.nonce)?.try_into().map_err(|_| "bad nonce".to_string())?;
-    let ciphertext = decode(&sealed.ciphertext)?;
-    let key = platform::key_for(&challenge, false)?;
-    XChaCha20Poly1305::new((&*key).into())
-        .decrypt(&XNonce::from(nonce), Payload { msg: &ciphertext, aad: &aad(&sealed.user_uuid) })
-        .map(Zeroizing::new)
-        .map_err(|_| "The biometric key did not open the vault key".to_string())
-}
-
-/// Delete the platform credential. Best-effort; blocking.
-pub fn forget() {
-    platform::forget();
-}
-
 #[cfg(windows)]
-mod platform {
+mod hello {
     use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -230,7 +376,7 @@ mod platform {
 }
 
 #[cfg(not(windows))]
-mod platform {
+mod hello {
     use zeroize::Zeroizing;
 
     pub fn available() -> bool {
@@ -238,24 +384,22 @@ mod platform {
     }
 
     pub fn key_for(_: &[u8], _: bool) -> Result<Zeroizing<[u8; 32]>, String> {
-        Err("Biometric unlock is not available on this platform".into())
+        Err("Windows Hello is only on Windows".into())
     }
 
     pub fn forget() {}
 }
 
 #[cfg(test)]
-impl Sealed {
-    /// A seal for tests: the fields a Hello prompt would fill are dummies.
-    pub fn for_test(user_uuid: &str) -> Self {
-        Sealed {
-            user_uuid: user_uuid.into(),
-            method: WINDOWS_HELLO.into(),
-            challenge: String::new(),
-            nonce: String::new(),
-            ciphertext: String::new(),
-            proven: false,
-        }
+impl Unlockers {
+    /// Seal with a known key, standing in for a method's prompt.
+    pub fn seal_for_test(&self, kind: &str, key: &[u8; 32], secret: &[u8]) -> Seal {
+        self.seal_with(key, kind, kind, secret).unwrap()
+    }
+
+    pub fn open_for_test(&self, key: &[u8; 32], id: &str) -> Result<Zeroizing<Vec<u8>>, String> {
+        let seal = self.seals.iter().find(|s| s.id == id).ok_or("no such seal")?;
+        self.open_with(key, seal)
     }
 }
 
@@ -264,21 +408,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_seal_file_survives_a_round_trip_and_removal() {
-        let dir = std::env::temp_dir().join(format!("reach-bio-{}", uuid::Uuid::new_v4()));
+    fn the_unlock_file_survives_a_round_trip_and_removal() {
+        let dir = std::env::temp_dir().join(format!("reach-unlock-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(load(&dir).is_none());
-        let sealed = Sealed {
-            user_uuid: "u".into(),
-            method: WINDOWS_HELLO.into(),
-            challenge: BASE64.encode([1u8; 32]),
-            nonce: BASE64.encode([2u8; 24]),
-            ciphertext: BASE64.encode([3u8; 48]),
-            proven: false,
-        };
-        save(&dir, &sealed).unwrap();
+        let mut unlockers = Unlockers::new("u");
+        let seal = unlockers.seal_for_test(FIDO2, &[1u8; 32], b"secret");
+        unlockers.add(seal);
+        save(&dir, &unlockers).unwrap();
         let back = load(&dir).unwrap();
         assert_eq!(back.user_uuid, "u");
+        assert_eq!(back.list().len(), 1);
         assert!(!back.proven);
         remove(&dir).unwrap();
         remove(&dir).unwrap();
@@ -286,22 +426,63 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn each_seal_opens_only_with_its_own_key_user_and_kind() {
+        let mut alice = Unlockers::new("alice");
+        let yubikey = alice.seal_for_test(FIDO2, &[1u8; 32], b"vault key");
+        let backup = alice.seal_for_test(FIDO2, &[2u8; 32], b"vault key");
+        let (yubikey_id, backup_id) = (yubikey.id.clone(), backup.id.clone());
+        alice.add(yubikey);
+        alice.add(backup);
+
+        assert_eq!(&*alice.open_for_test(&[1u8; 32], &yubikey_id).unwrap(), b"vault key");
+        assert_eq!(&*alice.open_for_test(&[2u8; 32], &backup_id).unwrap(), b"vault key");
+        // One key never opens the other's seal.
+        assert!(alice.open_for_test(&[1u8; 32], &backup_id).is_err());
+
+        // Bound to the user: the same seal under another user does not open.
+        let mut bob = alice.clone();
+        bob.user_uuid = "bob".into();
+        assert!(bob.open_for_test(&[1u8; 32], &yubikey_id).is_err());
+
+        // Bound to the kind: relabelled as Windows Hello, it does not open.
+        let mut relabelled = alice.clone();
+        relabelled.seals[0].kind = WINDOWS_HELLO.into();
+        assert!(relabelled.open_for_test(&[1u8; 32], &yubikey_id).is_err());
+    }
+
+    #[test]
+    fn windows_hello_has_one_seal_and_keys_many() {
+        let mut u = Unlockers::new("u");
+        u.add(u.seal_for_test(WINDOWS_HELLO, &[1u8; 32], b"s"));
+        u.add(u.seal_for_test(WINDOWS_HELLO, &[2u8; 32], b"s"));
+        u.add(u.seal_for_test(FIDO2, &[3u8; 32], b"s"));
+        u.add(u.seal_for_test(FIDO2, &[4u8; 32], b"s"));
+        assert_eq!(u.list().iter().filter(|s| s.kind == WINDOWS_HELLO).count(), 1);
+        assert_eq!(u.list().iter().filter(|s| s.kind == FIDO2).count(), 2);
+        let id = u.list()[0].id.clone();
+        assert!(u.remove(&id).is_some());
+        assert!(u.remove(&id).is_none());
+    }
+
+    #[test]
+    fn the_seal_key_from_a_security_key_is_derived_not_raw() {
+        let output = [5u8; 32];
+        assert_ne!(*fido_key(&output), output);
+        assert_eq!(*fido_key(&output), *fido_key(&output));
+    }
+
     /// Asks the real platform; run by hand: `cargo test hello_probe -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn hello_probe() {
         let t = std::time::Instant::now();
-        println!("method={:?} available={} in {:?}", method(), available(), t.elapsed());
-    }
-
-    #[test]
-    fn a_seal_is_bound_to_its_user() {
-        // The cipher half of seal/open, without the Hello prompt.
-        let key = [7u8; 32];
-        let nonce = [9u8; 24];
-        let cipher = XChaCha20Poly1305::new((&key).into());
-        let ct = cipher.encrypt(&XNonce::from(nonce), Payload { msg: b"secret", aad: &aad("alice") }).unwrap();
-        assert!(cipher.decrypt(&XNonce::from(nonce), Payload { msg: &ct, aad: &aad("bob") }).is_err());
-        assert_eq!(cipher.decrypt(&XNonce::from(nonce), Payload { msg: &ct, aad: &aad("alice") }).unwrap(), b"secret");
+        println!(
+            "hello_offered={} hello_available={} fido2={} in {:?}",
+            hello_offered(),
+            hello_available(),
+            fido2::supported(),
+            t.elapsed()
+        );
     }
 }

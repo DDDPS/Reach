@@ -1666,5 +1666,17 @@
   "security.biometric_desc": "Abre la bóveda con {{method}}. Tu contraseña maestra también sigue funcionando.",
   "security.biometric_needs_password": "Primero establece una contraseña maestra, para poder entrar aunque {{method}} no esté disponible.",
   "security.biometric_unavailable": "{{method}} no está configurado en este dispositivo.",
-  "lock.set_password_hint": "Cualquiera frente a este equipo puede abrir este bloqueo. Establece una contraseña maestra en {{place}} para protegerlo."
+  "lock.set_password_hint": "Cualquiera frente a este equipo puede abrir este bloqueo. Establece una contraseña maestra en {{place}} para protegerlo.",
+  "lock.unlock_key": "Desbloquear con llave de seguridad",
+  "lock.key_failed": "La llave de seguridad no desbloqueó la bóveda. Inténtalo de nuevo o usa tu contraseña maestra.",
+  "lock.key_pin_placeholder": "PIN de la llave de seguridad",
+  "lock.key_touch": "Toca tu llave de seguridad cuando parpadee.",
+  "security.keys": "Llaves de seguridad",
+  "security.keys_desc": "Desbloquea con una llave FIDO2 como una YubiKey. Añade una segunda llave de respaldo; tu contraseña maestra también sigue funcionando.",
+  "security.keys_needs_password": "Primero establece una contraseña maestra, para poder entrar aunque no tengas la llave.",
+  "security.keys_add": "Añadir llave de seguridad",
+  "security.keys_remove": "Quitar",
+  "security.keys_name_placeholder": "Nombre, p. ej. YubiKey 5C",
+  "security.keys_default_name": "Llave de seguridad",
+  "security.keys_touch_twice": "Toca la llave cuando parpadee. Lo pide dos veces: una para añadir Reach y otra para sellar la clave de la bóveda."
 }

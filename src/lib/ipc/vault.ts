@@ -74,31 +74,51 @@ export async function resume(): Promise<boolean> {
 	return invoke<boolean>('vault_resume');
 }
 
-/** Biometric unlock on this device: the method this build offers (if any),
- * whether it is set up now, and whether it is on. */
-export interface BiometricStatus {
-	method: 'windows_hello' | 'touch_id' | 'android' | null;
-	available: boolean;
-	enabled: boolean;
+/** A device unlock method that is on: Windows Hello, or one security key. */
+export interface UnlockMethod {
+	id: string;
+	kind: 'windows_hello' | 'fido2';
+	label: string;
+	created: number;
 }
 
-export async function biometricStatus(): Promise<BiometricStatus> {
-	return invoke<BiometricStatus>('vault_biometric_status');
+/** The device unlock methods this build offers here, and which are on. */
+export interface UnlockMethods {
+	hello_offered: boolean;
+	hello_available: boolean;
+	keys_supported: boolean;
+	/** Reach asks for the key's PIN itself (macOS, Linux); Windows asks. */
+	keys_ask_pin: boolean;
+	methods: UnlockMethod[];
 }
 
-/** Turn biometric unlock on; shows the system prompt. */
-export async function biometricEnable(): Promise<void> {
-	return invoke<void>('vault_biometric_enable');
+export async function unlockMethods(): Promise<UnlockMethods> {
+	return invoke<UnlockMethods>('vault_unlock_methods');
 }
 
-/** Turn biometric unlock off; the key goes back into the keychain. */
-export async function biometricDisable(): Promise<void> {
-	return invoke<void>('vault_biometric_disable');
+/** Turn Windows Hello unlock on; shows the system prompt. */
+export async function helloEnable(): Promise<void> {
+	return invoke<void>('vault_hello_enable');
 }
 
-/** Open the vault with a biometric check; shows the system prompt. */
-export async function biometricUnlock(): Promise<boolean> {
-	return invoke<boolean>('vault_biometric_unlock');
+/** Open the vault with Windows Hello; shows the system prompt. */
+export async function helloUnlock(): Promise<boolean> {
+	return invoke<boolean>('vault_hello_unlock');
+}
+
+/** Add a security key; the user touches it twice. */
+export async function securityKeyAdd(label: string, pin?: string): Promise<void> {
+	return invoke<void>('vault_security_key_add', { label, pin: pin ?? null });
+}
+
+/** Open the vault with an added security key. */
+export async function securityKeyUnlock(pin?: string): Promise<boolean> {
+	return invoke<boolean>('vault_security_key_unlock', { pin: pin ?? null });
+}
+
+/** Remove a device unlock method. */
+export async function unlockMethodRemove(id: string): Promise<void> {
+	return invoke<void>('vault_unlock_method_remove', { id });
 }
 
 /** Export identity for backup/multi-device (returns base64 secret key).

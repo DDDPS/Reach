@@ -641,9 +641,9 @@ impl VaultManager {
         self.user_uuid = Some(stored.user_uuid.clone());
         self.identity_public_key = Some(public_key.to_bytes());
 
-        // Store in keychain for auto-unlock, unless biometrics guard the key
-        if self.biometric_seal().is_some() {
-            tracing::debug!("Biometric unlock is on; not putting the vault key in the keychain");
+        // Store in keychain for auto-unlock, unless a device method guards the key
+        if self.unlockers().is_some() {
+            tracing::debug!("Device unlock is on; not putting the vault key in the keychain");
         } else if let Err(e) = store_key_in_keychain(&stored.user_uuid, secret_key.as_bytes()) {
             tracing::error!(
                 "Could not store the vault key in the OS keychain: {}. Auto-unlock will not work on the next launch.",
@@ -714,7 +714,7 @@ impl VaultManager {
 
     /// Auto-unlock using OS keychain (TLS-style, no password needed).
     pub async fn auto_unlock(&mut self) -> Result<bool, VaultError> {
-        if self.held || self.biometric_seal().is_some() {
+        if self.held || self.unlockers().is_some() {
             return Ok(false);
         }
         let identity_path = self.app_dir.join("vault_identity.json");
@@ -815,46 +815,56 @@ impl VaultManager {
 
     /// Whether the vault is being kept locked by [`VaultManager::hold`].
     pub fn is_held(&self) -> bool {
-        self.held || (self.is_locked() && self.biometric_seal().is_some())
+        self.held || (self.is_locked() && self.unlockers().is_some())
     }
 
-    /// The biometric seal of this identity's key, if biometric unlock is on.
-    /// A seal left from another identity (after an import) does not count.
-    pub fn biometric_seal(&self) -> Option<biometric::Sealed> {
-        let sealed = biometric::load(&self.app_dir)?;
+    /// This identity's device unlock methods (Windows Hello, security keys),
+    /// if any are on. A file left from another identity (after an import)
+    /// does not count.
+    pub fn unlockers(&self) -> Option<biometric::Unlockers> {
+        let unlockers = biometric::load(&self.app_dir)?;
         let data = std::fs::read(self.app_dir.join("vault_identity.json")).ok()?;
         let stored: StoredIdentity = serde_json::from_slice(&data).ok()?;
-        (stored.user_uuid == sealed.user_uuid).then_some(sealed)
+        (stored.user_uuid == unlockers.user_uuid && !unlockers.is_empty()).then_some(unlockers)
     }
 
-    /// What turning biometric unlock on needs, taken while the vault is open:
-    /// the user and a copy of the identity key. A master password has to be
-    /// set, so there is always a way in that does not depend on the device.
-    pub async fn biometric_enrolment(&self) -> Result<(String, zeroize::Zeroizing<[u8; 32]>), VaultError> {
+    /// What adding an unlock method needs, taken while the vault is open: the
+    /// methods so far (or a fresh set) and a copy of the identity key. A master
+    /// password has to be set, so there is always a way in that does not
+    /// depend on the device.
+    pub async fn unlock_enrolment(&self) -> Result<(biometric::Unlockers, zeroize::Zeroizing<[u8; 32]>), VaultError> {
         if !self.has_password().await {
             return Err(VaultError::PasswordNotSet);
         }
         let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;
         let secret = identity.with_secret(|s| zeroize::Zeroizing::new(s.to_bytes()));
-        Ok((identity.uuid.clone(), secret))
+        let unlockers = biometric::load(&self.app_dir)
+            .filter(|u| u.user_uuid == identity.uuid)
+            .unwrap_or_else(|| biometric::Unlockers::new(&identity.uuid));
+        Ok((unlockers, secret))
     }
 
-    /// Keep a new seal. The keychain copy stays until the seal is proven.
-    pub fn biometric_enrolled(&self, sealed: &biometric::Sealed) -> Result<(), VaultError> {
-        biometric::save(&self.app_dir, sealed)?;
+    /// Keep the methods with a new seal added. The keychain copy stays until
+    /// a method has proven itself.
+    pub fn save_unlockers(&self, unlockers: &biometric::Unlockers) -> Result<(), VaultError> {
+        let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;
+        if unlockers.user_uuid != identity.uuid {
+            return Err(VaultError::AccessDenied("unlock methods of another identity".into()));
+        }
+        biometric::save(&self.app_dir, unlockers)?;
         Ok(())
     }
 
-    /// Open with a key a biometric check released. The first time that works,
+    /// Open with a key an unlock method released. The first time that works,
     /// the plain keychain copy is no longer needed and is removed.
-    pub async fn unlock_with_biometric(&mut self, mut sealed: biometric::Sealed, secret: &[u8]) -> Result<bool, VaultError> {
+    pub async fn unlock_with_device(&mut self, secret: &[u8]) -> Result<bool, VaultError> {
         let opened = self.unlock_with_secret_key(secret).await?;
-        if opened && !sealed.proven {
-            match delete_key_from_keychain(&sealed.user_uuid) {
+        if let Some(mut unlockers) = self.unlockers().filter(|u| opened && !u.proven) {
+            match delete_key_from_keychain(&unlockers.user_uuid) {
                 Ok(()) => {
-                    sealed.proven = true;
-                    biometric::save(&self.app_dir, &sealed)?;
-                    tracing::info!("Biometric unlock proven; the keychain copy of the vault key was removed");
+                    unlockers.proven = true;
+                    biometric::save(&self.app_dir, &unlockers)?;
+                    tracing::info!("Device unlock proven; the keychain copy of the vault key was removed");
                 }
                 Err(e) => tracing::warn!("Could not remove the keychain copy of the vault key: {}", e),
             }
@@ -862,13 +872,24 @@ impl VaultManager {
         Ok(opened)
     }
 
-    /// Turn biometric unlock off: put the key back in the keychain first, and
-    /// only then drop the seal, so there is never a moment with neither.
-    pub fn disable_biometric(&self) -> Result<(), VaultError> {
+    /// Remove one unlock method; returns its kind. Removing the last one puts
+    /// the key back in the keychain first, and only then drops the file, so
+    /// there is never a moment with neither.
+    pub fn remove_unlocker(&self, id: &str) -> Result<Option<String>, VaultError> {
         let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;
-        identity.with_secret(|s| store_key_in_keychain(&identity.uuid, s.as_bytes()))?;
-        biometric::remove(&self.app_dir)?;
-        Ok(())
+        let Some(mut unlockers) = self.unlockers() else {
+            return Ok(None);
+        };
+        let Some(removed) = unlockers.remove(id) else {
+            return Ok(None);
+        };
+        if unlockers.is_empty() {
+            identity.with_secret(|s| store_key_in_keychain(&identity.uuid, s.as_bytes()))?;
+            biometric::remove(&self.app_dir)?;
+        } else {
+            biometric::save(&self.app_dir, &unlockers)?;
+        }
+        Ok(Some(removed.kind))
     }
 
     /// The unlock button on the lock screen: lift the hold and open with the
@@ -3681,18 +3702,24 @@ mod password_tests {
         assert_eq!(names, ["Production Xostme V2"]);
     }
 
-    /// With biometric unlock on, the vault opens by the biometric key or the
-    /// password, never silently from the keychain.
+    /// With a device unlock method on, the vault opens by that method's key
+    /// or the password, never silently from the keychain; the last method
+    /// removed puts the keychain copy back.
     #[tokio::test]
-    async fn a_biometric_vault_opens_only_with_its_own_key() {
-        let dir = tmp_dir("biometric");
+    async fn a_device_guarded_vault_opens_only_with_its_own_key() {
+        let dir = tmp_dir("device-unlock");
         let mut mgr = VaultManager::new(dir.clone());
-        mgr.init_identity("bio-vault-pass").await.unwrap();
-        let (uuid, secret) = mgr.biometric_enrolment().await.unwrap();
-        mgr.biometric_enrolled(&biometric::Sealed::for_test(&uuid)).unwrap();
+        mgr.init_identity("device-vault-pass").await.unwrap();
+        let (mut unlockers, secret) = mgr.unlock_enrolment().await.unwrap();
+        let yubikey = unlockers.seal_for_test(biometric::FIDO2, &[1u8; 32], &*secret);
+        let backup = unlockers.seal_for_test(biometric::FIDO2, &[2u8; 32], &*secret);
+        let (yubikey_id, backup_id) = (yubikey.id.clone(), backup.id.clone());
+        unlockers.add(yubikey);
+        unlockers.add(backup);
+        mgr.save_unlockers(&unlockers).unwrap();
         mgr.lock();
 
-        // A fresh start with biometrics on is held, and the keychain alone
+        // A fresh start with a method on is held, and the keychain alone
         // (auto-unlock, the plain unlock button) does not open it.
         assert!(mgr.is_held());
         assert!(!mgr.auto_unlock().await.unwrap());
@@ -3700,33 +3727,34 @@ mod password_tests {
         assert!(mgr.is_locked());
 
         // Another key never opens it.
-        let seal = mgr.biometric_seal().unwrap();
-        assert!(mgr.unlock_with_biometric(seal.clone(), &[9u8; 32]).await.is_err());
+        assert!(mgr.unlock_with_device(&[9u8; 32]).await.is_err());
         assert!(mgr.is_locked());
 
-        // Its own key does.
-        assert!(mgr.unlock_with_biometric(seal, &*secret).await.unwrap());
+        // What a seal releases does.
+        let released = mgr.unlockers().unwrap().open_for_test(&[2u8; 32], &backup_id).unwrap();
+        assert!(mgr.unlock_with_device(&released).await.unwrap());
         assert!(!mgr.is_locked() && !mgr.is_held());
 
-        // A password unlock still works, and does not put the key back in
-        // the keychain behind biometrics' back.
+        // A password unlock still works, and does not put the key back in the
+        // keychain behind the method's back.
         mgr.lock();
-        assert!(mgr.unlock("bio-vault-pass").await.unwrap());
+        assert!(mgr.unlock("device-vault-pass").await.unwrap());
 
-        // A seal left from another identity does not count.
-        biometric::save(&dir, &biometric::Sealed::for_test("someone-else")).unwrap();
-        assert!(mgr.biometric_seal().is_none());
-        biometric::save(&dir, &biometric::Sealed::for_test(&uuid)).unwrap();
+        // A file left from another identity does not count.
+        biometric::save(&dir, &biometric::Unlockers::new("someone-else")).unwrap();
+        assert!(mgr.unlockers().is_none());
+        mgr.save_unlockers(&unlockers).unwrap();
 
-        // Turning it off needs the keychain; where it can be written, the
-        // keychain opens the vault again at the next start.
-        if mgr.disable_biometric().is_ok() {
-            assert!(mgr.biometric_seal().is_none());
+        // Removing one key keeps the other; the last one needs the keychain.
+        assert_eq!(mgr.remove_unlocker(&yubikey_id).unwrap().as_deref(), Some(biometric::FIDO2));
+        assert!(mgr.unlockers().is_some());
+        if mgr.remove_unlocker(&backup_id).is_ok() {
+            assert!(mgr.unlockers().is_none());
             let mut restarted = VaultManager::new(dir.clone());
             assert!(restarted.auto_unlock().await.unwrap());
         } else {
-            eprintln!("skipped the turn-off check: this machine's keychain cannot be written");
-            assert!(mgr.biometric_seal().is_some());
+            eprintln!("skipped the last-method check: this machine's keychain cannot be written");
+            assert!(mgr.unlockers().is_some());
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3751,8 +3779,8 @@ mod password_tests {
         assert!(mgr.unlock("relock-vault-pass").await.unwrap());
         assert!(readable(&mgr), "an internal vault stayed unreadable after unlocking");
 
-        // And the key released by a biometric check does the same.
-        let (_, secret) = mgr.biometric_enrolment().await.unwrap();
+        // And the key released by a device unlock method does the same.
+        let (_, secret) = mgr.unlock_enrolment().await.unwrap();
         mgr.hold();
         assert!(mgr.unlock_with_secret_key(&*secret).await.unwrap());
         assert!(readable(&mgr));

@@ -1666,5 +1666,17 @@
   "security.biometric_desc": "Ouvrir le coffre avec {{method}}. Votre mot de passe maître fonctionne toujours.",
   "security.biometric_needs_password": "Définissez d’abord un mot de passe maître, pour pouvoir entrer même sans {{method}}.",
   "security.biometric_unavailable": "{{method}} n’est pas configuré sur cet appareil.",
-  "lock.set_password_hint": "Toute personne devant cet ordinateur peut ouvrir ce verrou. Définissez un mot de passe maître dans {{place}} pour le protéger."
+  "lock.set_password_hint": "Toute personne devant cet ordinateur peut ouvrir ce verrou. Définissez un mot de passe maître dans {{place}} pour le protéger.",
+  "lock.unlock_key": "Déverrouiller avec une clé de sécurité",
+  "lock.key_failed": "La clé de sécurité n’a pas déverrouillé le coffre. Réessayez ou utilisez votre mot de passe maître.",
+  "lock.key_pin_placeholder": "PIN de la clé de sécurité",
+  "lock.key_touch": "Touchez votre clé de sécurité lorsqu’elle clignote.",
+  "security.keys": "Clés de sécurité",
+  "security.keys_desc": "Déverrouiller avec une clé FIDO2 comme une YubiKey. Ajoutez une deuxième clé en secours ; votre mot de passe maître fonctionne toujours.",
+  "security.keys_needs_password": "Définissez d’abord un mot de passe maître, pour pouvoir entrer même sans clé.",
+  "security.keys_add": "Ajouter une clé de sécurité",
+  "security.keys_remove": "Retirer",
+  "security.keys_name_placeholder": "Nom, par ex. YubiKey 5C",
+  "security.keys_default_name": "Clé de sécurité",
+  "security.keys_touch_twice": "Touchez la clé lorsqu’elle clignote. Elle le demande deux fois : une pour ajouter Reach, une pour sceller la clé du coffre."
 }

@@ -5,6 +5,7 @@ pub mod cache;
 pub mod crypto;
 pub mod error;
 pub mod export;
+pub mod fido2;
 pub mod kdf;
 pub mod manager;
 pub mod schema;

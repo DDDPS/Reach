@@ -10,8 +10,14 @@
 	import Dropdown from '$lib/components/shared/Dropdown.svelte';
 	import Toggle from '$lib/components/shared/Toggle.svelte';
 	import { getSettings, updateSetting } from '$lib/state/settings.svelte';
-	import { biometricName, lock as lockVault } from '$lib/state/vault.svelte';
-	import { biometricDisable, biometricEnable, biometricStatus, type BiometricStatus } from '$lib/ipc/vault';
+	import { lock as lockVault } from '$lib/state/vault.svelte';
+	import {
+		helloEnable,
+		securityKeyAdd,
+		unlockMethodRemove,
+		unlockMethods,
+		type UnlockMethods
+	} from '$lib/ipc/vault';
 
 	const settings = getSettings();
 	const autoLockOptions = $derived([
@@ -29,31 +35,53 @@
 	let error = $state('');
 	let saving = $state(false);
 
-	let biometric = $state<BiometricStatus | null>(null);
-	let biometricBusy = $state(false);
-	let biometricError = $state('');
-	const method = $derived(biometricName(biometric?.method ?? null));
-	const biometricNote = $derived.by(() => {
-		if (!biometric?.available) return t('security.biometric_unavailable', { method });
-		if (!hasPassword) return t('security.biometric_needs_password', { method });
-		return t('security.biometric_desc', { method });
+	// Device unlock methods: Windows Hello and security keys.
+	let methods = $state<UnlockMethods | null>(null);
+	let methodBusy = $state(false);
+	let methodError = $state('');
+	let addingKey = $state(false);
+	let keyLabel = $state('');
+	let keyPin = $state('');
+	const hello = $derived(methods?.methods.find((m) => m.kind === 'windows_hello'));
+	const keys = $derived(methods?.methods.filter((m) => m.kind === 'fido2') ?? []);
+	const helloNote = $derived.by(() => {
+		if (!methods?.hello_available) return t('security.biometric_unavailable', { method: 'Windows Hello' });
+		if (!hasPassword) return t('security.biometric_needs_password', { method: 'Windows Hello' });
+		return t('security.biometric_desc', { method: 'Windows Hello' });
 	});
 
-	async function toggleBiometric(on: boolean) {
-		biometricBusy = true;
-		biometricError = '';
+	async function changeMethods(change: () => Promise<void>) {
+		methodBusy = true;
+		methodError = '';
 		try {
-			if (on) await biometricEnable();
-			else await biometricDisable();
+			await change();
 		} catch (e) {
-			biometricError = String(e);
+			methodError = String(e);
 		}
 		try {
-			biometric = await biometricStatus();
+			methods = await unlockMethods();
 		} catch {
 			// Keep the last known state
 		}
-		biometricBusy = false;
+		methodBusy = false;
+	}
+
+	function toggleHello(on: boolean) {
+		void changeMethods(async () => {
+			if (on) await helloEnable();
+			else if (hello) await unlockMethodRemove(hello.id);
+		});
+	}
+
+	function addKey() {
+		const label = keyLabel.trim() || t('security.keys_default_name');
+		const pin = keyPin;
+		keyPin = '';
+		void changeMethods(async () => {
+			await securityKeyAdd(label, methods?.keys_ask_pin ? pin : undefined);
+			addingKey = false;
+			keyLabel = '';
+		});
 	}
 
 	$effect(() => {
@@ -65,7 +93,7 @@
 		try {
 			hasPassword = await hasMasterPassword();
 			locked = await checkIsLocked();
-			biometric = await biometricStatus().catch(() => null);
+			methods = await unlockMethods().catch(() => null);
 		} catch {
 			// IPC not available in dev, set safe defaults
 			hasPassword = false;
@@ -217,25 +245,94 @@
 		</div>
 	</div>
 
-	{#if biometric?.method}
+	{#if methods?.hello_offered}
 		<div class="setting-row">
 			<div class="setting-info">
-				<span class="setting-label">{t('security.biometric', { method })}</span>
-				<span class="setting-description">{biometricNote}</span>
-				{#if biometricError}
-					<span class="form-error">{biometricError}</span>
-				{/if}
+				<span class="setting-label">{t('security.biometric', { method: 'Windows Hello' })}</span>
+				<span class="setting-description">{helloNote}</span>
 			</div>
 			<div class="setting-control">
 				<Toggle
 					hideLabel
-					checked={biometric.enabled}
-					label={t('security.biometric', { method })}
-					disabled={biometricBusy || locked || (!biometric.enabled && (!biometric.available || !hasPassword))}
-					onchange={(checked) => void toggleBiometric(checked)}
+					checked={!!hello}
+					label={t('security.biometric', { method: 'Windows Hello' })}
+					disabled={methodBusy || locked || (!hello && (!methods.hello_available || !hasPassword))}
+					onchange={toggleHello}
 				/>
 			</div>
 		</div>
+	{/if}
+
+	{#if methods?.keys_supported}
+		<div class="setting-row keys-row">
+			<div class="setting-info">
+				<span class="setting-label">{t('security.keys')}</span>
+				<span class="setting-description">
+					{hasPassword ? t('security.keys_desc') : t('security.keys_needs_password')}
+				</span>
+				{#if keys.length}
+					<ul class="key-list">
+						{#each keys as key (key.id)}
+							<li>
+								<span class="key-name">{key.label}</span>
+								<Button
+									variant="ghost"
+									size="sm"
+									disabled={methodBusy || locked}
+									onclick={() => void changeMethods(() => unlockMethodRemove(key.id))}
+								>
+									{t('security.keys_remove')}
+								</Button>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+				{#if addingKey}
+					<form
+						class="key-form"
+						onsubmit={(e) => {
+							e.preventDefault();
+							addKey();
+						}}
+					>
+						<Input placeholder={t('security.keys_name_placeholder')} bind:value={keyLabel} />
+						{#if methods.keys_ask_pin}
+							<Input type="password" placeholder={t('lock.key_pin_placeholder')} bind:value={keyPin} />
+						{/if}
+						<span class="setting-description">{t('security.keys_touch_twice')}</span>
+						<div class="form-actions">
+							<Button variant="ghost" size="sm" disabled={methodBusy} onclick={() => (addingKey = false)}>
+								{t('common.cancel')}
+							</Button>
+							<Button
+								type="submit"
+								size="sm"
+								disabled={methodBusy || (methods.keys_ask_pin && !keyPin)}
+							>
+								{t('security.keys_add')}
+							</Button>
+						</div>
+					</form>
+				{/if}
+				{#if methodError}
+					<span class="form-error">{methodError}</span>
+				{/if}
+			</div>
+			{#if !addingKey}
+				<div class="setting-control">
+					<Button
+						variant="secondary"
+						size="sm"
+						disabled={methodBusy || locked || !hasPassword}
+						onclick={() => (addingKey = true)}
+					>
+						{t('security.keys_add')}
+					</Button>
+				</div>
+			{/if}
+		</div>
+	{:else if methodError}
+		<span class="form-error">{methodError}</span>
 	{/if}
 
 	<div class="action-row">
@@ -339,6 +436,38 @@
 	.lock-badge.locked {
 		background-color: rgba(48, 209, 88, 0.12);
 		color: var(--color-success);
+	}
+
+	.keys-row {
+		align-items: flex-start;
+	}
+
+	.key-list {
+		list-style: none;
+		margin: 8px 0 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.key-list li {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
+	.key-name {
+		font-size: 0.9em;
+		color: var(--color-text-primary);
+	}
+
+	.key-form {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		margin-top: 8px;
 	}
 
 	.password-form {

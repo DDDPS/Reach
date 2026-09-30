@@ -181,12 +181,18 @@ tauri-plugin-drag = "2"
 # Android's target_os is "android", so naming Linux explicitly excludes it.
 # Dragging a remote file out without downloading it first. Explorer pulls the
 # bytes through an IStream on drop, so nothing is fetched while dragging.
+# FIDO2 security keys over USB for vault unlock; Windows goes through
+# webauthn.dll instead, which needs no admin rights.
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+ctap-hid-fido2 = "3.6"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = "1"
 windows = { version = "0.62", features = [
     "Foundation",
     "Security_Credentials",
     "Security_Cryptography",
+    "Win32_Networking_WindowsWebServices",
     "Storage_Streams",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

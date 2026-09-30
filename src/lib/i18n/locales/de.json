@@ -1666,5 +1666,17 @@
   "security.biometric_desc": "Den Tresor mit {{method}} öffnen. Ihr Master-Passwort funktioniert weiterhin.",
   "security.biometric_needs_password": "Legen Sie zuerst ein Master-Passwort fest, damit Sie auch ohne {{method}} hineinkommen.",
   "security.biometric_unavailable": "{{method}} ist auf diesem Gerät nicht eingerichtet.",
-  "lock.set_password_hint": "Jeder an diesem Computer kann diese Sperre öffnen. Legen Sie unter {{place}} ein Master-Passwort fest, um sie zu schützen."
+  "lock.set_password_hint": "Jeder an diesem Computer kann diese Sperre öffnen. Legen Sie unter {{place}} ein Master-Passwort fest, um sie zu schützen.",
+  "lock.unlock_key": "Mit Sicherheitsschlüssel entsperren",
+  "lock.key_failed": "Der Sicherheitsschlüssel hat den Tresor nicht entsperrt. Versuchen Sie es erneut oder verwenden Sie Ihr Master-Passwort.",
+  "lock.key_pin_placeholder": "PIN des Sicherheitsschlüssels",
+  "lock.key_touch": "Berühren Sie Ihren Sicherheitsschlüssel, wenn er blinkt.",
+  "security.keys": "Sicherheitsschlüssel",
+  "security.keys_desc": "Mit einem FIDO2-Schlüssel wie einem YubiKey entsperren. Fügen Sie einen zweiten Schlüssel als Reserve hinzu; Ihr Master-Passwort funktioniert weiterhin.",
+  "security.keys_needs_password": "Legen Sie zuerst ein Master-Passwort fest, damit Sie auch ohne Schlüssel hineinkommen.",
+  "security.keys_add": "Sicherheitsschlüssel hinzufügen",
+  "security.keys_remove": "Entfernen",
+  "security.keys_name_placeholder": "Name, z. B. YubiKey 5C",
+  "security.keys_default_name": "Sicherheitsschlüssel",
+  "security.keys_touch_twice": "Berühren Sie den Schlüssel, wenn er blinkt. Er fragt zweimal: einmal zum Hinzufügen von Reach, einmal zum Versiegeln des Tresorschlüssels."
 }

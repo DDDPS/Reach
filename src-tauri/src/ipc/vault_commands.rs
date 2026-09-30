@@ -3,6 +3,7 @@ use secrecy::SecretBox;
 use tauri::State;
 
 use crate::state::AppState;
+use crate::vault::{biometric, fido2};
 use crate::vault::{
     AppSettings, InviteInfo, MemberInfo, MemberRole, ReceivedShare, SecretCategory, SecretMetadata,
     ShareItemResult, SharedItemInfo, VaultInfo, VaultType,
@@ -53,61 +54,105 @@ pub async fn vault_resume(state: State<'_, AppState>) -> Result<bool, String> {
     manager.resume().await.map_err(|e| e.to_string())
 }
 
-/// Biometric unlock on this device: which method, whether it can be used
-/// now, and whether it is on.
+/// The device unlock methods: Windows Hello (where offered) and security
+/// keys, and which of them are on.
 #[derive(serde::Serialize)]
-pub struct BiometricStatus {
-    method: Option<&'static str>,
-    available: bool,
-    enabled: bool,
+pub struct UnlockMethods {
+    hello_offered: bool,
+    hello_available: bool,
+    keys_supported: bool,
+    /// Reach asks for the key's PIN itself (macOS, Linux); Windows asks.
+    keys_ask_pin: bool,
+    methods: Vec<biometric::SealInfo>,
 }
 
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn vault_biometric_status(state: State<'_, AppState>) -> Result<BiometricStatus, String> {
-    let enabled = state.vault_manager.lock().await.biometric_seal().is_some();
-    let method = crate::vault::biometric::method();
-    let available = method.is_some()
-        && tokio::task::spawn_blocking(crate::vault::biometric::available).await.unwrap_or(false);
-    Ok(BiometricStatus { method, available, enabled })
+pub async fn vault_unlock_methods(state: State<'_, AppState>) -> Result<UnlockMethods, String> {
+    let methods = state.vault_manager.lock().await.unlockers().map(|u| u.list()).unwrap_or_default();
+    let hello_offered = biometric::hello_offered();
+    let hello_available = hello_offered && tokio::task::spawn_blocking(biometric::hello_available).await.unwrap_or(false);
+    Ok(UnlockMethods {
+        hello_offered,
+        hello_available,
+        keys_supported: fido2::supported(),
+        keys_ask_pin: fido2::asks_pin_itself(),
+        methods,
+    })
 }
 
-/// Turn biometric unlock on. The vault must be open and a master password
+/// Turn Windows Hello unlock on. The vault must be open and a master password
 /// set. The manager is not held while the system prompt is up.
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn vault_biometric_enable(state: State<'_, AppState>) -> Result<(), String> {
-    let (user_uuid, secret) = state.vault_manager.lock().await.biometric_enrolment().await.map_err(|e| e.to_string())?;
-    let sealed = tokio::task::spawn_blocking(move || crate::vault::biometric::seal(&user_uuid, &*secret))
-        .await
-        .map_err(|e| e.to_string())??;
-    state.vault_manager.lock().await.biometric_enrolled(&sealed).map_err(|e| e.to_string())
+pub async fn vault_hello_enable(state: State<'_, AppState>) -> Result<(), String> {
+    let (mut unlockers, secret) = state.vault_manager.lock().await.unlock_enrolment().await.map_err(|e| e.to_string())?;
+    let unlockers = tokio::task::spawn_blocking(move || {
+        let seal = unlockers.seal_with_hello(&*secret)?;
+        unlockers.add(seal);
+        Ok::<_, String>(unlockers)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    state.vault_manager.lock().await.save_unlockers(&unlockers).map_err(|e| e.to_string())
 }
 
-/// Turn biometric unlock off; the key goes back into the keychain.
+/// Open the vault with Windows Hello.
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn vault_biometric_disable(state: State<'_, AppState>) -> Result<(), String> {
-    state.vault_manager.lock().await.disable_biometric().map_err(|e| e.to_string())?;
-    tokio::task::spawn_blocking(crate::vault::biometric::forget).await.map_err(|e| e.to_string())
-}
-
-/// Open the vault with a biometric check.
-#[tauri::command]
-#[tracing::instrument(skip(state))]
-pub async fn vault_biometric_unlock(state: State<'_, AppState>) -> Result<bool, String> {
-    let sealed = state
-        .vault_manager
-        .lock()
-        .await
-        .biometric_seal()
-        .ok_or("Biometric unlock is not turned on")?;
-    let prompt = sealed.clone();
-    let secret = tokio::task::spawn_blocking(move || crate::vault::biometric::open(&prompt))
+pub async fn vault_hello_unlock(state: State<'_, AppState>) -> Result<bool, String> {
+    let unlockers = state.vault_manager.lock().await.unlockers().ok_or("Windows Hello is not turned on")?;
+    let secret = tokio::task::spawn_blocking(move || unlockers.open_with_hello())
         .await
         .map_err(|e| e.to_string())??;
     let mut manager = state.vault_manager.lock().await;
-    manager.unlock_with_biometric(sealed, &secret).await.map_err(|e| e.to_string())
+    manager.unlock_with_device(&secret).await.map_err(|e| e.to_string())
+}
+
+/// Add a security key. The user touches it twice (and gives its PIN): once
+/// to add Reach's credential to it, once for the secret that seals the key.
+#[tauri::command]
+#[tracing::instrument(skip(state, pin))]
+pub async fn vault_security_key_add(state: State<'_, AppState>, label: String, pin: Option<String>) -> Result<(), String> {
+    let label = match label.trim() {
+        "" => "Security key".to_string(),
+        l => l.chars().take(64).collect(),
+    };
+    let pin = pin.map(zeroize::Zeroizing::new);
+    let (mut unlockers, secret) = state.vault_manager.lock().await.unlock_enrolment().await.map_err(|e| e.to_string())?;
+    let unlockers = tokio::task::spawn_blocking(move || {
+        let seal = unlockers.seal_with_key(&label, &*secret, pin.as_deref().map(|p| p.as_str()))?;
+        unlockers.add(seal);
+        Ok::<_, String>(unlockers)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    state.vault_manager.lock().await.save_unlockers(&unlockers).map_err(|e| e.to_string())
+}
+
+/// Open the vault with whichever added security key is plugged in.
+#[tauri::command]
+#[tracing::instrument(skip(state, pin))]
+pub async fn vault_security_key_unlock(state: State<'_, AppState>, pin: Option<String>) -> Result<bool, String> {
+    let pin = pin.map(zeroize::Zeroizing::new);
+    let unlockers = state.vault_manager.lock().await.unlockers().ok_or("No security key has been added")?;
+    let secret = tokio::task::spawn_blocking(move || unlockers.open_with_key(pin.as_deref().map(|p| p.as_str())))
+        .await
+        .map_err(|e| e.to_string())??;
+    let mut manager = state.vault_manager.lock().await;
+    manager.unlock_with_device(&secret).await.map_err(|e| e.to_string())
+}
+
+/// Remove an unlock method. Removing the last one puts the key back in the
+/// keychain, so Reach opens by itself at start-up again.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn vault_unlock_method_remove(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let kind = state.vault_manager.lock().await.remove_unlocker(&id).map_err(|e| e.to_string())?;
+    if kind.as_deref() == Some(biometric::WINDOWS_HELLO) {
+        tokio::task::spawn_blocking(biometric::hello_forget).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

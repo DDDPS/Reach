@@ -3,75 +3,88 @@
 	 * Shown over the whole app while the vault is held locked (by the user or by
 	 * auto-lock). Sessions that are already open keep running underneath; what
 	 * this gates is the vault, and with it every saved password and key.
+	 *
+	 * With a master password set, a lock is only undone by it or by a device
+	 * method (Windows Hello, a security key), never by one click: the backend
+	 * refuses that too.
 	 */
 	import Button from '$lib/components/shared/Button.svelte';
 	import Input from '$lib/components/shared/Input.svelte';
 	import { hasMasterPassword } from '$lib/ipc/credentials';
-	import { biometricStatus, type BiometricStatus } from '$lib/ipc/vault';
+	import { unlockMethods, type UnlockMethods } from '$lib/ipc/vault';
 	import { t } from '$lib/state/i18n.svelte';
-	import { biometricName, resume, unlock, vaultState } from '$lib/state/vault.svelte';
+	import { resume, unlock, vaultState } from '$lib/state/vault.svelte';
 
-	let usePassword = $state(false);
+	type View = 'choose' | 'password' | 'key-pin';
+
+	let view = $state<View>('choose');
 	let password = $state('');
+	let keyPin = $state('');
 	let error = $state('');
 	let busy = $state(false);
 	let passwordAvailable = $state(false);
-	let biometric = $state<BiometricStatus | null>(null);
-	const biometricOn = $derived(!!biometric?.enabled);
-	const method = $derived(biometricName(biometric?.method ?? null));
-	// With a master password set, a lock is only undone by it or biometrics,
-	// never by one click: the backend refuses that too.
-	const showPasswordForm = $derived(usePassword || (passwordAvailable && !biometricOn));
+	let methods = $state<UnlockMethods | null>(null);
+
+	const hasHello = $derived(!!methods?.methods.some((m) => m.kind === 'windows_hello'));
+	const hasKey = $derived(!!methods?.methods.some((m) => m.kind === 'fido2'));
+	const hasDeviceMethod = $derived(hasHello || hasKey);
+	const passwordHint = $derived(
+		t('lock.set_password_hint', { place: `${t('settings.title')} → ${t('settings.security')}` })
+	);
 
 	$effect(() => {
 		if (vaultState.held) {
 			error = '';
 			password = '';
+			keyPin = '';
+			view = 'choose';
 			hasMasterPassword()
-				.then((has) => (passwordAvailable = has))
-				.catch(() => (passwordAvailable = false));
-			biometricStatus()
-				.then((status) => (biometric = status))
-				.catch(() => (biometric = null));
+				.then((has) => {
+					passwordAvailable = has;
+				})
+				.catch(() => {
+					passwordAvailable = false;
+				});
+			unlockMethods()
+				.then((m) => {
+					methods = m;
+				})
+				.catch(() => {
+					methods = null;
+				});
 		}
 	});
 
-	async function openWithBiometric(): Promise<void> {
-		busy = true;
-		error = '';
-		try {
-			if (!(await resume(true))) error = t('lock.biometric_failed', { method });
-		} catch {
-			error = t('lock.biometric_failed', { method });
-		} finally {
-			busy = false;
-		}
-	}
+	// Without a device method, the password field is all there is to show.
+	const showPassword = $derived(view === 'password' || (view === 'choose' && passwordAvailable && !hasDeviceMethod));
 
-	async function openWithKeychain(): Promise<void> {
+	async function attempt(open: () => Promise<boolean>, failed: string): Promise<void> {
 		busy = true;
 		error = '';
 		try {
-			if (!(await resume())) error = t('lock.unlock_failed');
+			if (!(await open())) error = failed;
 		} catch (err) {
 			error = String(err);
 		} finally {
 			busy = false;
 		}
+	}
+
+	function openWithKey(): void {
+		if (methods?.keys_ask_pin && view !== 'key-pin') {
+			view = 'key-pin';
+			return;
+		}
+		const pin = keyPin;
+		keyPin = '';
+		void attempt(() => resume({ key: true, pin: pin || undefined }), t('lock.key_failed'));
 	}
 
 	async function openWithPassword(): Promise<void> {
 		if (!password) return;
-		busy = true;
-		error = '';
-		try {
-			if (!(await unlock(password))) error = t('lock.wrong_password');
-		} catch (err) {
-			error = String(err);
-		} finally {
-			busy = false;
-			password = '';
-		}
+		const entered = password;
+		password = '';
+		await attempt(() => unlock(entered), t('lock.wrong_password'));
 	}
 </script>
 
@@ -86,7 +99,7 @@
 			<h2 id="lock-title">{t('lock.title')}</h2>
 			<p class="subtitle">{t('lock.subtitle')}</p>
 
-			{#if showPasswordForm}
+			{#if showPassword}
 				<form
 					onsubmit={(e) => {
 						e.preventDefault();
@@ -96,20 +109,46 @@
 					<Input type="password" placeholder={t('lock.password_placeholder')} bind:value={password} />
 					<Button type="submit" disabled={busy || !password}>{t('lock.unlock')}</Button>
 				</form>
-				{#if biometricOn}
-					<button class="link" onclick={() => (usePassword = false)}>{t('lock.back')}</button>
+				{#if hasDeviceMethod}
+					<button class="link" onclick={() => (view = 'choose')}>{t('lock.back')}</button>
 				{/if}
+			{:else if view === 'key-pin'}
+				<form
+					onsubmit={(e) => {
+						e.preventDefault();
+						openWithKey();
+					}}
+				>
+					<Input type="password" placeholder={t('lock.key_pin_placeholder')} bind:value={keyPin} />
+					<p class="hint">{t('lock.key_touch')}</p>
+					<Button type="submit" disabled={busy || !keyPin}>{t('lock.unlock')}</Button>
+				</form>
+				<button class="link" onclick={() => (view = 'choose')}>{t('lock.back')}</button>
 			{:else}
-				{#if biometricOn}
-					<Button onclick={() => void openWithBiometric()} disabled={busy}>
-						{t('lock.unlock_biometric', { method })}
+				{#if hasHello}
+					<Button
+						onclick={() => void attempt(() => resume({ hello: true }), t('lock.biometric_failed', { method: 'Windows Hello' }))}
+						disabled={busy}
+					>
+						{t('lock.unlock_biometric', { method: 'Windows Hello' })}
 					</Button>
-				{:else}
-					<Button onclick={() => void openWithKeychain()} disabled={busy}>{t('lock.unlock')}</Button>
-					<p class="hint">{t('lock.set_password_hint')}</p>
 				{/if}
-				{#if passwordAvailable && biometricOn}
-					<button class="link" onclick={() => (usePassword = true)}>{t('lock.use_password')}</button>
+				{#if hasKey}
+					<Button variant={hasHello ? 'secondary' : 'primary'} onclick={openWithKey} disabled={busy}>
+						{t('lock.unlock_key')}
+					</Button>
+					{#if busy && !methods?.keys_ask_pin}
+						<p class="hint">{t('lock.key_touch')}</p>
+					{/if}
+				{/if}
+				{#if !hasDeviceMethod}
+					<Button onclick={() => void attempt(() => resume(), t('lock.unlock_failed'))} disabled={busy}>
+						{t('lock.unlock')}
+					</Button>
+					<p class="hint">{passwordHint}</p>
+				{/if}
+				{#if passwordAvailable && hasDeviceMethod}
+					<button class="link" onclick={() => (view = 'password')}>{t('lock.use_password')}</button>
 				{/if}
 			{/if}
 

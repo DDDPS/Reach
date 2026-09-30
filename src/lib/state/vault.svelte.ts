@@ -196,21 +196,17 @@ export async function lock(): Promise<void> {
 }
 
 /** Open a held vault with the keychain: the lock screen's unlock button. */
-/** The name of a biometric method, as the platform itself calls it. */
-export function biometricName(method: vaultIpc.BiometricStatus['method']): string {
-	switch (method) {
-		case 'windows_hello':
-			return 'Windows Hello';
-		case 'touch_id':
-			return 'Touch ID';
-		default:
-			return 'biometrics';
-	}
-}
+/** How a held vault is opened: the keychain (only without a master
+ * password), Windows Hello, or a security key. */
+export type ResumeVia = { hello: true } | { key: true; pin?: string };
 
-/** Open a held vault with the keychain, or with a biometric check. */
-export async function resume(biometric = false): Promise<boolean> {
-	const success = biometric ? await vaultIpc.biometricUnlock() : await vaultIpc.resume();
+/** Open a held vault. */
+export async function resume(via?: ResumeVia): Promise<boolean> {
+	const success = !via
+		? await vaultIpc.resume()
+		: 'hello' in via
+			? await vaultIpc.helloUnlock()
+			: await vaultIpc.securityKeyUnlock(via.pin);
 	if (success) {
 		vaultState.held = false;
 		vaultState.locked = false;

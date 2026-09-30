@@ -1666,5 +1666,17 @@
   "security.biometric_desc": "使用 {{method}} 打开保险库。主密码始终可用。",
   "security.biometric_needs_password": "请先设置主密码，这样即使 {{method}} 不可用也能进入。",
   "security.biometric_unavailable": "此设备未设置 {{method}}。",
-  "lock.set_password_hint": "这台电脑前的任何人都能打开此锁。请在 {{place}} 中设置主密码来保护它。"
+  "lock.set_password_hint": "这台电脑前的任何人都能打开此锁。请在 {{place}} 中设置主密码来保护它。",
+  "lock.unlock_key": "使用安全密钥解锁",
+  "lock.key_failed": "安全密钥未能解锁保险库。请重试或使用主密码。",
+  "lock.key_pin_placeholder": "安全密钥 PIN",
+  "lock.key_touch": "安全密钥闪烁时请触摸它。",
+  "security.keys": "安全密钥",
+  "security.keys_desc": "使用 FIDO2 密钥（如 YubiKey）解锁。可添加第二把密钥作为备用；主密码始终可用。",
+  "security.keys_needs_password": "请先设置主密码，这样没有密钥也能进入。",
+  "security.keys_add": "添加安全密钥",
+  "security.keys_remove": "移除",
+  "security.keys_name_placeholder": "名称，例如 YubiKey 5C",
+  "security.keys_default_name": "安全密钥",
+  "security.keys_touch_twice": "密钥闪烁时请触摸。会要求两次：一次添加 Reach，一次封存保险库密钥。"
 }
