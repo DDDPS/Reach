@@ -1175,23 +1175,30 @@ impl VaultManager {
     /// Ensure internal vaults exist, are open, and can be read.
     async fn ensure_internal_vaults(&mut self) -> Result<(), VaultError> {
         self.open_internal_vaults().await?;
-        // A lock wipes every vault's key but leaves its connection open, and
-        // the step above skips a vault that is already open. Put the key back
-        // in each one that lost it, or it stays unreadable after unlocking.
-        let mut ids: Vec<String> = INTERNAL_VAULTS
+        self.restore_vault_keys().await;
+        Ok(())
+    }
+
+    /// A lock wipes every vault's key but leaves its connection open, and
+    /// opening the vaults again skips one that is already open. Put the key
+    /// back in every open vault that lost it, internal or the user's own, or
+    /// it stays unreadable (an empty session list) until Reach restarts.
+    async fn restore_vault_keys(&mut self) {
+        if self.kek.is_none() {
+            return;
+        }
+        let mut ids: Vec<String> = self
+            .vaults
             .iter()
-            .filter_map(|name| self.vault_names.get(*name).cloned())
+            .filter(|(_, v)| v.master_dek.is_none())
+            .map(|(id, _)| id.clone())
             .collect();
         ids.sort();
-        ids.dedup();
         for id in ids {
-            if self.vaults.get(&id).is_some_and(|v| v.master_dek.is_none()) {
-                if let Err(e) = self.unlock_vault(&id).await {
-                    tracing::error!("Could not unlock internal vault {}: {}", id, e);
-                }
+            if let Err(e) = self.unlock_vault(&id).await {
+                tracing::error!("Could not unlock vault {} again: {}", id, e);
             }
         }
-        Ok(())
     }
 
     /// Open (or create) the internal vaults.
@@ -1423,6 +1430,8 @@ impl VaultManager {
             }
         }
 
+        // The ones skipped above as already open need their keys back too.
+        self.restore_vault_keys().await;
         Ok(())
     }
 

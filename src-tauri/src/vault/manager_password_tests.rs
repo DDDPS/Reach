@@ -154,25 +154,29 @@ async fn a_device_guarded_vault_opens_only_with_its_own_key() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Locking and unlocking again leaves the internal vaults readable, not
-/// just open: the lock wipes their keys and the unlock must restore them.
+/// Locking and unlocking again leaves every vault readable, not just open:
+/// the internal ones and the user's own (issue: a vault of servers showed up
+/// empty after a lock). The lock wipes their keys; the unlock must restore
+/// them, by password and by a key a device method releases.
 #[tokio::test]
-async fn internal_vaults_can_be_read_after_a_lock_and_unlock() {
+async fn every_vault_can_be_read_after_a_lock_and_unlock() {
     let dir = tmp_dir("relock");
     let mut mgr = VaultManager::new(dir.clone());
     mgr.init_identity("relock-vault-pass").await.unwrap();
+    let own = mgr.create_vault("My servers", VaultType::Private, None, None).await.unwrap().id;
     let readable = |mgr: &VaultManager| {
-        INTERNAL_VAULTS.iter().all(|name| {
+        let internal = INTERNAL_VAULTS.iter().all(|name| {
             let id = mgr.vault_names.get(*name).expect("internal vault mapped");
             mgr.vaults.get(id).is_some_and(|v| v.master_dek.is_some())
-        })
+        });
+        internal && mgr.vaults.get(&own).is_some_and(|v| v.master_dek.is_some())
     };
     assert!(readable(&mgr));
 
     mgr.hold();
     assert!(!readable(&mgr));
     assert!(mgr.unlock("relock-vault-pass").await.unwrap());
-    assert!(readable(&mgr), "an internal vault stayed unreadable after unlocking");
+    assert!(readable(&mgr), "a vault stayed unreadable after unlocking");
 
     // And the key released by a device unlock method does the same.
     let (_, secret) = mgr.unlock_enrolment().await.unwrap();

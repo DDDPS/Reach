@@ -2,6 +2,9 @@
 
 All notable changes to Reach are documented here.
 
+## v0.7.1
+- **Your vaults show their sessions after a lock** — Locking wipes every vault's key from memory, and unlocking opened the vaults again but skipped any that were still open, so after a lock (Lock now, auto-lock, or the computer locking) your own vaults stayed open without their keys and their session lists came up empty until Reach restarted. Nothing was lost: the sessions were in Turso and in the encrypted copy all along. 0.7.0 fixed this for Reach's internal vaults only; now every vault gets its key back, and a test locks and unlocks with a vault of the user's own, by password and by a device unlock method.
+
 ## v0.7.0
 - **Lock Reach** — Settings → Security has Lock now, auto-lock after 1 to 60 minutes without keyboard or mouse use, and a switch to lock when the computer locks or goes to sleep (Windows session lock and suspend, macOS screen lock and sleep, Linux logind and the desktop screensaver, as KeePassXC watches them). A lock drops every vault key from memory and shows a lock screen over the app; SSH, SFTP and remote desktop sessions already open keep running underneath. With a master password set, only the password or a device unlock method below undoes a lock: the one-click unlock from the keychain is refused, by the backend as well as the lock screen. Without a password the button stays, with a hint to set one.
 - **Unlock with Windows Hello** — Turned on in Settings → Security, it seals the vault key with a key only a Windows Hello check can produce: Hello signs a random challenge and the SHA-256 of that signature seals the identity key, as Bitwarden's desktop client does. Reach keeps its Hello prompt in front of the app while it waits.
