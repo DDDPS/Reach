@@ -10,9 +10,19 @@ use crate::vault::types::{Dek, EncryptedPayload, Kek, WrappedDek};
 
 /// Generate a random 32-byte DEK.
 pub fn generate_dek() -> Dek {
-    let mut key = [0u8; 32];
-    rand::fill(&mut key[..]);
-    Dek::new(key)
+    Dek::from_fn(|key| rand::fill(&mut key[..]))
+}
+
+/// A key decrypted out of a wrapped key, straight into shielded storage. The
+/// decrypted bytes are wiped however this returns.
+fn dek_from_plaintext(plaintext: Zeroizing<Vec<u8>>) -> Result<Dek, VaultError> {
+    if plaintext.len() != 32 {
+        return Err(VaultError::InvalidKeyLength {
+            expected: 32,
+            got: plaintext.len(),
+        });
+    }
+    Ok(Dek::from_fn(|key| key.copy_from_slice(&plaintext)))
 }
 
 /// Generate a random 24-byte nonce for XChaCha20.
@@ -24,12 +34,12 @@ fn generate_nonce() -> [u8; 24] {
 
 /// Wrap a DEK with a KEK using XChaCha20-Poly1305.
 pub fn wrap_dek(kek: &Kek, dek: &Dek) -> Result<WrappedDek, VaultError> {
-    let cipher = XChaCha20Poly1305::new(kek.expose().into());
+    let cipher = kek.with_key(|k| XChaCha20Poly1305::new(k.into()));
     let nonce = generate_nonce();
     let xnonce = &XNonce::from(nonce);
 
-    let ciphertext = cipher
-        .encrypt(xnonce, dek.expose().as_ref())
+    let ciphertext = dek
+        .with_key(|d| cipher.encrypt(xnonce, d.as_ref()))
         .map_err(|e| VaultError::EncryptionError(e.to_string()))?;
 
     Ok(WrappedDek { nonce, ciphertext })
@@ -37,23 +47,15 @@ pub fn wrap_dek(kek: &Kek, dek: &Dek) -> Result<WrappedDek, VaultError> {
 
 /// Unwrap a DEK using a KEK.
 pub fn unwrap_dek(kek: &Kek, wrapped: &WrappedDek) -> Result<Dek, VaultError> {
-    let cipher = XChaCha20Poly1305::new(kek.expose().into());
+    let cipher = kek.with_key(|k| XChaCha20Poly1305::new(k.into()));
     let xnonce = &XNonce::from(wrapped.nonce);
 
-    let plaintext = cipher
-        .decrypt(xnonce, wrapped.ciphertext.as_ref())
-        .map_err(|e| VaultError::DecryptionError(e.to_string()))?;
-
-    if plaintext.len() != 32 {
-        return Err(VaultError::InvalidKeyLength {
-            expected: 32,
-            got: plaintext.len(),
-        });
-    }
-
-    let mut key = Zeroizing::new([0u8; 32]);
-    key.copy_from_slice(&plaintext);
-    Ok(Dek::new(*key))
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(xnonce, wrapped.ciphertext.as_ref())
+            .map_err(|e| VaultError::DecryptionError(e.to_string()))?,
+    );
+    dek_from_plaintext(plaintext)
 }
 
 /// Encrypt a secret payload using envelope encryption.
@@ -63,7 +65,7 @@ pub fn encrypt_secret(master_dek: &Dek, plaintext: &[u8]) -> Result<EncryptedPay
     let dek = generate_dek();
 
     // Encrypt payload with DEK
-    let cipher = XChaCha20Poly1305::new(dek.expose().into());
+    let cipher = dek.with_key(|k| XChaCha20Poly1305::new(k.into()));
     let nonce = generate_nonce();
     let xnonce = &XNonce::from(nonce);
 
@@ -83,12 +85,12 @@ pub fn encrypt_secret(master_dek: &Dek, plaintext: &[u8]) -> Result<EncryptedPay
 
 /// Wrap a DEK with another DEK (master DEK).
 pub fn wrap_dek_with_dek(master_dek: &Dek, dek: &Dek) -> Result<WrappedDek, VaultError> {
-    let cipher = XChaCha20Poly1305::new(master_dek.expose().into());
+    let cipher = master_dek.with_key(|k| XChaCha20Poly1305::new(k.into()));
     let nonce = generate_nonce();
     let xnonce = &XNonce::from(nonce);
 
-    let ciphertext = cipher
-        .encrypt(xnonce, dek.expose().as_ref())
+    let ciphertext = dek
+        .with_key(|d| cipher.encrypt(xnonce, d.as_ref()))
         .map_err(|e| VaultError::EncryptionError(e.to_string()))?;
 
     Ok(WrappedDek { nonce, ciphertext })
@@ -103,7 +105,7 @@ pub fn decrypt_secret(
     let dek = unwrap_dek_with_dek(master_dek, &payload.wrapped_dek)?;
 
     // Decrypt payload with DEK
-    let cipher = XChaCha20Poly1305::new(dek.expose().into());
+    let cipher = dek.with_key(|k| XChaCha20Poly1305::new(k.into()));
     let xnonce = &XNonce::from(payload.nonce);
 
     let plaintext = cipher
@@ -115,23 +117,15 @@ pub fn decrypt_secret(
 
 /// Unwrap a DEK using master DEK.
 pub fn unwrap_dek_with_dek(master_dek: &Dek, wrapped: &WrappedDek) -> Result<Dek, VaultError> {
-    let cipher = XChaCha20Poly1305::new(master_dek.expose().into());
+    let cipher = master_dek.with_key(|k| XChaCha20Poly1305::new(k.into()));
     let xnonce = &XNonce::from(wrapped.nonce);
 
-    let plaintext = cipher
-        .decrypt(xnonce, wrapped.ciphertext.as_ref())
-        .map_err(|e| VaultError::DecryptionError(e.to_string()))?;
-
-    if plaintext.len() != 32 {
-        return Err(VaultError::InvalidKeyLength {
-            expected: 32,
-            got: plaintext.len(),
-        });
-    }
-
-    let mut key = Zeroizing::new([0u8; 32]);
-    key.copy_from_slice(&plaintext);
-    Ok(Dek::new(*key))
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(xnonce, wrapped.ciphertext.as_ref())
+            .map_err(|e| VaultError::DecryptionError(e.to_string()))?,
+    );
+    dek_from_plaintext(plaintext)
 }
 
 /// Wrap a DEK with a raw 32-byte key (for X25519 shared secret derived keys).
@@ -140,8 +134,8 @@ pub fn wrap_dek_with_key(wrapping_key: &[u8; 32], dek: &Dek) -> Result<WrappedDe
     let nonce = generate_nonce();
     let xnonce = &XNonce::from(nonce);
 
-    let ciphertext = cipher
-        .encrypt(xnonce, dek.expose().as_ref())
+    let ciphertext = dek
+        .with_key(|d| cipher.encrypt(xnonce, d.as_ref()))
         .map_err(|e| VaultError::EncryptionError(e.to_string()))?;
 
     Ok(WrappedDek { nonce, ciphertext })
@@ -152,20 +146,12 @@ pub fn unwrap_dek_with_key(wrapping_key: &[u8; 32], wrapped: &WrappedDek) -> Res
     let cipher = XChaCha20Poly1305::new(wrapping_key.into());
     let xnonce = &XNonce::from(wrapped.nonce);
 
-    let plaintext = cipher
-        .decrypt(xnonce, wrapped.ciphertext.as_ref())
-        .map_err(|e| VaultError::DecryptionError(e.to_string()))?;
-
-    if plaintext.len() != 32 {
-        return Err(VaultError::InvalidKeyLength {
-            expected: 32,
-            got: plaintext.len(),
-        });
-    }
-
-    let mut key = Zeroizing::new([0u8; 32]);
-    key.copy_from_slice(&plaintext);
-    Ok(Dek::new(*key))
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(xnonce, wrapped.ciphertext.as_ref())
+            .map_err(|e| VaultError::DecryptionError(e.to_string()))?,
+    );
+    dek_from_plaintext(plaintext)
 }
 
 #[cfg(test)]
@@ -176,12 +162,12 @@ mod tests {
     fn test_wrap_unwrap_dek() {
         let kek = Kek::new([0xAB; 32]);
         let dek = generate_dek();
-        let original = *dek.expose();
+        let original = dek.with_key(|k| *k);
 
         let wrapped = wrap_dek(&kek, &dek).unwrap();
         let unwrapped = unwrap_dek(&kek, &wrapped).unwrap();
 
-        assert_eq!(*unwrapped.expose(), original);
+        unwrapped.with_key(|k| assert_eq!(*k, original));
     }
 
     #[test]

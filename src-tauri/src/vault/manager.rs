@@ -266,9 +266,8 @@ fn unwrap_member_dek(
     let inviter_pk: [u8; 32] = inviter_pk_bytes
         .try_into()
         .map_err(|b: Vec<u8>| VaultError::InvalidKeyLength { expected: 32, got: b.len() })?;
-    let shared_secret = identity
-        .secret_key()
-        .diffie_hellman(&x25519_dalek::PublicKey::from(inviter_pk));
+    let shared_secret =
+        identity.with_secret(|secret| secret.diffie_hellman(&x25519_dalek::PublicKey::from(inviter_pk)));
 
     // The same wrapping key the inviter derived.
     let mut wrapping_key = [0u8; 32];
@@ -666,7 +665,7 @@ impl VaultManager {
     /// unlock via OS keychain, then set a password here.
     pub async fn change_password(&mut self, new_password: &str) -> Result<(), VaultError> {
         let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;
-        let secret_key_bytes = identity.secret_key().to_bytes();
+        let secret_key_bytes = zeroize::Zeroizing::new(identity.with_secret(|secret| secret.to_bytes()));
 
         let identity_path = self.app_dir.join("vault_identity.json");
         if !identity_path.exists() {
@@ -689,7 +688,7 @@ impl VaultManager {
 
         let password_kek = derive_kek_from_password(new_password.as_bytes(), &salt)?;
         let (encrypted_key, nonce) =
-            encrypt_with_password(&password_kek, &secret_key_bytes)?;
+            encrypt_with_password(&password_kek, &secret_key_bytes[..])?;
 
         self.save_identity(&salt, Some((encrypted_key, nonce))).await?;
         tracing::info!("change_password: identity re-encrypted with new password");
@@ -820,7 +819,7 @@ impl VaultManager {
     /// Export identity for backup.
     pub fn export_identity(&self) -> Result<String, VaultError> {
         let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;
-        Ok(BASE64.encode(identity.secret_key().as_bytes()))
+        Ok(identity.with_secret(|secret| BASE64.encode(secret.as_bytes())))
     }
 
     /// Reset vault - delete all local data.
@@ -1464,7 +1463,7 @@ impl VaultManager {
     /// before the identity is loaded, which the cache key comes from.
     fn open_cache(&self, vault_id: &str) -> Option<CacheState> {
         let identity = self.identity.as_ref()?;
-        let key = cache::CacheKey::derive(&identity.secret_key().to_bytes(), vault_id).ok()?;
+        let key = identity.with_secret(|secret| cache::CacheKey::derive(secret.as_bytes(), vault_id)).ok()?;
         let path = cache::cache_path(&self.app_dir.join("vaults"), vault_id);
         let snapshot = cache::load(&path, &key);
         Some(CacheState { path, key, snapshot: std::sync::Mutex::new(snapshot) })
@@ -2310,7 +2309,7 @@ impl VaultManager {
 
         // Re-wrap master DEK for invitee using X25519
         let invitee_pk = x25519_dalek::PublicKey::from(*invitee_public_key);
-        let shared_secret = identity.secret_key().diffie_hellman(&invitee_pk);
+        let shared_secret = identity.with_secret(|secret| secret.diffie_hellman(&invitee_pk));
 
         // Derive wrapping key from shared secret
         let mut wrapping_key = [0u8; 32];
@@ -2742,7 +2741,7 @@ impl VaultManager {
         // itself is sealed with the export password (XChaCha20-Poly1305).
         let secret_key_b64 = {
             let id = self.identity.as_ref().ok_or(VaultError::Locked)?;
-            BASE64.encode(id.secret_key().as_bytes())
+            id.with_secret(|secret| BASE64.encode(secret.as_bytes()))
         };
 
         let identity = ExportedIdentity {
@@ -3145,10 +3144,7 @@ fn now_timestamp() -> i64 {
 /// Derive KEK from X25519 secret key using HKDF (TLS-style).
 fn derive_kek_from_secret_key(secret_key: &[u8], salt: &[u8; 32]) -> Result<Kek, VaultError> {
     let hk = Hkdf::<Sha256>::new(Some(salt), secret_key);
-    let mut kek_bytes = [0u8; 32];
-    hk.expand(b"reach-vault-kek", &mut kek_bytes)
-        .map_err(|_| VaultError::KeyDerivationFailed)?;
-    Ok(Kek::new(kek_bytes))
+    Kek::try_from_fn(|kek| hk.expand(b"reach-vault-kek", kek).map_err(|_| VaultError::KeyDerivationFailed))
 }
 
 /// Derive KEK from password using Argon2id.
@@ -3158,19 +3154,18 @@ fn derive_kek_from_password(password: &[u8], salt: &[u8; 32]) -> Result<Kek, Vau
     let params = Params::new(65536, 3, 4, Some(32)).map_err(|e| VaultError::KdfError(e.to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let mut kek_bytes = [0u8; 32];
-    argon2
-        .hash_password_into(password, salt, &mut kek_bytes)
-        .map_err(|e| VaultError::KdfError(e.to_string()))?;
-
-    Ok(Kek::new(kek_bytes))
+    Kek::try_from_fn(|kek| {
+        argon2
+            .hash_password_into(password, salt, kek)
+            .map_err(|e| VaultError::KdfError(e.to_string()))
+    })
 }
 
 /// Encrypt data with password-derived KEK.
 fn encrypt_with_password(kek: &Kek, plaintext: &[u8]) -> Result<(String, String), VaultError> {
     use chacha20poly1305::{aead::Aead, KeyInit, XChaCha20Poly1305, XNonce};
 
-    let cipher = XChaCha20Poly1305::new(kek.expose().into());
+    let cipher = kek.with_key(|k| XChaCha20Poly1305::new(k.into()));
     let mut nonce = [0u8; 24];
     rand::fill(&mut nonce[..]);
     let xnonce = &XNonce::from(nonce);
@@ -3186,7 +3181,7 @@ fn encrypt_with_password(kek: &Kek, plaintext: &[u8]) -> Result<(String, String)
 fn decrypt_with_password(kek: &Kek, ciphertext: &[u8], nonce: &[u8]) -> Result<Vec<u8>, VaultError> {
     use chacha20poly1305::{aead::Aead, KeyInit, XChaCha20Poly1305, XNonce};
 
-    let cipher = XChaCha20Poly1305::new(kek.expose().into());
+    let cipher = kek.with_key(|k| XChaCha20Poly1305::new(k.into()));
     let xnonce = &XNonce::try_from(nonce)
         .map_err(|_| VaultError::DecryptionError("Invalid nonce length".to_string()))?;
 

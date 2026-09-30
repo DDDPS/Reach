@@ -1,5 +1,4 @@
 use argon2::{Algorithm, Argon2, Params, Version};
-use zeroize::Zeroizing;
 
 use crate::vault::error::VaultError;
 use crate::vault::types::Kek;
@@ -21,12 +20,11 @@ pub fn derive_kek(password: &[u8], salt: &[u8; 32]) -> Result<Kek, VaultError> {
 
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let mut key = Zeroizing::new([0u8; 32]);
-    argon2
-        .hash_password_into(password, salt, key.as_mut())
-        .map_err(|e| VaultError::KdfError(e.to_string()))?;
-
-    Ok(Kek::new(*key))
+    Kek::try_from_fn(|key| {
+        argon2
+            .hash_password_into(password, salt, key)
+            .map_err(|e| VaultError::KdfError(e.to_string()))
+    })
 }
 
 /// Generate a random 32-byte salt.
@@ -48,7 +46,7 @@ mod tests {
         let kek1 = derive_kek(password, &salt).unwrap();
         let kek2 = derive_kek(password, &salt).unwrap();
 
-        assert_eq!(kek1.expose(), kek2.expose());
+        assert!(kek1.with_key(|a| kek2.with_key(|b| a == b)));
     }
 
     #[test]
@@ -60,6 +58,6 @@ mod tests {
         let kek1 = derive_kek(password, &salt1).unwrap();
         let kek2 = derive_kek(password, &salt2).unwrap();
 
-        assert_ne!(kek1.expose(), kek2.expose());
+        assert!(!kek1.with_key(|a| kek2.with_key(|b| a == b)));
     }
 }

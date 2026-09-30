@@ -75,13 +75,8 @@ pub fn wrap_dek_for_member(dek: &Dek, member_public_key: &[u8; 32]) -> Result<Wr
     rand::fill(&mut nonce[..]);
     let xnonce = &XNonce::from(nonce);
 
-    // Prepend ephemeral public key to ciphertext
-    let mut plaintext_with_context = Vec::with_capacity(32 + dek.expose().len());
-    plaintext_with_context.extend_from_slice(ephemeral_public.as_bytes());
-    plaintext_with_context.extend_from_slice(dek.expose());
-
-    let ciphertext = cipher
-        .encrypt(xnonce, dek.expose().as_ref())
+    let ciphertext = dek
+        .with_key(|d| cipher.encrypt(xnonce, d.as_ref()))
         .map_err(|e| VaultError::EncryptionError(e.to_string()))?;
 
     // Store ephemeral public key with ciphertext
@@ -107,7 +102,7 @@ pub fn unwrap_dek_for_member(identity: &UserIdentity, wrapped: &WrappedDek) -> R
     let ephemeral_public = PublicKey::from(ephemeral_pk_bytes);
 
     // Compute shared secret
-    let shared_secret = identity.secret_key().diffie_hellman(&ephemeral_public);
+    let shared_secret = identity.with_secret(|secret| secret.diffie_hellman(&ephemeral_public));
 
     // Derive wrapping key using HKDF
     let hkdf = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
@@ -119,9 +114,11 @@ pub fn unwrap_dek_for_member(identity: &UserIdentity, wrapped: &WrappedDek) -> R
     let cipher = XChaCha20Poly1305::new((&*wrapping_key).into());
     let xnonce = &XNonce::from(wrapped.nonce);
 
-    let plaintext = cipher
-        .decrypt(xnonce, &wrapped.ciphertext[32..])
-        .map_err(|e| VaultError::DecryptionError(e.to_string()))?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(xnonce, &wrapped.ciphertext[32..])
+            .map_err(|e| VaultError::DecryptionError(e.to_string()))?,
+    );
 
     if plaintext.len() != 32 {
         return Err(VaultError::InvalidKeyLength {
@@ -130,7 +127,5 @@ pub fn unwrap_dek_for_member(identity: &UserIdentity, wrapped: &WrappedDek) -> R
         });
     }
 
-    let mut key = Zeroizing::new([0u8; 32]);
-    key.copy_from_slice(&plaintext);
-    Ok(Dek::new(*key))
+    Ok(Dek::from_fn(|key| key.copy_from_slice(&plaintext)))
 }

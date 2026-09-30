@@ -7,6 +7,7 @@ pub mod export;
 pub mod kdf;
 pub mod manager;
 pub mod schema;
+pub mod shield;
 pub mod sharing;
 pub mod sync;
 pub mod turso_api;
