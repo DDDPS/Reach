@@ -93,9 +93,13 @@ pub async fn ssh_connect(
     proxy: Option<crate::state::ProxyConfig>,
     shell: Option<String>,
     inject_colors: Option<bool>,
+    show_login_message: Option<bool>,
 ) -> Result<String, String> {
     // Default ON when the frontend doesn't specify (back-compat).
-    let inject_colors = inject_colors.unwrap_or(true);
+    let login = crate::ssh::client::LoginOptions {
+        inject_colors: inject_colors.unwrap_or(true),
+        show_login_message: show_login_message.unwrap_or(true),
+    };
     tracing::info!(
         "ssh_connect IPC: id={}, host={}, port={}, user={}, auth_method='{}', has_key_path={}, has_password={}, has_passphrase={}, has_proxy={}, has_jump={}",
         id, host, port, username, auth_method,
@@ -124,7 +128,7 @@ pub async fn ssh_connect(
     let conn = if let Some(chain) = jump_chain {
         if chain.is_empty() {
             // No jump hosts, connect directly
-            SshManager::connect(&id, &host, port, &username, auth, cols, rows, app.clone(), proxy, shell, inject_colors)
+            SshManager::connect(&id, &host, port, &username, auth, cols, rows, app.clone(), proxy, shell, login)
                 .await
                 .map_err(|e| e.to_string())?
         } else {
@@ -171,13 +175,13 @@ pub async fn ssh_connect(
                 rows,
                 app.clone(),
                 shell,
-                inject_colors,
+                login,
             )
             .await
             .map_err(|e| e.to_string())?
         }
     } else {
-        SshManager::connect(&id, &host, port, &username, auth, cols, rows, app.clone(), proxy, shell, inject_colors)
+        SshManager::connect(&id, &host, port, &username, auth, cols, rows, app.clone(), proxy, shell, login)
             .await
             .map_err(|e| e.to_string())?
     };

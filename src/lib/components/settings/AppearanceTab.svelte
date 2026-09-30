@@ -367,6 +367,21 @@
 		</div>
 	</div>
 
+	<div class="setting-row">
+		<div class="setting-info">
+			<span class="setting-label">{t('settings.login_message')}</span>
+			<span class="setting-description">{t('settings.login_message_desc')}</span>
+		</div>
+		<div class="setting-control">
+			<Toggle
+				hideLabel
+				checked={settings.showLoginMessage}
+				label={t('settings.login_message')}
+				onchange={(v) => updateSetting('showLoginMessage', v)}
+			/>
+		</div>
+	</div>
+
 	<h3 class="section-title">{t('settings.rdp_section')}</h3>
 
 	<div class="setting-row">

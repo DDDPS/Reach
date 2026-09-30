@@ -543,6 +543,7 @@
 				rows: 24,
 				shell: session.shell ?? undefined,
 				injectColors: getSettings().injectShellColors,
+				showLoginMessage: getSettings().showLoginMessage,
 				jumpChain,
 				proxy: session.proxy ? {
 					proxy_type: session.proxy.proxy_type,

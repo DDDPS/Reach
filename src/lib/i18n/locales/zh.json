@@ -1685,5 +1685,7 @@
   "keys.left": "左",
   "keys.up": "上",
   "keys.down": "下",
-  "keys.right": "右"
+  "keys.right": "右",
+  "settings.login_message": "显示登录消息",
+  "settings.login_message_desc": "连接后保留服务器的欢迎消息（MOTD、上次登录、系统状态），与其他 SSH 客户端一致。"
 }

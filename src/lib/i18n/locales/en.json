@@ -1685,5 +1685,7 @@
   "keys.left": "Left",
   "keys.up": "Up",
   "keys.down": "Down",
-  "keys.right": "Right"
+  "keys.right": "Right",
+  "settings.login_message": "Show the login message",
+  "settings.login_message_desc": "Keep the server's welcome message (MOTD, last login, system status) on screen after connecting, as other SSH clients do."
 }

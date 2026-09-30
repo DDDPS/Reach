@@ -6,6 +6,8 @@ Unlock with your finger, and Reach on Android that works.
   connects, backups restore, and there are keys for typing (Esc, Tab,
   Ctrl, Alt, arrows) and a keyboard button for remote desktops. The app
   also fits a phone screen and has its proper icon.
+- The server's login message (MOTD, last login) now stays on screen
+  after connecting, as in other SSH clients.
 - Fixed: the session list could stay on "Loading sessions..." forever
   when Turso stopped answering. Reach now gives up after ten seconds,
   retries, and shows the rest of your sessions.

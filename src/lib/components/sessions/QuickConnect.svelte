@@ -98,6 +98,7 @@
 				rows: 24,
 				shell: shell.trim() || undefined,
 				injectColors: getSettings().injectShellColors,
+				showLoginMessage: getSettings().showLoginMessage,
 				jumpChain,
 				proxy: proxyEnabled ? {
 					proxy_type: proxyType,

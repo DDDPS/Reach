@@ -1685,5 +1685,7 @@
   "keys.left": "Links",
   "keys.up": "Hoch",
   "keys.down": "Runter",
-  "keys.right": "Rechts"
+  "keys.right": "Rechts",
+  "settings.login_message": "Anmeldenachricht anzeigen",
+  "settings.login_message_desc": "Die Begrüßungsnachricht des Servers (MOTD, letzte Anmeldung, Systemstatus) nach dem Verbinden anzeigen, wie andere SSH-Clients."
 }

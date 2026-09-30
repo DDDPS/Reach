@@ -1685,5 +1685,7 @@
   "keys.left": "Izquierda",
   "keys.up": "Arriba",
   "keys.down": "Abajo",
-  "keys.right": "Derecha"
+  "keys.right": "Derecha",
+  "settings.login_message": "Mostrar el mensaje de inicio de sesión",
+  "settings.login_message_desc": "Mantener en pantalla el mensaje de bienvenida del servidor (MOTD, último inicio de sesión, estado del sistema) tras conectar, como otros clientes SSH."
 }

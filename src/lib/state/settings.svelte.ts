@@ -16,6 +16,8 @@ export interface Settings {
 	minimizeToTray: boolean;
 	startWithSystem: boolean;
 	injectShellColors: boolean;
+	/** Keep the server's login message (MOTD) on screen after connecting. */
+	showLoginMessage: boolean;
 	/** Remote desktop: paint through WebGL (the GPU) rather than the 2D canvas. */
 	rdpHardwareRendering: boolean;
 	/** Remote desktop: advertise the graphics pipeline, for hosts that encode H.264. */
@@ -98,6 +100,7 @@ const defaults: Settings = {
 	minimizeToTray: false,
 	startWithSystem: false,
 	injectShellColors: true,
+	showLoginMessage: true,
 	rdpHardwareRendering: true,
 	rdpGraphicsPipeline: false,
 	warnOnMultilinePaste: true,
@@ -165,6 +168,7 @@ export function loadSettings(): void {
 			settings.minimizeToTray = parsed.minimizeToTray ?? defaults.minimizeToTray;
 			settings.startWithSystem = parsed.startWithSystem ?? defaults.startWithSystem;
 			settings.injectShellColors = parsed.injectShellColors ?? defaults.injectShellColors;
+			settings.showLoginMessage = parsed.showLoginMessage ?? defaults.showLoginMessage;
 			settings.rdpHardwareRendering = parsed.rdpHardwareRendering ?? defaults.rdpHardwareRendering;
 			settings.rdpGraphicsPipeline = parsed.rdpGraphicsPipeline ?? defaults.rdpGraphicsPipeline;
 			settings.pendingTursoOrg = parsed.pendingTursoOrg ?? defaults.pendingTursoOrg;

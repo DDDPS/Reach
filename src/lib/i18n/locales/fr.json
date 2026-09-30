@@ -1685,5 +1685,7 @@
   "keys.left": "Gauche",
   "keys.up": "Haut",
   "keys.down": "Bas",
-  "keys.right": "Droite"
+  "keys.right": "Droite",
+  "settings.login_message": "Afficher le message de connexion",
+  "settings.login_message_desc": "Garder à l’écran le message d’accueil du serveur (MOTD, dernière connexion, état du système) après la connexion, comme les autres clients SSH."
 }
