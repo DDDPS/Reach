@@ -2877,13 +2877,11 @@ impl VaultManager {
 
     // ==================== FULL BACKUP EXPORT/IMPORT ====================
 
-    /// Export a full backup to file. Rust handles file I/O directly.
+    /// Export a full backup, sealed with `export_password`, as the bytes of a
+    /// `.reachbackup` file. Where it is written is the caller's business: a
+    /// path, or on Android a link from the system's file picker.
     #[tracing::instrument(skip(self, export_password))]
-    pub async fn export_full_backup(
-        &self,
-        export_password: &str,
-        file_path: &str,
-    ) -> Result<(), VaultError> {
+    pub async fn export_full_backup(&self, export_password: &str) -> Result<Vec<u8>, VaultError> {
         use crate::vault::export::*;
 
         let _kek = self.kek.as_ref().ok_or(VaultError::Locked)?;
@@ -3041,21 +3039,18 @@ impl VaultManager {
         };
 
         let sealed = seal_bundle(&bundle, export_password)?;
-        tokio::fs::write(file_path, sealed).await?;
-
-        tracing::info!("Full backup exported to {}", file_path);
-        Ok(())
+        tracing::info!("Full backup exported ({} bytes)", sealed.len());
+        Ok(sealed)
     }
 
     /// Preview a backup file — validate and return metadata.
     #[tracing::instrument(skip(self, export_password))]
     pub async fn preview_backup(
         &self,
-        file_path: &str,
+        data: &[u8],
         export_password: &str,
     ) -> Result<crate::vault::export::BackupPreview, VaultError> {
-        let data = tokio::fs::read(file_path).await?;
-        crate::vault::export::preview_bundle(&data, export_password)
+        crate::vault::export::preview_bundle(data, export_password)
     }
 
     /// Import a full backup.
@@ -3073,15 +3068,14 @@ impl VaultManager {
     #[tracing::instrument(skip(self, export_password, _master_password))]
     pub async fn import_full_backup(
         &mut self,
-        file_path: &str,
+        data: &[u8],
         export_password: &str,
         _master_password: &str,
     ) -> Result<String, VaultError> {
         use crate::vault::export::*;
 
         // Step 1: Decrypt bundle
-        let data = tokio::fs::read(file_path).await?;
-        let bundle = unseal_bundle(&data, export_password)?;
+        let bundle = unseal_bundle(data, export_password)?;
         tracing::info!("Bundle decrypted: {} vaults, sync={}", bundle.vaults.len(), bundle.sync_config.is_some());
 
         // Step 2: Extract secret key from bundle
@@ -3351,8 +3345,8 @@ fn decrypt_with_password(kek: &Kek, ciphertext: &[u8], nonce: &[u8]) -> Result<V
 /// The names match what keyring 3 wrote, so a key saved by an earlier Reach is
 /// still found: `{user}.{service}` in the Windows Credential Manager, service
 /// and account in the macOS login keychain, `keyring-rs:{user}@{service}` in
-/// the Linux kernel keyring. Android has no store of its own here; as before,
-/// a key saved there lasts only until the app closes.
+/// the Linux kernel keyring. Android has none of these: see `android_keychain`.
+#[cfg(not(target_os = "android"))]
 fn keychain_entry(user_uuid: &str) -> Result<keyring_core::Entry, VaultError> {
     keychain_entry_in("reach-vault", user_uuid)
 }
@@ -3380,17 +3374,110 @@ pub(crate) fn keychain_entry_in(service: &str, user: &str) -> Result<keyring_cor
     keyring_core::Entry::new(service, user).map_err(|e| VaultError::KeychainError(e.to_string()))
 }
 
+/// Android's keychain: the Android Keystore, through Reach's plugin. Android
+/// has no store the keyring crates can use, so the key used to live in memory
+/// only: after a restart the vault could not open without its password, and
+/// not at all if it had none. Now an AES-256-GCM key in the Keystore, which
+/// never leaves it, seals the vault key, and the sealed copy lives in Reach's
+/// private app folder. Like a desktop keychain it asks for no user check;
+/// that is the fingerprint's job.
+#[cfg(target_os = "android")]
+mod android_keychain {
+    use super::{VaultError, BASE64};
+    use base64::Engine;
+    use serde::{Deserialize, Serialize};
+    use serde_json::json;
+    use std::path::PathBuf;
+    use tauri::Manager;
+    use tauri_plugin_reach_unlock::Unlock;
+
+    #[derive(Serialize, Deserialize)]
+    struct Sealed {
+        iv: String,
+        ciphertext: String,
+    }
+
+    #[derive(Deserialize)]
+    struct Opened {
+        secret: String,
+    }
+
+    fn alias(user_uuid: &str) -> String {
+        format!("reach-vault-key-{user_uuid}")
+    }
+
+    fn path(user_uuid: &str) -> PathBuf {
+        crate::app_data_dir().join("keystore").join(format!("{user_uuid}.json"))
+    }
+
+    fn call<T: serde::de::DeserializeOwned>(method: &str, payload: serde_json::Value) -> Result<T, VaultError> {
+        let app = crate::android_app().ok_or_else(|| VaultError::KeychainUnavailable("Reach is still starting".into()))?;
+        app.state::<Unlock<tauri::Wry>>()
+            .call_blocking(method, payload)
+            .map_err(VaultError::KeychainUnavailable)
+    }
+
+    pub fn store(user_uuid: &str, key: &[u8]) -> Result<(), VaultError> {
+        let sealed: Sealed = call("keystoreSeal", json!({ "alias": alias(user_uuid), "secret": BASE64.encode(key) }))?;
+        let path = path(user_uuid);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, serde_json::to_vec(&sealed)?)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+
+    pub fn get(user_uuid: &str) -> Result<Vec<u8>, VaultError> {
+        let data = match std::fs::read(path(user_uuid)) {
+            Ok(data) => data,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(VaultError::KeychainKeyMissing),
+            Err(e) => return Err(e.into()),
+        };
+        let sealed: Sealed = serde_json::from_slice(&data)?;
+        let opened: Opened = call(
+            "keystoreOpen",
+            json!({ "alias": alias(user_uuid), "iv": sealed.iv, "ciphertext": sealed.ciphertext }),
+        )?;
+        BASE64
+            .decode(opened.secret)
+            .map_err(|e| VaultError::SerializationError(e.to_string()))
+    }
+
+    pub fn delete(user_uuid: &str) -> Result<(), VaultError> {
+        match std::fs::remove_file(path(user_uuid)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
+        let _ = call::<serde_json::Value>("keystoreForget", json!({ "alias": alias(user_uuid) }));
+        Ok(())
+    }
+}
+
 /// Store key in OS keychain.
 fn store_key_in_keychain(user_uuid: &str, key: &[u8]) -> Result<(), VaultError> {
-    let entry = keychain_entry(user_uuid)?;
-    entry
-        .set_password(&BASE64.encode(key))
-        .map_err(|e| VaultError::KeychainError(e.to_string()))?;
-    Ok(())
+    #[cfg(target_os = "android")]
+    {
+        android_keychain::store(user_uuid, key)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let entry = keychain_entry(user_uuid)?;
+        entry
+            .set_password(&BASE64.encode(key))
+            .map_err(|e| VaultError::KeychainError(e.to_string()))?;
+        Ok(())
+    }
 }
 
 /// Remove the key from the OS keychain; a key already gone is fine.
 fn delete_key_from_keychain(user_uuid: &str) -> Result<(), VaultError> {
+    #[cfg(target_os = "android")]
+    {
+        android_keychain::delete(user_uuid)
+    }
+    #[cfg(not(target_os = "android"))]
     match keychain_entry(user_uuid)?.delete_credential() {
         Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
         Err(e) => Err(VaultError::KeychainError(e.to_string())),
@@ -3398,6 +3485,13 @@ fn delete_key_from_keychain(user_uuid: &str) -> Result<(), VaultError> {
 }
 
 /// Get key from OS keychain.
+#[cfg(target_os = "android")]
+fn get_key_from_keychain(user_uuid: &str) -> Result<Vec<u8>, VaultError> {
+    android_keychain::get(user_uuid)
+}
+
+/// Get key from OS keychain.
+#[cfg(not(target_os = "android"))]
 fn get_key_from_keychain(user_uuid: &str) -> Result<Vec<u8>, VaultError> {
     let entry = keychain_entry(user_uuid)?;
     let password = entry.get_password().map_err(|e| match e {

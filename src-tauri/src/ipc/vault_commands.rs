@@ -445,7 +445,7 @@ pub async fn vault_export_identity(state: State<'_, AppState>) -> Result<String,
 }
 
 /// Import identity from backup (for new device).
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 #[tracing::instrument(skip(state, secret_key))]
 pub async fn vault_import_identity(
     secret_key: String,
@@ -888,48 +888,101 @@ pub async fn turso_create_database_token(
 
 use crate::vault::export::BackupPreview;
 
+/// A file the user picked in the system's file dialog. On desktop that is a
+/// path. On Android the picker hands back a `content://` link, which is not a
+/// path the app may open: it is read and written through the ContentResolver,
+/// in Reach's Android plugin.
+mod picked_file {
+    use tauri::AppHandle;
+
+    #[cfg(target_os = "android")]
+    fn is_link(path: &str) -> bool {
+        path.starts_with("content://")
+    }
+
+    pub async fn read(_app: &AppHandle, path: &str) -> Result<Vec<u8>, String> {
+        #[cfg(target_os = "android")]
+        if is_link(path) {
+            use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+            use tauri::Manager;
+            #[derive(serde::Deserialize)]
+            struct Read {
+                data: String,
+            }
+            let read: Read = _app
+                .state::<tauri_plugin_reach_unlock::Unlock<tauri::Wry>>()
+                .call("readUri", serde_json::json!({ "uri": path }))
+                .await?;
+            return BASE64.decode(read.data).map_err(|e| e.to_string());
+        }
+        tokio::fs::read(path).await.map_err(|e| format!("Cannot read {path}: {e}"))
+    }
+
+    pub async fn write(_app: &AppHandle, path: &str, bytes: &[u8]) -> Result<(), String> {
+        #[cfg(target_os = "android")]
+        if is_link(path) {
+            use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+            use tauri::Manager;
+            return _app
+                .state::<tauri_plugin_reach_unlock::Unlock<tauri::Wry>>()
+                .call::<serde_json::Value>("writeUri", serde_json::json!({ "uri": path, "data": BASE64.encode(bytes) }))
+                .await
+                .map(|_| ());
+        }
+        tokio::fs::write(path, bytes).await.map_err(|e| format!("Cannot write {path}: {e}"))
+    }
+}
+
 /// Export a full encrypted backup to a file.
 #[tauri::command(rename_all = "snake_case")]
-#[tracing::instrument(skip(state, export_password))]
+#[tracing::instrument(skip(app, state, export_password))]
 pub async fn vault_export_backup(
+    app: tauri::AppHandle,
     export_password: String,
     file_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let manager = state.vault_manager.lock().await;
-    manager
-        .export_full_backup(&export_password, &file_path)
+    let sealed = state
+        .vault_manager
+        .lock()
         .await
-        .map_err(|e| e.to_string())
+        .export_full_backup(&export_password)
+        .await
+        .map_err(|e| e.to_string())?;
+    picked_file::write(&app, &file_path, &sealed).await
 }
 
 /// Preview a backup file (validate and return metadata).
 #[tauri::command(rename_all = "snake_case")]
-#[tracing::instrument(skip(state, export_password))]
+#[tracing::instrument(skip(app, state, export_password))]
 pub async fn vault_preview_backup(
+    app: tauri::AppHandle,
     file_path: String,
     export_password: String,
     state: State<'_, AppState>,
 ) -> Result<BackupPreview, String> {
+    let data = picked_file::read(&app, &file_path).await?;
     let manager = state.vault_manager.lock().await;
     manager
-        .preview_backup(&file_path, &export_password)
+        .preview_backup(&data, &export_password)
         .await
         .map_err(|e| e.to_string())
 }
 
 /// Import a full encrypted backup from a file.
 #[tauri::command(rename_all = "snake_case")]
-#[tracing::instrument(skip(state, export_password, master_password))]
+#[tracing::instrument(skip(app, state, export_password, master_password))]
 pub async fn vault_import_backup(
+    app: tauri::AppHandle,
     file_path: String,
     export_password: String,
     master_password: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    let data = picked_file::read(&app, &file_path).await?;
     let mut manager = state.vault_manager.lock().await;
     manager
-        .import_full_backup(&file_path, &export_password, &master_password)
+        .import_full_backup(&data, &export_password, &master_password)
         .await
         .map_err(|e| e.to_string())
 }

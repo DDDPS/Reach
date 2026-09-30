@@ -74,6 +74,16 @@ use std::sync::OnceLock;
 /// store read from this instead.
 static APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
+/// The app, for code with no handle of its own that needs a mobile plugin:
+/// the keychain functions, which on Android go through the Keystore.
+#[cfg(target_os = "android")]
+static ANDROID_APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+#[cfg(target_os = "android")]
+pub fn android_app() -> Option<&'static tauri::AppHandle> {
+    ANDROID_APP.get()
+}
+
 /// Record the resolved app data directory. Call once, early in `setup()`.
 pub fn set_app_data_dir(dir: PathBuf) {
     let _ = APP_DATA_DIR.set(dir);
@@ -199,6 +209,23 @@ pub fn run() {
 
     // Before any secret is in memory: keep other programs out of it.
     hardening::protect_process();
+
+    // Android keeps its trusted certificate authorities in a directory, not in
+    // a file or store rustls-native-certs knows, so it found none and every
+    // TLS user that asks for the platform's roots failed there: RDP's TLS
+    // upgrade stopped with "the platform certificate store contains no usable
+    // roots". That crate honours SSL_CERT_DIR, so point it at Android's own
+    // (Android 14 moved it into the Conscrypt APEX).
+    #[cfg(target_os = "android")]
+    if std::env::var_os("SSL_CERT_DIR").is_none() {
+        let dir = ["/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts"]
+            .into_iter()
+            .find(|d| std::path::Path::new(d).is_dir());
+        if let Some(dir) = dir {
+            std::env::set_var("SSL_CERT_DIR", dir);
+            tracing::info!("Trusted certificates from {}", dir);
+        }
+    }
 
     tracing::info!("Starting Reach application");
 
@@ -930,6 +957,8 @@ pub fn run() {
                 Ok(dir) => set_app_data_dir(dir),
                 Err(e) => tracing::error!("Failed to resolve app_data_dir: {}", e),
             }
+            #[cfg(target_os = "android")]
+            let _ = ANDROID_APP.set(app.handle().clone());
             let data_dir = app_data_dir();
             let _ = std::fs::create_dir_all(&data_dir);
             tracing::info!("App data dir: {:?}", data_dir);

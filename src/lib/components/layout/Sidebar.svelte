@@ -259,12 +259,20 @@
 	   terminal gets the full width and the existing collapse control opens and
 	   closes the drawer. */
 	@media (max-width: 700px) {
+		/* The whole screen, whatever width was dragged to on a desktop: a
+		   drawer that stops short leaves a strip of the terminal beside it
+		   that is too narrow to read and still takes taps. */
 		.sidebar:not(.collapsed) {
 			position: absolute;
 			inset: 0 auto 0 0;
 			z-index: 20;
-			max-width: 85vw;
-			box-shadow: var(--shadow-elevated);
+			width: 100% !important;
+			max-width: none;
+			box-shadow: none;
+		}
+
+		.resize-handle {
+			display: none;
 		}
 	}
 

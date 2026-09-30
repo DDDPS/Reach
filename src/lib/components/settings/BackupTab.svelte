@@ -91,7 +91,7 @@
 			exportPassword = '';
 			exportConfirmPassword = '';
 		} catch (e) {
-			exportError = e instanceof Error ? e.message : 'Failed to export backup';
+			exportError = e instanceof Error ? e.message : String(e);
 			addToast(t('backup.export_failed_toast'), 'error');
 		} finally {
 			exporting = false;
@@ -112,7 +112,7 @@
 				importFilePath = selected as string;
 			}
 		} catch (e) {
-			importError = e instanceof Error ? e.message : 'Failed to open file dialog';
+			importError = e instanceof Error ? e.message : String(e);
 		}
 	}
 
@@ -125,7 +125,7 @@
 			preview = await previewBackup(importFilePath, importExportPassword);
 			addToast(t('backup.verified_toast'), 'success');
 		} catch (e) {
-			importError = e instanceof Error ? e.message : 'Failed to verify backup';
+			importError = e instanceof Error ? e.message : String(e);
 		} finally {
 			verifying = false;
 		}
@@ -143,7 +143,7 @@
 			await message('Backup restored successfully. The app will now restart to apply all settings.', { title: 'Import Complete', kind: 'info' });
 			await relaunch();
 		} catch (e) {
-			importError = e instanceof Error ? e.message : 'Failed to import backup';
+			importError = e instanceof Error ? e.message : String(e);
 			addToast(t('backup.import_failed_toast'), 'error');
 		} finally {
 			importing = false;

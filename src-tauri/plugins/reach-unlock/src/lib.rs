@@ -48,4 +48,15 @@ impl<R: Runtime> Unlock<R> {
             .await
             .map_err(|e| e.to_string())
     }
+
+    /// The same, waiting on this thread. For callers that are not async (the
+    /// keychain functions). Never call it from Android's main thread: the
+    /// Kotlin side runs there, and would wait on this call forever.
+    pub fn call_blocking<T: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        payload: impl serde::Serialize,
+    ) -> Result<T, String> {
+        self.0.run_mobile_plugin(method, payload).map_err(|e| e.to_string())
+    }
 }

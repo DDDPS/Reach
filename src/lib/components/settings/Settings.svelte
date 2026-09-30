@@ -197,4 +197,31 @@
 		/* A tab that scrolls must not sit 10px left of one that does not. */
 		scrollbar-gutter: stable;
 	}
+
+	/* A phone: the menu becomes a row of tabs across the top that scrolls
+	   sideways, and the settings get the full width below it. */
+	@media (max-width: 640px) {
+		.settings-layout {
+			flex-direction: column;
+		}
+
+		.settings-menu {
+			flex-direction: row;
+			width: auto;
+			overflow-x: auto;
+			scrollbar-width: none;
+			border-right: none;
+			border-bottom: 1px solid var(--color-border);
+			border-radius: 0;
+		}
+
+		.menu-item {
+			width: auto;
+			flex-shrink: 0;
+		}
+
+		.settings-content {
+			padding: 14px 16px 20px;
+		}
+	}
 </style>

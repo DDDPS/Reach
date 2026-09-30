@@ -454,7 +454,7 @@ async fn find_session_vault(manager: &crate::vault::VaultManager, session_id: &s
 }
 
 /// Share a session with another user via X25519 key re-wrap.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 #[tracing::instrument(skip(state, recipient_public_key))]
 pub async fn session_share(
     state: State<'_, AppState>,

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -77,6 +78,12 @@ class MakeCredentialArgs {
     lateinit var label: String
     var pin: String? = null
     var exclude: Array<String> = arrayOf()
+}
+
+@InvokeArg
+class UriArgs {
+    lateinit var uri: String
+    var data: String? = null
 }
 
 @InvokeArg
@@ -233,6 +240,103 @@ class UnlockPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    // ----- Keychain ----------------------------------------------------------
+    //
+    // Android's answer to the desktop keychain: the vault key, sealed by an
+    // AES-256-GCM key that lives in the Android Keystore and never leaves it.
+    // No user check here (that is the fingerprint's job, above): this is what
+    // lets Reach open by itself after a restart, as it does on a desktop.
+
+    @Command
+    fun keystoreSeal(invoke: Invoke) {
+        val args = invoke.parseArgs(SealArgs::class.java)
+        try {
+            val cipher = Cipher.getInstance(AES_GCM)
+            cipher.init(Cipher.ENCRYPT_MODE, deviceKey(args.alias))
+            val sealed = cipher.doFinal(decode(args.secret))
+            invoke.resolve(JSObject().apply {
+                put("iv", encode(cipher.iv))
+                put("ciphertext", encode(sealed))
+            })
+        } catch (e: Exception) {
+            invoke.reject(e.message ?: "The Android Keystore could not seal the key")
+        }
+    }
+
+    @Command
+    fun keystoreOpen(invoke: Invoke) {
+        val args = invoke.parseArgs(OpenArgs::class.java)
+        try {
+            val key = keyStore().getKey(args.alias, null) as? SecretKey
+            if (key == null) {
+                invoke.reject("The Android Keystore has no key for Reach", MISSING)
+                return
+            }
+            val cipher = Cipher.getInstance(AES_GCM)
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, decode(args.iv)))
+            invoke.resolve(JSObject().apply { put("secret", encode(cipher.doFinal(decode(args.ciphertext)))) })
+        } catch (e: Exception) {
+            invoke.reject(e.message ?: "The Android Keystore could not open the key")
+        }
+    }
+
+    @Command
+    fun keystoreForget(invoke: Invoke) {
+        val args = invoke.parseArgs(AliasArgs::class.java)
+        deleteKey(args.alias)
+        invoke.resolve()
+    }
+
+    /** The Keystore key under `alias`, made on first use. */
+    private fun deviceKey(alias: String): SecretKey {
+        (keyStore().getKey(alias, null) as? SecretKey)?.let { return it }
+        val spec = KeyGenParameterSpec.Builder(
+            alias,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .build()
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+        generator.init(spec)
+        return generator.generateKey()
+    }
+
+    // ----- Files the user picked ------------------------------------------
+
+    /** Read a `content://` link the system's file picker handed back. */
+    @Command
+    fun readUri(invoke: Invoke) {
+        val args = invoke.parseArgs(UriArgs::class.java)
+        io.execute {
+            try {
+                val bytes = activity.contentResolver.openInputStream(Uri.parse(args.uri))?.use { it.readBytes() }
+                    ?: throw IllegalStateException("The file could not be opened")
+                invoke.resolve(JSObject().apply { put("data", encode(bytes)) })
+            } catch (e: Exception) {
+                invoke.reject(e.message ?: "The file could not be read")
+            }
+        }
+    }
+
+    /** Write a `content://` link the system's save dialog handed back. */
+    @Command
+    fun writeUri(invoke: Invoke) {
+        val args = invoke.parseArgs(UriArgs::class.java)
+        io.execute {
+            try {
+                // "wt": truncate, so a shorter file never keeps a longer one's tail.
+                activity.contentResolver.openOutputStream(Uri.parse(args.uri), "wt")?.use {
+                    it.write(decode(args.data ?: ""))
+                } ?: throw IllegalStateException("The file could not be opened for writing")
+                invoke.resolve()
+            } catch (e: Exception) {
+                invoke.reject(e.message ?: "The file could not be written")
+            }
+        }
+    }
+
     // ----- Security keys ---------------------------------------------------
 
     @Command
@@ -271,7 +375,7 @@ class UnlockPlugin(private val activity: Activity) : Plugin(activity) {
                     null,
                     null,
                 )
-                val prf = credential.clientExtensionResults.toMap(SerializationType.JSON)["prf"] as? Map<*, *>
+                val prf = credential.clientExtensionResults?.toMap(SerializationType.JSON)?.get("prf") as? Map<*, *>
                 if (prf?.get("enabled") != true) {
                     throw IllegalStateException("This security key does not support what unlocking needs (hmac-secret)")
                 }
@@ -305,7 +409,7 @@ class UnlockPlugin(private val activity: Activity) : Plugin(activity) {
                     args.pin?.toCharArray(),
                     null,
                 )
-                val prf = credential.clientExtensionResults.toMap(SerializationType.JSON)["prf"] as? Map<*, *>
+                val prf = credential.clientExtensionResults?.toMap(SerializationType.JSON)?.get("prf") as? Map<*, *>
                 val first = (prf?.get("results") as? Map<*, *>)?.get("first") as? String
                     ?: throw IllegalStateException("This security key did not return a secret (does it support hmac-secret?)")
                 JSObject().apply {
@@ -390,6 +494,7 @@ class UnlockPlugin(private val activity: Activity) : Plugin(activity) {
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val AES_GCM = "AES/GCM/NoPadding"
         private const val INVALIDATED = "invalidated"
+        private const val MISSING = "missing"
         private const val URL_SAFE = Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
     }
 }
