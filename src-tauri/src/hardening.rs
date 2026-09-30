@@ -196,6 +196,46 @@ mod tests {
         (child, pid)
     }
 
+    /// Whether this process holds SeDebugPrivilege, switched on. With it, an
+    /// administrator opens any process whatever its security descriptor says,
+    /// as Windows intends; it is Windows' root. GitHub's Windows runners run
+    /// as such an administrator.
+    #[cfg(windows)]
+    fn debug_privilege_enabled() -> bool {
+        use windows::core::w;
+        use windows::Win32::Foundation::{CloseHandle, HANDLE, LUID};
+        use windows::Win32::Security::{
+            GetTokenInformation, LookupPrivilegeValueW, TokenPrivileges, SE_PRIVILEGE_ENABLED, TOKEN_PRIVILEGES,
+            TOKEN_QUERY,
+        };
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+        // SAFETY: querying this process's own token into a buffer sized by
+        // the first call and aligned for TOKEN_PRIVILEGES; the handle is closed.
+        unsafe {
+            let mut debug = LUID::default();
+            if LookupPrivilegeValueW(None, w!("SeDebugPrivilege"), &mut debug).is_err() {
+                return false;
+            }
+            let mut token = HANDLE::default();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+                return false;
+            }
+            let mut len = 0u32;
+            let _ = GetTokenInformation(token, TokenPrivileges, None, 0, &mut len);
+            let mut buf = vec![0u32; (len as usize).div_ceil(4)];
+            let ok = GetTokenInformation(token, TokenPrivileges, Some(buf.as_mut_ptr().cast()), len, &mut len).is_ok();
+            let _ = CloseHandle(token);
+            if !ok {
+                return false;
+            }
+            let privileges = &*(buf.as_ptr() as *const TOKEN_PRIVILEGES);
+            std::slice::from_raw_parts(privileges.Privileges.as_ptr(), privileges.PrivilegeCount as usize)
+                .iter()
+                .any(|p| p.Luid == debug && p.Attributes.0 & SE_PRIVILEGE_ENABLED.0 != 0)
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn another_program_cannot_read_or_unlock_its_memory() {
@@ -205,6 +245,12 @@ mod tests {
         };
         const WRITE_DAC: PROCESS_ACCESS_RIGHTS = PROCESS_ACCESS_RIGHTS(0x0004_0000);
 
+        // An administrator with the debug privilege on may open any process,
+        // as root may on Linux, so there is nothing to show from one.
+        if debug_privilege_enabled() {
+            eprintln!("skipped: this process has SeDebugPrivilege enabled, which opens any process");
+            return;
+        }
         let (mut child, pid) = spawn_protected();
         // SAFETY: OpenProcess on a pid we started; every handle is closed.
         unsafe {
