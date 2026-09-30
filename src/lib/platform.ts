@@ -34,3 +34,13 @@ export function isWindows(): boolean {
 	if (data?.platform) return data.platform === 'Windows';
 	return /Win/.test(navigator.platform);
 }
+
+/**
+ * True on a phone or tablet (Android today). The system manages windows
+ * there, and there is no hardware keyboard to count on: desktop chrome goes,
+ * and the terminal and remote desktop get an extra-keys bar. Android's
+ * WebView always names Android in its user agent.
+ */
+export function isMobile(): boolean {
+	return typeof navigator !== 'undefined' && /Android|iPhone|iPad/i.test(navigator.userAgent);
+}

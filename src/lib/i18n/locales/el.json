@@ -1679,5 +1679,11 @@
   "security.keys_name_placeholder": "Όνομα, π.χ. YubiKey 5C",
   "security.keys_default_name": "Κλειδί ασφαλείας",
   "security.keys_touch_twice": "Αγγίξτε το κλειδί όταν αναβοσβήνει. Ζητείται δύο φορές: μία για την προσθήκη του Reach και μία για τη σφράγιση του κλειδιού του θησαυροφυλακίου.",
-  "lock.fingerprint": "δακτυλικό αποτύπωμα"
+  "lock.fingerprint": "δακτυλικό αποτύπωμα",
+  "rdp.keyboard": "Πληκτρολόγιο",
+  "keys.extra": "Επιπλέον πλήκτρα",
+  "keys.left": "Αριστερά",
+  "keys.up": "Πάνω",
+  "keys.down": "Κάτω",
+  "keys.right": "Δεξιά"
 }

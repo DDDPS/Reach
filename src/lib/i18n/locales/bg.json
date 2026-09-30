@@ -1679,5 +1679,11 @@
   "security.keys_name_placeholder": "Име, напр. YubiKey 5C",
   "security.keys_default_name": "Ключ за сигурност",
   "security.keys_touch_twice": "Докоснете ключа, когато мига. Пита два пъти: веднъж за добавяне на Reach и веднъж за запечатване на ключа на трезора.",
-  "lock.fingerprint": "пръстов отпечатък"
+  "lock.fingerprint": "пръстов отпечатък",
+  "rdp.keyboard": "Клавиатура",
+  "keys.extra": "Допълнителни клавиши",
+  "keys.left": "Наляво",
+  "keys.up": "Нагоре",
+  "keys.down": "Надолу",
+  "keys.right": "Надясно"
 }

@@ -1679,5 +1679,11 @@
   "security.keys_name_placeholder": "Nom, par ex. YubiKey 5C",
   "security.keys_default_name": "Clé de sécurité",
   "security.keys_touch_twice": "Touchez la clé lorsqu’elle clignote. Elle le demande deux fois : une pour ajouter Reach, une pour sceller la clé du coffre.",
-  "lock.fingerprint": "empreinte digitale"
+  "lock.fingerprint": "empreinte digitale",
+  "rdp.keyboard": "Clavier",
+  "keys.extra": "Touches supplémentaires",
+  "keys.left": "Gauche",
+  "keys.up": "Haut",
+  "keys.down": "Bas",
+  "keys.right": "Droite"
 }

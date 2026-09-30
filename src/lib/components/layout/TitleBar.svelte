@@ -8,7 +8,7 @@
 	import { __APP_VERSION__ } from '$lib/version';
 	import { toggleAIPanel, getAIChatState } from '$lib/state/ai-chat.svelte';
 	import { t } from '$lib/state/i18n.svelte';
-	import { isMobile } from '$lib/utils/platform';
+	import { isMobile } from '$lib/platform';
 
 	let aiSettings = $derived(getAISettings());
 	let aiConfigured = $derived(aiSettings.enabled && !!aiSettings.apiKey && !!aiSettings.selectedModel);
@@ -70,7 +70,7 @@
 		{/if}
 	</div>
 
-	{#if !isMobile}
+	{#if !isMobile()}
 	<div class="titlebar-right">
 		<button class="window-btn" onclick={minimize} aria-label={t('titlebar.minimize')}>
 			<svg width="10" height="10" viewBox="0 0 10 10" fill="none">

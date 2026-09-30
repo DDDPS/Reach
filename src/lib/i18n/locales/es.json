@@ -1679,5 +1679,11 @@
   "security.keys_name_placeholder": "Nombre, p. ej. YubiKey 5C",
   "security.keys_default_name": "Llave de seguridad",
   "security.keys_touch_twice": "Toca la llave cuando parpadee. Lo pide dos veces: una para añadir Reach y otra para sellar la clave de la bóveda.",
-  "lock.fingerprint": "huella dactilar"
+  "lock.fingerprint": "huella dactilar",
+  "rdp.keyboard": "Teclado",
+  "keys.extra": "Teclas adicionales",
+  "keys.left": "Izquierda",
+  "keys.up": "Arriba",
+  "keys.down": "Abajo",
+  "keys.right": "Derecha"
 }

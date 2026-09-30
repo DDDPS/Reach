@@ -1679,5 +1679,11 @@
   "security.keys_name_placeholder": "Name, e.g. YubiKey 5C",
   "security.keys_default_name": "Security key",
   "security.keys_touch_twice": "Touch the key when it blinks. It asks twice: once to add Reach, once to seal the vault key.",
-  "lock.fingerprint": "fingerprint"
+  "lock.fingerprint": "fingerprint",
+  "rdp.keyboard": "Keyboard",
+  "keys.extra": "Extra keys",
+  "keys.left": "Left",
+  "keys.up": "Up",
+  "keys.down": "Down",
+  "keys.right": "Right"
 }

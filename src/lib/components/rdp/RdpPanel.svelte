@@ -40,6 +40,8 @@
 	} from '$lib/ipc/rdp';
 	import { t } from '$lib/state/i18n.svelte';
 	import { getSettings } from '$lib/state/settings.svelte';
+	import { isMobile } from '$lib/platform';
+	import MobileKeyBar, { type BarKey } from '$lib/components/shared/MobileKeyBar.svelte';
 
 	interface Props {
 		id: string;
@@ -347,6 +349,149 @@
 		void rdpMouse(id, p.x, p.y, 'wheel', 0, e.deltaY < 0 ? 120 : -120);
 	}
 
+	/* --- phone ------------------------------------------------------------- */
+
+	/**
+	 * A phone has no keyboard to send keys from, and Android never opens its
+	 * on-screen keyboard for a canvas. What it types lands in a hidden text
+	 * field instead, and is sent on as it arrives. RDP never says where the
+	 * focus is on the remote, so the keyboard is opened by a button, as in
+	 * Microsoft's own mobile client.
+	 */
+	const onPhone = isMobile();
+	/** The part of the panel the desktop is drawn in; the key bar sits under it. */
+	let screen: HTMLDivElement | undefined = $state();
+	let typeEl: HTMLTextAreaElement | undefined = $state();
+	let barCtrl = $state(false);
+	let barAlt = $state(false);
+	/** What the keyboard's current composition has already sent. Gboard and
+	 *  most keyboards compose a word as it is typed; the difference is sent
+	 *  each time it changes, so letters appear on the remote as they are typed. */
+	let composed = '';
+
+	function tapKey(code: string): void {
+		const entry = SCANCODES[code];
+		if (!entry) return;
+		void rdpKey(id, entry[0], entry[1], false).then(() => rdpKey(id, entry[0], entry[1], true));
+	}
+
+	/** Hold Ctrl, Alt and Win as the sticky bar keys say, around `send`. */
+	async function withModifiers(send: () => Promise<void>, win = false): Promise<void> {
+		const mods = [barCtrl && 'ControlLeft', barAlt && 'AltLeft', win && 'MetaLeft'].filter(Boolean) as string[];
+		barCtrl = false;
+		barAlt = false;
+		for (const m of mods) await rdpKey(id, SCANCODES[m][0], SCANCODES[m][1], false);
+		await send();
+		for (const m of mods.reverse()) await rdpKey(id, SCANCODES[m][0], SCANCODES[m][1], true);
+	}
+
+	/** The physical key for a letter or digit, so Ctrl+C is a real Ctrl+C. */
+	function codeFor(ch: string): string | null {
+		if (/^[a-z]$/i.test(ch)) return `Key${ch.toUpperCase()}`;
+		if (/^[0-9]$/.test(ch)) return `Digit${ch}`;
+		return null;
+	}
+
+	function sendText(text: string): void {
+		for (const ch of text) {
+			if (ch === '\n') {
+				tapKey('Enter');
+				continue;
+			}
+			const code = codeFor(ch);
+			if ((barCtrl || barAlt) && code) {
+				void withModifiers(async () => tapKey(code));
+				continue;
+			}
+			const point = ch.codePointAt(0) ?? 0;
+			void rdpUnicode(id, point, false).then(() => rdpUnicode(id, point, true));
+		}
+	}
+
+	/** Send the change from `before` to `after`: backspaces, then new text. */
+	function sendChange(before: string, after: string): void {
+		let same = 0;
+		while (same < before.length && same < after.length && before[same] === after[same]) same++;
+		for (let i = same; i < before.length; i++) tapKey('Backspace');
+		sendText(after.slice(same));
+	}
+
+	function onSinkBeforeInput(e: InputEvent): void {
+		if (phase !== 'connected' || e.isComposing) return;
+		if (e.inputType === 'deleteContentBackward') {
+			e.preventDefault();
+			tapKey('Backspace');
+		} else if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') {
+			e.preventDefault();
+			tapKey('Enter');
+		} else if (e.inputType === 'insertText' && e.data) {
+			e.preventDefault();
+			sendText(e.data);
+		}
+	}
+
+	function onSinkComposition(e: CompositionEvent): void {
+		if (phase !== 'connected') return;
+		if (e.type === 'compositionstart') {
+			composed = '';
+			return;
+		}
+		sendChange(composed, e.data ?? '');
+		composed = e.data ?? '';
+		if (e.type === 'compositionend') {
+			composed = '';
+			if (typeEl) typeEl.value = '';
+		}
+	}
+
+	/** A hardware keyboard plugged into the phone still sends real keys: those
+	 *  go the desktop's way. The on-screen keyboard's keys (code 229) do not. */
+	function onSinkKeyDown(e: KeyboardEvent): void {
+		if (e.keyCode !== 229 && SCANCODES[e.code]) onKeyDown(e);
+	}
+
+	function onSinkKeyUp(e: KeyboardEvent): void {
+		if (e.keyCode !== 229 && SCANCODES[e.code]) onKeyUp(e);
+	}
+
+	function toggleKeyboard(): void {
+		if (!typeEl) return;
+		if (document.activeElement === typeEl) typeEl.blur();
+		else typeEl.focus({ preventScroll: true });
+	}
+
+	function onBarKey(key: BarKey): void {
+		if (phase !== 'connected') return;
+		if (typeof key === 'object') {
+			sendText(key.char);
+			return;
+		}
+		if (key === 'ctrl-alt-del') {
+			barCtrl = true;
+			barAlt = true;
+			void withModifiers(async () => tapKey('Delete'));
+			return;
+		}
+		if (key === 'win') {
+			void withModifiers(async () => tapKey('MetaLeft'));
+			return;
+		}
+		const code = {
+			esc: 'Escape', tab: 'Tab', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
+			home: 'Home', end: 'End', pgup: 'PageUp', pgdn: 'PageDown', del: 'Delete'
+		}[key];
+		if (code) void withModifiers(async () => tapKey(code));
+	}
+
+	/** A long press is the right button, as on every touch screen. */
+	function onLongPress(e: MouseEvent): void {
+		e.preventDefault();
+		if (!onPhone || phase !== 'connected') return;
+		const p = remotePoint(e);
+		if (!p) return;
+		void rdpMouse(id, p.x, p.y, 'down', 2).then(() => rdpMouse(id, p.x, p.y, 'up', 2));
+	}
+
 	/* --- keyboard ---------------------------------------------------------- */
 
 	/**
@@ -450,7 +595,7 @@
 	 * screen's own resolution and scaled down by CSS, it is pixel for pixel.
 	 */
 	function fitSize(): { width: number; height: number } {
-		const r = host.getBoundingClientRect();
+		const r = (screen ?? host).getBoundingClientRect();
 		const scale = window.devicePixelRatio || 1;
 		const even = (v: number) => Math.min(8192, Math.max(200, Math.floor(v * scale) & ~1));
 		return { width: even(r.width || 1024), height: even(r.height || 768) };
@@ -496,7 +641,7 @@
 				requestResize();
 			}, 300);
 		});
-		sizeObserver.observe(host);
+		sizeObserver.observe(screen ?? host);
 	});
 
 	/** Send the panel's current size, unless the desktop already has it. */
@@ -533,6 +678,9 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="rdp" class:fullscreen bind:this={host} onmousemove={onHostMove}>
+	<!-- The desktop's area: sized and measured on its own, so a phone's key
+	     bar below it is never drawn over the remote (its taskbar included). -->
+	<div class="screen" bind:this={screen}>
 	<!-- The canvas is the desktop: it takes focus and every key. The wrapper
 	     only sizes and centres it. -->
 	<canvas
@@ -549,18 +697,36 @@
 		onkeyup={onKeyUp}
 		onblur={releaseAll}
 		onfocus={() => { if (phase === 'connected') void rdpClipboardSync(id).catch(() => {}); }}
-		oncontextmenu={(e) => e.preventDefault()}
+		oncontextmenu={onLongPress}
 		class:dim={phase !== 'connected'}
 	></canvas>
 
-	{#if phase === 'connected' && !fullscreen}
+	{#if onPhone}
+		<textarea
+			bind:this={typeEl}
+			class="type-sink"
+			aria-hidden="true"
+			tabindex="-1"
+			autocomplete="off"
+			autocapitalize="off"
+			spellcheck="false"
+			onbeforeinput={onSinkBeforeInput}
+			oncompositionstart={onSinkComposition}
+			oncompositionupdate={onSinkComposition}
+			oncompositionend={onSinkComposition}
+			onkeydown={onSinkKeyDown}
+			onkeyup={onSinkKeyUp}
+		></textarea>
+	{/if}
+
+	{#if phase === 'connected' && !fullscreen && !onPhone}
 		<button type="button" class="fs-button" title={t('rdp.fullscreen_hint')} onclick={() => setFullscreen(true)}>
 			<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M2 6V2h4v1.5H3.5V6zm8-4h4v4h-1.5V3.5H10zM2 10h1.5v2.5H6V14H2zm10.5 0H14v4h-4v-1.5h2.5z"/></svg>
 			{t('rdp.fullscreen')}
 		</button>
 	{/if}
 
-	{#if fullscreen}
+	{#if fullscreen && !onPhone}
 		<div class="fs-bar" class:shown={barShown}>
 			<span class="fs-host">{params.username}@{params.host}</span>
 			<button type="button" class="fs-exit" onclick={() => setFullscreen(false)}>{t('rdp.exit_fullscreen')}</button>
@@ -581,18 +747,72 @@
 			{/if}
 		</div>
 	{/if}
+	</div>
+
+	{#if onPhone && phase === 'connected'}
+		<MobileKeyBar desktop bind:ctrl={barCtrl} bind:alt={barAlt} onkey={onBarKey}>
+			{#snippet leading()}
+				<button
+					type="button"
+					class="bar-button"
+					tabindex="-1"
+					aria-label={t('rdp.keyboard')}
+					onpointerdown={(e) => {
+						e.preventDefault();
+						toggleKeyboard();
+					}}>⌨</button
+				>
+				<button
+					type="button"
+					class="bar-button"
+					tabindex="-1"
+					aria-label={fullscreen ? t('rdp.exit_fullscreen') : t('rdp.fullscreen')}
+					onpointerdown={(e) => {
+						e.preventDefault();
+						void setFullscreen(!fullscreen);
+					}}>{fullscreen ? '⤡' : '⤢'}</button
+				>
+			{/snippet}
+		</MobileKeyBar>
+	{/if}
 </div>
 
 <style>
 	.rdp {
 		position: relative;
 		display: flex;
-		align-items: center;
-		justify-content: center;
+		flex-direction: column;
 		width: 100%;
 		height: 100%;
 		overflow: hidden;
 		background: #000;
+	}
+
+	.screen {
+		position: relative;
+		flex: 1;
+		min-height: 0;
+		width: 100%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		overflow: hidden;
+	}
+
+	/* Where a phone's keyboard types: there, and invisible. 16px keeps the
+	   webview from zooming in on it when it takes focus. */
+	.type-sink {
+		position: absolute;
+		left: 0;
+		bottom: 0;
+		width: 1px;
+		height: 1px;
+		opacity: 0;
+		font-size: 16px;
+		border: none;
+		padding: 0;
+		resize: none;
+		pointer-events: none;
 	}
 
 	/* Scaled to fit, never stretched: the intrinsic size is the server's
