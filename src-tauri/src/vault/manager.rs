@@ -1146,9 +1146,31 @@ impl VaultManager {
         (self.personal_sync_url.clone(), self.personal_sync_token.clone())
     }
 
-    /// Ensure internal vaults exist and are open.
-    /// Uses personal sync config if available for cloud backup of ALL user data.
+    /// Ensure internal vaults exist, are open, and can be read.
     async fn ensure_internal_vaults(&mut self) -> Result<(), VaultError> {
+        self.open_internal_vaults().await?;
+        // A lock wipes every vault's key but leaves its connection open, and
+        // the step above skips a vault that is already open. Put the key back
+        // in each one that lost it, or it stays unreadable after unlocking.
+        let mut ids: Vec<String> = INTERNAL_VAULTS
+            .iter()
+            .filter_map(|name| self.vault_names.get(*name).cloned())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        for id in ids {
+            if self.vaults.get(&id).is_some_and(|v| v.master_dek.is_none()) {
+                if let Err(e) = self.unlock_vault(&id).await {
+                    tracing::error!("Could not unlock internal vault {}: {}", id, e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Open (or create) the internal vaults.
+    /// Uses personal sync config if available for cloud backup of ALL user data.
+    async fn open_internal_vaults(&mut self) -> Result<(), VaultError> {
         // Get personal sync config (if configured, ALL data syncs to cloud)
         let sync_url = self.personal_sync_url.clone();
         let sync_token = self.personal_sync_token.clone();
@@ -3701,6 +3723,34 @@ mod password_tests {
             eprintln!("skipped the turn-off check: this machine's keychain cannot be written");
             assert!(mgr.biometric_seal().is_some());
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Locking and unlocking again leaves the internal vaults readable, not
+    /// just open: the lock wipes their keys and the unlock must restore them.
+    #[tokio::test]
+    async fn internal_vaults_can_be_read_after_a_lock_and_unlock() {
+        let dir = tmp_dir("relock");
+        let mut mgr = VaultManager::new(dir.clone());
+        mgr.init_identity("relock-vault-pass").await.unwrap();
+        let readable = |mgr: &VaultManager| {
+            INTERNAL_VAULTS.iter().all(|name| {
+                let id = mgr.vault_names.get(*name).expect("internal vault mapped");
+                mgr.vaults.get(id).is_some_and(|v| v.master_dek.is_some())
+            })
+        };
+        assert!(readable(&mgr));
+
+        mgr.hold();
+        assert!(!readable(&mgr));
+        assert!(mgr.unlock("relock-vault-pass").await.unwrap());
+        assert!(readable(&mgr), "an internal vault stayed unreadable after unlocking");
+
+        // And the key released by a biometric check does the same.
+        let (_, secret) = mgr.biometric_enrolment().await.unwrap();
+        mgr.hold();
+        assert!(mgr.unlock_with_secret_key(&*secret).await.unwrap());
+        assert!(readable(&mgr));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
