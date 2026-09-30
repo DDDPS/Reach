@@ -432,7 +432,10 @@ mod platform {
     use zeroize::Zeroizing;
 
     pub fn supported() -> bool {
-        cfg!(target_os = "android")
+        // The Android plugin can already do it (keyMakeCredential and
+        // keyHmacSecret), but nobody has run it with a real phone and key
+        // yet, so it is not offered until someone has.
+        false
     }
 
     pub fn make_credential(_: &[u8], _: &str, _: &[Vec<u8>], _: Option<&str>) -> Result<Vec<u8>, String> {
