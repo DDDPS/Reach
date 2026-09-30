@@ -3,6 +3,10 @@
 All notable changes to Reach are documented here.
 
 ## v0.7.1
+- **Touch ID on macOS** — Settings → Security offers Touch ID where Windows offers Windows Hello, through the same switch and lock screen button. LocalAuthentication confirms the owner, and only then does Reach read the random key in the login keychain that seals the vault key. It is a gate rather than a hardware seal: binding a key to Touch ID needs a keychain access group, which only an Apple Developer signing identity grants.
+- **Fingerprint on Android** — An AES-256-GCM key in the Android Keystore, which needs a strong biometric check for every use and is voided when a fingerprint is added, seals the vault key through BiometricPrompt, as Android's guidance describes. If the fingerprints change, the master password opens the vault and the fingerprint can be turned on again. Since the vault key is now sealed on the phone, the vault can stay locked across restarts on Android too.
+- **Security keys on Android** — A YubiKey or any FIDO2 key, plugged in over USB or held to the phone for NFC, through Yubico's yubikit-android. Reach asks for the key's PIN, as on macOS and Linux.
+- **No compiler or clippy warnings** — Every clippy finding is fixed by hand, the way its lint documents, and the build check now runs clippy with warnings as errors on Windows, macOS and Linux, since each compiles code the others do not.
 - **Your vaults show their sessions after a lock** — Locking wipes every vault's key from memory, and unlocking opened the vaults again but skipped any that were still open, so after a lock (Lock now, auto-lock, or the computer locking) your own vaults stayed open without their keys and their session lists came up empty until Reach restarted. Nothing was lost: the sessions were in Turso and in the encrypted copy all along. 0.7.0 fixed this for Reach's internal vaults only; now every vault gets its key back, and a test locks and unlocks with a vault of the user's own, by password and by a device unlock method.
 
 ## v0.7.0
