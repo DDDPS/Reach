@@ -1,7 +1,7 @@
 Unlock with your finger, and Reach on Android that works.
 
-- Touch ID on macOS, and your fingerprint on Android, now open the vault,
-  alongside Windows Hello.
+- Your fingerprint on Android, and Touch ID on macOS (beta: tell us how
+  it works for you), now open the vault, alongside Windows Hello.
 - Android: the vault stays set up after a restart, remote desktop
   connects, backups restore, and there are keys for typing (Esc, Tab,
   Ctrl, Alt, arrows) and a keyboard button for remote desktops. The app
