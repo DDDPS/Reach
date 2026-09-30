@@ -43,20 +43,3 @@ pub async fn create_replica(
 
     Ok(db)
 }
-
-/// Sync vault with Turso.
-/// Note: For remote-only connections, this is a no-op since data is always on the server.
-pub async fn sync_vault(db: &Database) -> Result<(), VaultError> {
-    // For remote databases, sync() may not be needed, but we call it anyway for consistency
-    // It will be a no-op for remote-only connections
-    match db.sync().await {
-        Ok(_) => {
-            tracing::info!("Vault sync complete");
-        }
-        Err(e) => {
-            // For remote-only connections, sync might fail - that's ok
-            tracing::debug!("Sync call returned: {} (may be expected for remote-only)", e);
-        }
-    }
-    Ok(())
-}

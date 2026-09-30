@@ -1561,14 +1561,6 @@ impl VaultManager {
             ),
         ).await?;
 
-        // Initial sync to push to remote
-        if sync_config.is_some() {
-            tracing::info!("Initial sync for new vault: {}", vault_id);
-            if let Err(e) = db.sync().await {
-                tracing::warn!("Initial sync failed: {}", e);
-            }
-        }
-
         let member_count = match &vault_type {
             VaultType::Private => None,
             VaultType::Shared { members } => Some(members.len()),
@@ -1707,14 +1699,6 @@ impl VaultManager {
         }
 
         let db = create_replica(&db_path, sync_config.as_ref()).await?;
-
-        // Sync to pull latest data from remote
-        if sync_config.is_some() {
-            tracing::info!("Syncing vault on open: {}", vault_id);
-            if let Err(e) = db.sync().await {
-                tracing::warn!("Sync on open failed: {}", e);
-            }
-        }
 
         let conn = db.connect().map_err(|e| VaultError::DatabaseError(e.to_string()))?;
 
@@ -2049,15 +2033,15 @@ impl VaultManager {
         Ok(vaults)
     }
 
-    /// Sync vault with remote.
+    /// Sync a vault with Turso. A synced vault is opened as a remote
+    /// connection (see `sync::create_replica`), so every read and write
+    /// already goes to Turso and there is nothing to sync; libsql refuses
+    /// `sync()` on such a connection. What is left to check is that the vault
+    /// is open.
     pub async fn sync_vault(&mut self, vault_id: &str) -> Result<(), VaultError> {
-        let vault = self
-            .vaults
+        self.vaults
             .get(vault_id)
             .ok_or_else(|| VaultError::NotFound(vault_id.to_string()))?;
-        if let Err(e) = vault.db.sync().await {
-            tracing::warn!("Sync failed: {}", e);
-        }
         Ok(())
     }
 
@@ -2156,13 +2140,6 @@ impl VaultManager {
                 secrets.retain(|c| c.id != row.id);
                 secrets.push(row);
             });
-        }
-
-        // Auto-sync if this is a synced vault
-        if vault.sync_url.is_some() {
-            if let Err(e) = vault.db.sync().await {
-                tracing::warn!("Auto-sync after create failed: {}", e);
-            }
         }
 
         Ok(())
@@ -2312,13 +2289,6 @@ impl VaultManager {
             });
         }
 
-        // Auto-sync if this is a synced vault
-        if vault.sync_url.is_some() {
-            if let Err(e) = vault.db.sync().await {
-                tracing::warn!("Auto-sync after update failed: {}", e);
-            }
-        }
-
         Ok(())
     }
 
@@ -2353,12 +2323,6 @@ impl VaultManager {
             });
         }
 
-        if vault.sync_url.is_some() {
-            if let Err(e) = vault.db.sync().await {
-                tracing::warn!("Auto-sync after rename failed: {}", e);
-            }
-        }
-
         Ok(())
     }
 
@@ -2376,13 +2340,6 @@ impl VaultManager {
 
         if let Some(cache_state) = &vault.cache {
             cache_state.edit(|secrets| secrets.retain(|c| c.id != secret_id));
-        }
-
-        // Auto-sync
-        if vault.sync_url.is_some() {
-            if let Err(e) = vault.db.sync().await {
-                tracing::warn!("Auto-sync after delete failed: {}", e);
-            }
         }
 
         Ok(())
@@ -2516,11 +2473,6 @@ impl VaultManager {
                 ),
             )
             .await?;
-
-        // Sync to push member to remote
-        if let Err(e) = vault.db.sync().await {
-            tracing::warn!("Failed to sync after adding member: {}", e);
-        }
 
         let sync_url = vault.sync_url.clone().unwrap_or_default();
         let token = vault.auth_token.clone().unwrap_or_default();
