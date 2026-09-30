@@ -9,6 +9,7 @@ pub mod rdp;
 pub mod db;
 pub mod devops;
 pub mod dragout;
+pub mod hardening;
 pub mod http;
 pub mod recipe;
 pub mod share;
@@ -159,6 +160,9 @@ pub fn run() {
     // database drivers already build in. reqwest is compiled without a
     // provider of its own and asks for this one at its first request.
     let _ = rustls::crypto::ring::default_provider().install_default();
+
+    // Before any secret is in memory: keep other programs out of it.
+    hardening::protect_process();
 
     tracing::info!("Starting Reach application");
 
