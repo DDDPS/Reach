@@ -295,6 +295,36 @@ fn decrypt_stored(
     decrypt_secret(master_dek, &EncryptedPayload { nonce, ciphertext, wrapped_dek })
 }
 
+/// How long one request to Turso may take before it counts as failed. libsql's
+/// remote client has no timeout of its own, so a request that is never
+/// answered (a connection a firewall or proxy silently drops, a stalled TLS
+/// handshake) waited forever, with the vault lock held: the session list sat
+/// on "Loading sessions..." for good (issue #77). Turso answers in well under
+/// a second, so this only ever ends a request that was never coming back.
+const REMOTE_TIMEOUT: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_secs(2)
+} else {
+    std::time::Duration::from_secs(10)
+};
+
+/// Run one libsql operation; for a remote (Turso) vault, no longer than
+/// [`REMOTE_TIMEOUT`]. A local database is never cut short.
+async fn bounded<T>(
+    remote: bool,
+    op: impl std::future::Future<Output = Result<T, libsql::Error>>,
+) -> Result<T, VaultError> {
+    if !remote {
+        return op.await.map_err(VaultError::from);
+    }
+    match tokio::time::timeout(REMOTE_TIMEOUT, op).await {
+        Ok(result) => result.map_err(VaultError::from),
+        Err(_) => Err(VaultError::SyncError(format!(
+            "Turso did not answer within {} seconds",
+            REMOTE_TIMEOUT.as_secs()
+        ))),
+    }
+}
+
 impl VaultConnection {
     /// One secret's stored row, from the cache, if the cache has it.
     fn cached_secret(&self, secret_id: &str) -> Option<cache::CachedSecret> {
@@ -385,16 +415,16 @@ impl VaultConnection {
     where
         P: libsql::params::IntoParams + Clone,
     {
-        match self.conn()?.query(sql, params.clone()).await {
+        let remote = self.sync_url.is_some();
+        match bounded(remote, self.conn()?.query(sql, params.clone())).await {
             Ok(rows) => Ok(rows),
             Err(first) => {
                 tracing::warn!("Query failed ({}); retrying on a new connection", first);
                 self.retire();
-                self.conn()?.query(sql, params).await.map_err(|again| {
+                bounded(remote, self.conn()?.query(sql, params)).await.inspect_err(|again| {
                     // The first error is the one that describes the fault; the
                     // second is what a healthy connection had to say about it.
                     tracing::error!("Retry also failed: {}", again);
-                    VaultError::from(again)
                 })
             }
         }
@@ -406,14 +436,14 @@ impl VaultConnection {
     where
         P: libsql::params::IntoParams + Clone,
     {
-        match self.conn()?.execute(sql, params.clone()).await {
+        let remote = self.sync_url.is_some();
+        match bounded(remote, self.conn()?.execute(sql, params.clone())).await {
             Ok(n) => Ok(n),
             Err(first) => {
                 tracing::warn!("Statement failed ({}); retrying on a new connection", first);
                 self.retire();
-                self.conn()?.execute(sql, params).await.map_err(|again| {
+                bounded(remote, self.conn()?.execute(sql, params)).await.inspect_err(|again| {
                     tracing::error!("Retry also failed: {}", again);
-                    VaultError::from(again)
                 })
             }
         }
@@ -1726,14 +1756,13 @@ impl VaultManager {
                 c.header.vault_type_json.clone(),
             ),
             None => {
-                let mut rows = conn
-                    .query(
-                        "SELECT id, name, salt, user_uuid, created_at, vault_type FROM vault_header LIMIT 1",
-                        (),
-                    )
-                    .await?;
-                let row = rows
-                    .next()
+                let remote = sync_config.is_some();
+                let mut rows = bounded(
+                    remote,
+                    conn.query("SELECT id, name, salt, user_uuid, created_at, vault_type FROM vault_header LIMIT 1", ()),
+                )
+                .await?;
+                let row = bounded(remote, rows.next())
                     .await?
                     .ok_or_else(|| VaultError::NotFound(vault_id.to_string()))?;
                 (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)

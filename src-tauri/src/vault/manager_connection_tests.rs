@@ -173,3 +173,36 @@ fn the_grace_is_shorter_than_the_lifetime() {
     // streams would go unnoticed.
     assert!(STREAM_IDLE_GRACE < STREAM_MAX_AGE);
 }
+
+/// Issue #77: a Turso request that is never answered must fail, not hang.
+/// The server here takes the connection and then says nothing at all, the
+/// way a dropped connection behind a firewall or proxy looks. Opening a
+/// synced vault with no cache yet reads its header from Turso; that read,
+/// and its one retry, now give up after `REMOTE_TIMEOUT` each.
+#[tokio::test]
+async fn a_turso_that_never_answers_fails_instead_of_hanging() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming().flatten() {
+            held.push(stream); // accepted, never read from or written to
+        }
+    });
+
+    let dir = std::env::temp_dir().join(format!("reach-silent-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut mgr = VaultManager::new(dir.clone());
+    let url = format!("http://127.0.0.1:{port}");
+
+    let started = std::time::Instant::now();
+    let opened = tokio::time::timeout(
+        REMOTE_TIMEOUT * 4,
+        mgr.open_vault("silent-vault", Some(&url), Some("token")),
+    )
+    .await
+    .expect("opening a vault against a silent server hung");
+    assert!(opened.is_err(), "a server that never answered cannot have opened a vault");
+    assert!(started.elapsed() < REMOTE_TIMEOUT * 4);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -148,14 +148,49 @@ fn disable_press_and_hold() {
         let _: () = msg_send![defaults, registerDefaults: dict];
     }
 }
+/// Log to the console as before, and on desktop also to
+/// `<app data>/logs/reach.log`, so a user who hits a problem has something to
+/// send (issue #77 came with a screenshot and nothing else). The file starts
+/// over past 5 MB, keeping the one before as `reach.1.log`.
+fn init_logging() {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let file = log_file().map(|f| {
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(f))
+    });
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(file)
+        .init();
+}
+
+#[cfg(desktop)]
+fn log_file() -> Option<std::fs::File> {
+    const LIMIT: u64 = 5 * 1024 * 1024;
+    let dir = app_data_dir().join("logs");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("reach.log");
+    if std::fs::metadata(&path).map(|m| m.len() > LIMIT).unwrap_or(false) {
+        let _ = std::fs::rename(&path, dir.join("reach.1.log"));
+    }
+    std::fs::OpenOptions::new().create(true).append(true).open(path).ok()
+}
+
+/// Mobile platforms keep their own system log (logcat on Android).
+#[cfg(mobile)]
+fn log_file() -> Option<std::fs::File> {
+    None
+}
+
 /// Build and run the Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    init_logging();
 
     // TLS for HTTPS (reqwest) and every other rustls user: ring, which the
     // database drivers already build in. reqwest is compiled without a
