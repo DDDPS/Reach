@@ -25,12 +25,9 @@ pub async fn session_list(state: State<'_, AppState>) -> Result<Vec<SessionConfi
 
     // 1. Get sessions from __sessions__ vault (private sessions)
     if let Some(vault_id) = get_sessions_vault_id_if_exists(&manager) {
-        if let Ok(secrets) = manager.list_secrets(&vault_id).await {
-            for secret in secrets {
-                if secret.category != "session" && secret.category != "custom:session" {
-                    continue;
-                }
-                if let Ok(plaintext) = manager.read_secret(&vault_id, &secret.id).await {
+        if let Ok(secrets) = manager.read_secrets_in(&vault_id, &["session", "custom:session"]).await {
+            for (_, plaintext) in secrets {
+                if let Ok(plaintext) = plaintext {
                     use secrecy::ExposeSecret;
                     if let Ok(json) = String::from_utf8(plaintext.expose_secret().clone()) {
                         if let Ok(session) = serde_json::from_str::<SessionConfig>(&json) {
@@ -52,17 +49,12 @@ pub async fn session_list(state: State<'_, AppState>) -> Result<Vec<SessionConfi
         }
 
         tracing::info!("session_list: checking vault {} ({})", vault_info.name, vault_info.id);
-        match manager.list_secrets(&vault_info.id).await {
+        // Session secrets only, including the legacy "custom:session" category.
+        match manager.read_secrets_in(&vault_info.id, &["session", "custom:session"]).await {
             Ok(secrets) => {
-                tracing::info!("session_list: vault {} has {} secrets", vault_info.name, secrets.len());
-                for secret in secrets {
-                    // Only process session-type secrets (handle legacy "custom:session" format)
-                    if secret.category != "session" && secret.category != "custom:session" {
-                        tracing::debug!("session_list: skipping non-session secret: {} ({})", secret.name, secret.category);
-                        continue;
-                    }
-                    tracing::info!("session_list: reading session secret: {}", secret.name);
-                    match manager.read_secret(&vault_info.id, &secret.id).await {
+                tracing::info!("session_list: vault {} has {} sessions", vault_info.name, secrets.len());
+                for (secret, plaintext) in secrets {
+                    match plaintext {
                         Ok(plaintext) => {
                             use secrecy::ExposeSecret;
                             if let Ok(json) = String::from_utf8(plaintext.expose_secret().clone()) {
@@ -286,17 +278,13 @@ pub async fn session_list_folders(state: State<'_, AppState>) -> Result<Vec<Fold
     };
 
     let secrets = manager
-        .list_secrets(&vault_id)
+        .read_secrets_in(&vault_id, &["folder"])
         .await
         .map_err(|e| e.to_string())?;
 
     let mut folders = Vec::new();
-    for secret in secrets {
-        // Only read secrets with category "folder" — skip sessions, settings, etc.
-        if secret.category != "folder" {
-            continue;
-        }
-        if let Ok(plaintext) = manager.read_secret(&vault_id, &secret.id).await {
+    for (_, plaintext) in secrets {
+        if let Ok(plaintext) = plaintext {
             use secrecy::ExposeSecret;
             if let Ok(json) = String::from_utf8(plaintext.expose_secret().clone()) {
                 if let Ok(folder) = serde_json::from_str::<Folder>(&json) {
