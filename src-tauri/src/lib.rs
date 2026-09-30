@@ -180,7 +180,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_reach_unlock::init());
     // NOTE: AppState is managed inside `setup()` (not here) so it can be rooted
     // at the Tauri-resolved, writable app data dir — required on Android/iOS.
 

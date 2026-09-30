@@ -29,7 +29,7 @@ pub fn supported() -> bool {
 
 /// Whether Reach must ask for the key's PIN itself (Windows asks on its own).
 pub const fn asks_pin_itself() -> bool {
-    cfg!(any(target_os = "macos", target_os = "linux"))
+    cfg!(any(target_os = "macos", target_os = "linux", target_os = "android"))
 }
 
 /// Register a credential for Reach on a key, and return its ID. Blocking;
@@ -425,12 +425,14 @@ mod platform {
     }
 }
 
+/// Android reaches security keys through Reach's Kotlin plugin (see
+/// `ipc::vault_commands`), not through these calls.
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod platform {
     use zeroize::Zeroizing;
 
     pub fn supported() -> bool {
-        false
+        cfg!(target_os = "android")
     }
 
     pub fn make_credential(_: &[u8], _: &str, _: &[Vec<u8>], _: Option<&str>) -> Result<Vec<u8>, String> {

@@ -43,7 +43,11 @@ const FILE: &str = "vault_unlock.json";
 
 pub const WINDOWS_HELLO: &str = "windows_hello";
 pub const TOUCH_ID: &str = "touch_id";
+pub const ANDROID_BIOMETRIC: &str = "android_biometric";
 pub const FIDO2: &str = "fido2";
+
+/// The Android Keystore alias of the fingerprint key.
+pub const ANDROID_KEY_ALIAS: &str = "reach-vault-fingerprint";
 
 /// The keychain service Touch ID's sealing keys live under, one per seal.
 const TOUCH_ID_SERVICE: &str = "reach-vault-touch-id";
@@ -54,13 +58,15 @@ pub fn platform_method() -> Option<&'static str> {
         Some(WINDOWS_HELLO)
     } else if cfg!(target_os = "macos") {
         Some(TOUCH_ID)
+    } else if cfg!(target_os = "android") {
+        Some(ANDROID_BIOMETRIC)
     } else {
         None
     }
 }
 
 fn is_platform(kind: &str) -> bool {
-    kind == WINDOWS_HELLO || kind == TOUCH_ID
+    kind == WINDOWS_HELLO || kind == TOUCH_ID || kind == ANDROID_BIOMETRIC
 }
 
 /// Every way this device can open the vault besides the password.
@@ -260,21 +266,66 @@ impl Unlockers {
         let user_id = self.user_uuid.as_bytes();
         let credential = fido2::make_credential(user_id, label, &self.credential_ids(), pin)?;
         let (_, output) = fido2::hmac_secret(std::slice::from_ref(&credential), &self.fido_salt()?, pin)?;
-        let mut seal = self.seal_with(&fido_key(&output), FIDO2, label, secret)?;
-        seal.credential_id = BASE64.encode(credential);
-        Ok(seal)
+        self.seal_with_key_output(label, &credential, &output, secret)
     }
 
     /// Open with whichever added security key is plugged in. Blocking.
     pub fn open_with_key(&self, pin: Option<&str>) -> Result<Zeroizing<Vec<u8>>, String> {
         let (credential, output) = fido2::hmac_secret(&self.credential_ids(), &self.fido_salt()?, pin)?;
+        self.open_with_key_output(&credential, &output)
+    }
+
+    /// What asking a security key needs: the credentials added so far, and
+    /// the salt every key is asked to HMAC.
+    pub fn key_request(&self) -> Result<(Vec<Vec<u8>>, [u8; 32]), String> {
+        Ok((self.credential_ids(), self.fido_salt()?))
+    }
+
+    /// Seal with the `hmac-secret` output a security key gave for `credential`.
+    pub fn seal_with_key_output(
+        &self,
+        label: &str,
+        credential: &[u8],
+        output: &[u8; 32],
+        secret: &[u8],
+    ) -> Result<Seal, String> {
+        let mut seal = self.seal_with(&fido_key(output), FIDO2, label, secret)?;
+        seal.credential_id = BASE64.encode(credential);
+        Ok(seal)
+    }
+
+    /// Open the seal of `credential` with the output its key gave.
+    pub fn open_with_key_output(&self, credential: &[u8], output: &[u8; 32]) -> Result<Zeroizing<Vec<u8>>, String> {
         let credential = BASE64.encode(credential);
         let seal = self
             .seals
             .iter()
             .find(|s| s.kind == FIDO2 && s.credential_id == credential)
             .ok_or("This key is not one added to Reach")?;
-        self.open_with(&fido_key(&output), seal)
+        self.open_with(&fido_key(output), seal)
+    }
+
+    /// An Android fingerprint seal. The Keystore did the sealing, with a key
+    /// that never leaves it: what is kept here is its IV and ciphertext.
+    pub fn android_seal(&self, iv: &str, ciphertext: &str) -> Seal {
+        Seal {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: ANDROID_BIOMETRIC.into(),
+            label: "Fingerprint".into(),
+            created: now(),
+            challenge: iv.into(),
+            credential_id: String::new(),
+            nonce: String::new(),
+            ciphertext: ciphertext.into(),
+        }
+    }
+
+    /// The Android fingerprint seal's IV and ciphertext, if it is on.
+    pub fn android_sealed(&self) -> Option<(String, String)> {
+        self.seals
+            .iter()
+            .find(|s| s.kind == ANDROID_BIOMETRIC)
+            .map(|s| (s.challenge.clone(), s.ciphertext.clone()))
     }
 }
 

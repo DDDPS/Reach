@@ -10,7 +10,7 @@
 	import Dropdown from '$lib/components/shared/Dropdown.svelte';
 	import Toggle from '$lib/components/shared/Toggle.svelte';
 	import { getSettings, updateSetting } from '$lib/state/settings.svelte';
-	import { biometricName, lock as lockVault } from '$lib/state/vault.svelte';
+	import { biometricName, biometricPrompt, lock as lockVault } from '$lib/state/vault.svelte';
 	import {
 		biometricEnable,
 		securityKeyAdd,
@@ -69,7 +69,7 @@
 
 	function toggleBiometric(on: boolean) {
 		void changeMethods(async () => {
-			if (on) await biometricEnable();
+			if (on) await biometricEnable(biometricPrompt(t('security.biometric', { method })));
 			else if (biometric) await unlockMethodRemove(biometric.id);
 		});
 	}

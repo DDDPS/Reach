@@ -100,14 +100,22 @@ export async function unlockMethods(): Promise<UnlockMethods> {
 	return invoke<UnlockMethods>('vault_unlock_methods');
 }
 
+/** What Android's fingerprint prompt says; the desktop prompts are the
+ * system's own and ignore it. */
+export interface PromptText {
+	title: string;
+	subtitle?: string;
+	cancel: string;
+}
+
 /** Turn the platform biometric on; shows the system prompt. */
-export async function biometricEnable(): Promise<void> {
-	return invoke<void>('vault_biometric_enable');
+export async function biometricEnable(prompt?: PromptText): Promise<void> {
+	return invoke<void>('vault_biometric_enable', { prompt: prompt ?? null });
 }
 
 /** Open the vault with the platform biometric; shows the system prompt. */
-export async function biometricUnlock(): Promise<boolean> {
-	return invoke<boolean>('vault_biometric_unlock');
+export async function biometricUnlock(prompt?: PromptText): Promise<boolean> {
+	return invoke<boolean>('vault_biometric_unlock', { prompt: prompt ?? null });
 }
 
 /** Add a security key; the user touches it twice. */

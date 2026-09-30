@@ -201,6 +201,11 @@ export async function lock(): Promise<void> {
  * password), the platform biometric, or a security key. */
 export type ResumeVia = { biometric: true } | { key: true; pin?: string };
 
+/** The fingerprint prompt's text, for platforms that show Reach's own. */
+export function biometricPrompt(title: string): vaultIpc.PromptText {
+	return { title, subtitle: 'Reach', cancel: t('common.cancel') };
+}
+
 /** What people call a platform biometric. */
 export function biometricName(kind: vaultIpc.PlatformBiometric | null | undefined): string {
 	switch (kind) {
@@ -218,7 +223,7 @@ export async function resume(via?: ResumeVia): Promise<boolean> {
 	const success = !via
 		? await vaultIpc.resume()
 		: 'biometric' in via
-			? await vaultIpc.biometricUnlock()
+			? await vaultIpc.biometricUnlock(biometricPrompt(t('lock.title')))
 			: await vaultIpc.securityKeyUnlock(via.pin);
 	if (success) {
 		vaultState.held = false;
