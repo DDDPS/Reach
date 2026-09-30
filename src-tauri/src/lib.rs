@@ -140,7 +140,7 @@ fn disable_press_and_hold() {
     // SAFETY: plain Foundation constructors and one setter, each null-checked
     // before it is used. Nothing here is kept past the call.
     unsafe {
-        let name = b"ApplePressAndHoldEnabled\0".as_ptr() as *const c_char;
+        let name = c"ApplePressAndHoldEnabled".as_ptr() as *const c_char;
         let key: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: name];
         let value: *mut AnyObject = msg_send![class!(NSNumber), numberWithBool: Bool::NO];
         if key.is_null() || value.is_null() {
@@ -982,9 +982,10 @@ pub fn run() {
             // the terminal listens for.
             #[cfg(desktop)]
             {
-                use tauri::menu::{
-                    MenuBuilder, SubmenuBuilder, MenuItemBuilder, PredefinedMenuItem,
-                };
+                use tauri::menu::{MenuBuilder, PredefinedMenuItem, SubmenuBuilder};
+                // Only the Windows and Linux edit menu builds its own items.
+                #[cfg(not(target_os = "macos"))]
+                use tauri::menu::MenuItemBuilder;
                 use tauri::Emitter;
 
                 let app_name = "Reach";

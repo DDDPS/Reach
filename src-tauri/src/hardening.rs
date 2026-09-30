@@ -161,9 +161,6 @@ mod tests {
     //! The protection tried the way an attacker would: a second copy of the
     //! test program protects itself, and this one, running as the same user,
     //! tries to get at it.
-    use std::io::{BufRead, BufReader};
-    use std::process::{Child, Command, Stdio};
-
     const CHILD: &str = "REACH_HARDENING_CHILD";
 
     /// Run in the second copy: protect, say so, then wait to be killed.
@@ -177,7 +174,13 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_secs(60));
     }
 
-    fn spawn_protected() -> (Child, u32) {
+    /// Start the second copy and wait until it says it is protected. Used by
+    /// the tests that try to reach into it, which exist on Windows and Linux.
+    #[cfg(any(windows, target_os = "linux"))]
+    fn spawn_protected() -> (std::process::Child, u32) {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["hardening::tests::protected_child", "--exact", "--nocapture", "--test-threads=1"])
             .env(CHILD, "1")

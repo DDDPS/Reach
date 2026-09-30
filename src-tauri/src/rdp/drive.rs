@@ -169,6 +169,9 @@ fn volume_space(path: &Path) -> (u64, u64) {
             let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
             // SAFETY: a valid C string and a zeroed statvfs to fill.
             if unsafe { libc::statvfs(c.as_ptr(), &mut st) } == 0 {
+                // Already u64 on 64-bit systems, but not on 32-bit Android
+                // (armv7), where these conversions are what make it compile.
+                #[allow(clippy::useless_conversion)]
                 let frag = u64::from(st.f_frsize);
                 return (u64::from(st.f_blocks) * frag, u64::from(st.f_bavail) * frag);
             }
