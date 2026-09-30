@@ -1645,5 +1645,19 @@
   "explorer.archive_cancel": "Annuler",
   "explorer.archive_cancelled": "Annulé, {{name}} a été supprimé",
   "explorer.drag_preparing": "Préparation de {{name}} pour le glisser…",
-  "explorer.drag_too_large": "Trop volumineux à glisser. Utilise Télécharger."
+  "explorer.drag_too_large": "Trop volumineux à glisser. Utilise Télécharger.",
+  "lock.title": "Reach est verrouillé",
+  "lock.subtitle": "Vos sessions ouvertes continuent. Déverrouillez pour utiliser votre coffre.",
+  "lock.unlock": "Déverrouiller",
+  "lock.use_password": "Utiliser le mot de passe maître",
+  "lock.back": "Retour",
+  "lock.password_placeholder": "Mot de passe maître",
+  "lock.wrong_password": "Ce mot de passe n’a pas déverrouillé le coffre.",
+  "lock.unlock_failed": "Le coffre n’a pas pu être déverrouillé. Essayez votre mot de passe maître.",
+  "security.auto_lock": "Verrouillage automatique",
+  "security.auto_lock_desc": "Verrouiller Reach après cette durée sans utilisation du clavier ni de la souris.",
+  "security.auto_lock_never": "Jamais",
+  "security.auto_lock_minutes": "Après {{count}} min",
+  "security.lock_on_system_lock": "Verrouiller quand l’ordinateur se verrouille",
+  "security.lock_on_system_lock_desc": "Verrouiller Reach quand vous verrouillez l’ordinateur ou qu’il se met en veille."
 }

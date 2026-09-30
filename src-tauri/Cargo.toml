@@ -189,8 +189,10 @@ windows = { version = "0.62", features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_System_Threading",
-    "Win32_System_Memory",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Power",
+    "Win32_System_LibraryLoader",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_DataExchange",
@@ -213,6 +215,9 @@ webview2-com = "0.39"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-keyutils-keyring-store = "1"
+# Following the screen lock and sleep over D-Bus (src/system_lock.rs); the
+# version already in the tree.
+zbus = { version = "5", features = ["blocking-api"] }
 openssl-sys = { version = "0.9", features = ["vendored"] }
 
 # macOS only, and only to turn one user default off at launch: holding a key in
@@ -225,6 +230,11 @@ openssl-sys = { version = "0.9", features = ["vendored"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
 objc2 = "0.6"
+# Following the screen lock and sleep (src/system_lock.rs); the versions Tauri
+# already builds.
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSDistributedNotificationCenter", "NSNotification", "NSString", "NSOperation", "block2"] }
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "block2"] }
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
 openssl-sys = { version = "0.9", features = ["vendored"] }

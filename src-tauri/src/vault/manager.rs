@@ -484,6 +484,12 @@ pub struct VaultManager {
 
     /// User-created vaults (shared, private) - for reopening after restart
     user_vaults: Vec<StoredVaultRef>,
+
+    /// Locked by the user, or by auto-lock, rather than never opened. While
+    /// set, the silent keychain unlock is refused: opening again takes the
+    /// user's own act (their password, the unlock button, or biometrics).
+    /// Kept in memory only, so a restart opens as it always has.
+    held: bool,
 }
 
 impl VaultManager {
@@ -501,6 +507,7 @@ impl VaultManager {
             personal_sync_token: None,
             internal_vault_ids: HashMap::new(),
             user_vaults: Vec::new(),
+            held: false,
         }
     }
 
@@ -563,6 +570,14 @@ impl VaultManager {
 
     /// Unlock vault with password.
     pub async fn unlock(&mut self, password: &str) -> Result<bool, VaultError> {
+        let opened = self.unlock_with_password(password).await?;
+        if opened {
+            self.held = false;
+        }
+        Ok(opened)
+    }
+
+    async fn unlock_with_password(&mut self, password: &str) -> Result<bool, VaultError> {
         let identity_path = self.app_dir.join("vault_identity.json");
         if !identity_path.exists() {
             return Err(VaultError::IdentityNotInitialized);
@@ -697,6 +712,9 @@ impl VaultManager {
 
     /// Auto-unlock using OS keychain (TLS-style, no password needed).
     pub async fn auto_unlock(&mut self) -> Result<bool, VaultError> {
+        if self.held {
+            return Ok(false);
+        }
         let identity_path = self.app_dir.join("vault_identity.json");
         if !identity_path.exists() {
             return Err(VaultError::IdentityNotInitialized);
@@ -761,6 +779,28 @@ impl VaultManager {
     }
 
     /// Lock the vault manager.
+    /// Lock, and keep it locked until the user opens it again: see `held`.
+    pub fn hold(&mut self) {
+        self.lock();
+        self.held = true;
+    }
+
+    /// Whether the vault is being kept locked by [`VaultManager::hold`].
+    pub fn is_held(&self) -> bool {
+        self.held
+    }
+
+    /// The user's own act of unlocking with the keychain (the unlock button,
+    /// or a biometric check that has already passed): lift the hold and open.
+    pub async fn resume(&mut self) -> Result<bool, VaultError> {
+        self.held = false;
+        let opened = self.auto_unlock().await?;
+        if !opened {
+            self.held = true;
+        }
+        Ok(opened)
+    }
+
     pub fn lock(&mut self) {
         self.kek = None;
         self.identity = None;
@@ -3523,6 +3563,42 @@ mod password_tests {
             .map(|(meta, _)| meta.name)
             .collect();
         assert_eq!(names, ["Production Xostme V2"]);
+    }
+
+    /// A lock by the user holds: the silent keychain unlock is refused
+    /// until the user opens it again, by the unlock button or by password.
+    #[tokio::test]
+    async fn a_held_vault_does_not_open_by_itself() {
+        let dir = tmp_dir("held");
+        let mut mgr = VaultManager::new(dir.clone());
+        mgr.init_identity("held-vault-pass").await.unwrap();
+
+        mgr.hold();
+        assert!(mgr.is_locked() && mgr.is_held());
+        // What the interface's routine check does: refused while held.
+        assert!(!mgr.auto_unlock().await.unwrap());
+        assert!(mgr.is_locked());
+
+        // The unlock button opens with the OS keychain, where the keychain
+        // can be written; some sandboxes and CI machines refuse that.
+        let uuid = mgr.get_user_uuid().unwrap();
+        if get_key_from_keychain(&uuid).is_ok() {
+            assert!(mgr.resume().await.unwrap());
+            assert!(!mgr.is_locked() && !mgr.is_held());
+            mgr.hold();
+        } else {
+            eprintln!("skipped the unlock-button check: this machine's keychain cannot be written");
+            // Still held after a resume that could not open it.
+            assert!(mgr.resume().await.is_err() || mgr.is_held());
+        }
+
+        // Opened by password.
+        assert!(mgr.unlock("held-vault-pass").await.unwrap());
+        assert!(!mgr.is_locked() && !mgr.is_held());
+
+        // A plain lock (not the user's) is not held.
+        mgr.lock();
+        assert!(!mgr.is_held());
     }
 
     /// A list is read in one query, and it is the same list, with the same

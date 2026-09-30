@@ -10,6 +10,7 @@ pub mod db;
 pub mod devops;
 pub mod dragout;
 pub mod hardening;
+pub mod system_lock;
 pub mod http;
 pub mod recipe;
 pub mod share;
@@ -326,6 +327,8 @@ pub fn run() {
             vault_export_identity,
             vault_import_identity,
             vault_lock,
+            vault_is_held,
+            vault_resume,
             vault_is_locked,
             vault_has_identity,
             vault_get_public_key,
@@ -638,6 +641,8 @@ pub fn run() {
             vault_export_identity,
             vault_import_identity,
             vault_lock,
+            vault_is_held,
+            vault_resume,
             vault_is_locked,
             vault_has_identity,
             vault_get_public_key,
@@ -1075,6 +1080,15 @@ pub fn run() {
                     format!("{}{}{}", tools_dir.display(), sep, current_path),
                 );
                 tracing::info!("Tools directory added to PATH: {:?}", tools_dir);
+            }
+
+            // When the computer locks or sleeps, tell the interface, which locks
+            // Reach too if the user asked for that (Settings → Security).
+            {
+                let handle = app.handle().clone();
+                system_lock::watch(std::sync::Arc::new(move || {
+                    let _ = tauri::Emitter::emit(&handle, "system-locked", ());
+                }));
             }
 
             // Synced vaults open and list from an encrypted copy on this device.

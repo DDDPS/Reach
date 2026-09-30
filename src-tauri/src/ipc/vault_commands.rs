@@ -34,8 +34,23 @@ pub async fn vault_unlock(
 #[tracing::instrument(skip(state))]
 pub async fn vault_lock(state: State<'_, AppState>) -> Result<(), String> {
     let mut manager = state.vault_manager.lock().await;
-    manager.lock();
+    manager.hold();
     Ok(())
+}
+
+/// Whether the vault is being kept locked until the user opens it again.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn vault_is_held(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.vault_manager.lock().await.is_held())
+}
+
+/// Open a held vault with the keychain, as the user's own act.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub async fn vault_resume(state: State<'_, AppState>) -> Result<bool, String> {
+    let mut manager = state.vault_manager.lock().await;
+    manager.resume().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

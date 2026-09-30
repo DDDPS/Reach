@@ -1645,5 +1645,19 @@
   "explorer.archive_cancel": "Cancel",
   "explorer.archive_cancelled": "Cancelled, and {{name}} was removed",
   "explorer.drag_preparing": "Preparing {{name}} to drag…",
-  "explorer.drag_too_large": "Too large to drag. Use Download instead."
+  "explorer.drag_too_large": "Too large to drag. Use Download instead.",
+  "lock.title": "Reach is locked",
+  "lock.subtitle": "Your open sessions keep running. Unlock to use your vault.",
+  "lock.unlock": "Unlock",
+  "lock.use_password": "Use master password",
+  "lock.back": "Back",
+  "lock.password_placeholder": "Master password",
+  "lock.wrong_password": "That password did not unlock the vault.",
+  "lock.unlock_failed": "The vault could not be unlocked. Try your master password.",
+  "security.auto_lock": "Auto-lock",
+  "security.auto_lock_desc": "Lock Reach after this long without keyboard or mouse use.",
+  "security.auto_lock_never": "Never",
+  "security.auto_lock_minutes": "After {{count}} min",
+  "security.lock_on_system_lock": "Lock when the computer locks",
+  "security.lock_on_system_lock_desc": "Lock Reach when you lock your computer or it goes to sleep."
 }

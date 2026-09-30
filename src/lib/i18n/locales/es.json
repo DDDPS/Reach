@@ -1645,5 +1645,19 @@
   "explorer.archive_cancel": "Cancelar",
   "explorer.archive_cancelled": "Cancelado, se eliminó {{name}}",
   "explorer.drag_preparing": "Preparando {{name}} para arrastrar…",
-  "explorer.drag_too_large": "Demasiado grande para arrastrar. Usa Descargar."
+  "explorer.drag_too_large": "Demasiado grande para arrastrar. Usa Descargar.",
+  "lock.title": "Reach está bloqueado",
+  "lock.subtitle": "Tus sesiones abiertas siguen funcionando. Desbloquea para usar tu bóveda.",
+  "lock.unlock": "Desbloquear",
+  "lock.use_password": "Usar la contraseña maestra",
+  "lock.back": "Volver",
+  "lock.password_placeholder": "Contraseña maestra",
+  "lock.wrong_password": "Esa contraseña no desbloqueó la bóveda.",
+  "lock.unlock_failed": "No se pudo desbloquear la bóveda. Prueba con tu contraseña maestra.",
+  "security.auto_lock": "Bloqueo automático",
+  "security.auto_lock_desc": "Bloquear Reach tras este tiempo sin usar el teclado ni el ratón.",
+  "security.auto_lock_never": "Nunca",
+  "security.auto_lock_minutes": "Tras {{count}} min",
+  "security.lock_on_system_lock": "Bloquear cuando se bloquee el equipo",
+  "security.lock_on_system_lock_desc": "Bloquear Reach cuando bloquees el equipo o entre en suspensión."
 }

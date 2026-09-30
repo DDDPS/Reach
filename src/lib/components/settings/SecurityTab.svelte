@@ -4,10 +4,19 @@
 	import {
 		hasMasterPassword,
 		setMasterPassword,
-		lock as lockCredentials,
 		isLocked as checkIsLocked
 	} from '$lib/ipc/credentials';
 	import { t } from '$lib/state/i18n.svelte';
+	import Dropdown from '$lib/components/shared/Dropdown.svelte';
+	import Toggle from '$lib/components/shared/Toggle.svelte';
+	import { getSettings, updateSetting } from '$lib/state/settings.svelte';
+	import { lock as lockVault } from '$lib/state/vault.svelte';
+
+	const settings = getSettings();
+	const autoLockOptions = $derived([
+		{ label: t('security.auto_lock_never'), value: '0' },
+		...[1, 5, 15, 30, 60].map((m) => ({ label: t('security.auto_lock_minutes', { count: m }), value: String(m) }))
+	]);
 
 	let hasPassword = $state(false);
 	let locked = $state(false);
@@ -78,7 +87,8 @@
 
 	async function handleLock() {
 		try {
-			await lockCredentials();
+			// Held: the lock screen shows, and only the user opens it again.
+			await lockVault();
 			locked = true;
 		} catch {
 			// Lock failed
@@ -149,6 +159,35 @@
 		</div>
 	</div>
 
+	<div class="setting-row">
+		<div class="setting-info">
+			<span class="setting-label">{t('security.auto_lock')}</span>
+			<span class="setting-description">{t('security.auto_lock_desc')}</span>
+		</div>
+		<div class="setting-control">
+			<Dropdown
+				options={autoLockOptions}
+				selected={String(settings.autoLockMinutes)}
+				onchange={(value) => updateSetting('autoLockMinutes', Number(value))}
+			/>
+		</div>
+	</div>
+
+	<div class="setting-row">
+		<div class="setting-info">
+			<span class="setting-label">{t('security.lock_on_system_lock')}</span>
+			<span class="setting-description">{t('security.lock_on_system_lock_desc')}</span>
+		</div>
+		<div class="setting-control">
+			<Toggle
+				hideLabel
+				checked={settings.lockOnSystemLock}
+				label={t('security.lock_on_system_lock')}
+				onchange={(checked) => updateSetting('lockOnSystemLock', checked)}
+			/>
+		</div>
+	</div>
+
 	<div class="action-row">
 		{#if !showPasswordForm}
 			<Button
@@ -159,7 +198,7 @@
 				{hasPassword ? t('security.change_password') : t('security.set_password')}
 			</Button>
 
-			{#if hasPassword && !locked}
+			{#if !locked}
 				<Button
 					variant="danger"
 					size="sm"

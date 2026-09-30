@@ -1645,5 +1645,19 @@
   "explorer.archive_cancel": "Abbrechen",
   "explorer.archive_cancelled": "Abgebrochen, {{name}} wurde entfernt",
   "explorer.drag_preparing": "{{name}} wird zum Ziehen vorbereitet…",
-  "explorer.drag_too_large": "Zu groß zum Ziehen. Nutze stattdessen Herunterladen."
+  "explorer.drag_too_large": "Zu groß zum Ziehen. Nutze stattdessen Herunterladen.",
+  "lock.title": "Reach ist gesperrt",
+  "lock.subtitle": "Offene Sitzungen laufen weiter. Entsperren Sie, um den Tresor zu verwenden.",
+  "lock.unlock": "Entsperren",
+  "lock.use_password": "Master-Passwort verwenden",
+  "lock.back": "Zurück",
+  "lock.password_placeholder": "Master-Passwort",
+  "lock.wrong_password": "Dieses Passwort hat den Tresor nicht entsperrt.",
+  "lock.unlock_failed": "Der Tresor konnte nicht entsperrt werden. Versuchen Sie Ihr Master-Passwort.",
+  "security.auto_lock": "Automatisch sperren",
+  "security.auto_lock_desc": "Reach nach dieser Zeit ohne Tastatur- oder Mausnutzung sperren.",
+  "security.auto_lock_never": "Nie",
+  "security.auto_lock_minutes": "Nach {{count}} Min.",
+  "security.lock_on_system_lock": "Sperren, wenn der Computer gesperrt wird",
+  "security.lock_on_system_lock_desc": "Reach sperren, wenn Sie den Computer sperren oder er in den Ruhezustand geht."
 }

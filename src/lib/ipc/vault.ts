@@ -64,6 +64,16 @@ export async function autoUnlock(): Promise<boolean> {
 	return invoke<boolean>('vault_auto_unlock');
 }
 
+/** Whether the vault is being kept locked until the user opens it again. */
+export async function isHeld(): Promise<boolean> {
+	return invoke<boolean>('vault_is_held');
+}
+
+/** Open a held vault with the keychain, as the user's own act. */
+export async function resume(): Promise<boolean> {
+	return invoke<boolean>('vault_resume');
+}
+
 /** Export identity for backup/multi-device (returns base64 secret key).
  * WARNING: This is SENSITIVE! Protect this value! */
 export async function exportIdentity(): Promise<string> {

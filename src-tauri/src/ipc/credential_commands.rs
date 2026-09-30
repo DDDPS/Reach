@@ -86,7 +86,8 @@ pub async fn credential_is_locked(state: State<'_, AppState>) -> Result<bool, St
 #[tracing::instrument(skip(state))]
 pub async fn credential_lock(state: State<'_, AppState>) -> Result<(), String> {
     let mut manager = state.vault_manager.lock().await;
-    manager.lock();
+    // The user's act: held, so the next routine check does not reopen it.
+    manager.hold();
     tracing::info!("Credential vault locked");
     Ok(())
 }

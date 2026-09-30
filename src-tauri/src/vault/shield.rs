@@ -320,11 +320,18 @@ mod tests {
                 .collect()
         }
 
+        /// Through process_vm_readv on this process: /proc/self/mem is closed
+        /// even to the process itself once it is not dumpable (see
+        /// crate::hardening), and a scan through it would quietly see
+        /// nothing and prove nothing.
         #[cfg(target_os = "linux")]
         fn read(start: usize, buf: &mut [u8]) -> bool {
-            use std::io::{Read, Seek, SeekFrom};
-            let Ok(mut mem) = std::fs::File::open("/proc/self/mem") else { return false };
-            mem.seek(SeekFrom::Start(start as u64)).is_ok() && mem.read_exact(buf).is_ok()
+            let local = libc::iovec { iov_base: buf.as_mut_ptr().cast(), iov_len: buf.len() };
+            let remote = libc::iovec { iov_base: start as *mut libc::c_void, iov_len: buf.len() };
+            // SAFETY: copies from this process's own mapping into `buf`; the
+            // kernel returns an error rather than faulting on a bad range.
+            let n = unsafe { libc::process_vm_readv(libc::getpid(), &local, 1, &remote, 1, 0) };
+            n == buf.len() as isize
         }
     }
 }

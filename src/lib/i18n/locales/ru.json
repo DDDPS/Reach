@@ -1645,5 +1645,19 @@
   "explorer.archive_cancel": "Отмена",
   "explorer.archive_cancelled": "Отменено, {{name}} удалён",
   "explorer.drag_preparing": "{{name}} готовится к перетаскиванию…",
-  "explorer.drag_too_large": "Слишком большой для перетаскивания. Используйте Загрузку."
+  "explorer.drag_too_large": "Слишком большой для перетаскивания. Используйте Загрузку.",
+  "lock.title": "Reach заблокирован",
+  "lock.subtitle": "Открытые сеансы продолжают работать. Разблокируйте, чтобы пользоваться хранилищем.",
+  "lock.unlock": "Разблокировать",
+  "lock.use_password": "Использовать мастер-пароль",
+  "lock.back": "Назад",
+  "lock.password_placeholder": "Мастер-пароль",
+  "lock.wrong_password": "Этот пароль не разблокировал хранилище.",
+  "lock.unlock_failed": "Не удалось разблокировать хранилище. Попробуйте мастер-пароль.",
+  "security.auto_lock": "Автоблокировка",
+  "security.auto_lock_desc": "Блокировать Reach после такого времени без использования клавиатуры или мыши.",
+  "security.auto_lock_never": "Никогда",
+  "security.auto_lock_minutes": "Через {{count}} мин",
+  "security.lock_on_system_lock": "Блокировать при блокировке компьютера",
+  "security.lock_on_system_lock_desc": "Блокировать Reach, когда вы блокируете компьютер или он уходит в сон."
 }

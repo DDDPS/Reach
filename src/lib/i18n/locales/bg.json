@@ -1645,5 +1645,19 @@
   "explorer.archive_cancel": "Отказ",
   "explorer.archive_cancelled": "Отменено, {{name}} беше премахнат",
   "explorer.drag_preparing": "Подготовка на {{name}} за плъзгане…",
-  "explorer.drag_too_large": "Твърде голям за плъзгане. Използвай Изтегляне."
+  "explorer.drag_too_large": "Твърде голям за плъзгане. Използвай Изтегляне.",
+  "lock.title": "Reach е заключен",
+  "lock.subtitle": "Отворените сесии продължават да работят. Отключете, за да използвате трезора.",
+  "lock.unlock": "Отключване",
+  "lock.use_password": "Използване на главната парола",
+  "lock.back": "Назад",
+  "lock.password_placeholder": "Главна парола",
+  "lock.wrong_password": "Тази парола не отключи трезора.",
+  "lock.unlock_failed": "Трезорът не можа да се отключи. Опитайте с главната парола.",
+  "security.auto_lock": "Автоматично заключване",
+  "security.auto_lock_desc": "Заключване на Reach след толкова време без използване на клавиатура или мишка.",
+  "security.auto_lock_never": "Никога",
+  "security.auto_lock_minutes": "След {{count}} мин",
+  "security.lock_on_system_lock": "Заключване при заключване на компютъра",
+  "security.lock_on_system_lock_desc": "Заключване на Reach, когато заключите компютъра или той заспи."
 }

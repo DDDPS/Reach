@@ -71,6 +71,11 @@ export interface Settings {
 	 * machine, and a laptop without Ansible has no use for its workspace.
 	 */
 	devopsTools: string[];
+
+	/** Lock after this many minutes without keyboard or mouse use; 0 never. */
+	autoLockMinutes: number;
+	/** Lock when the computer's own session locks or goes to sleep. */
+	lockOnSystemLock: boolean;
 }
 
 /** Secure settings stored encrypted in vault (API keys etc.) */
@@ -104,7 +109,9 @@ const defaults: Settings = {
 	communityPromptDismissed: false,
 	communityPromptLastShown: 0,
 	seenFeatures: [],
-	devopsTools: []
+	devopsTools: [],
+	autoLockMinutes: 0,
+	lockOnSystemLock: false
 };
 
 let settings = $state<Settings>({ ...defaults });
@@ -174,6 +181,8 @@ export function loadSettings(): void {
 			// OpenTofu in the tab bar all along, and an update should not take
 			// them away, so they keep both until they choose otherwise.
 			settings.devopsTools = parsed.devopsTools ?? ['ansible', 'tofu'];
+			settings.autoLockMinutes = parsed.autoLockMinutes ?? defaults.autoLockMinutes;
+			settings.lockOnSystemLock = parsed.lockOnSystemLock ?? defaults.lockOnSystemLock;
 			// Migration: existing users who already have localStorage data get setupComplete: true
 			settings.setupComplete = parsed.setupComplete ?? true;
 		}

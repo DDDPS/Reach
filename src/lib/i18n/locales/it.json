@@ -1645,5 +1645,19 @@
   "explorer.archive_cancel": "Annulla",
   "explorer.archive_cancelled": "Annullato, {{name}} è stato rimosso",
   "explorer.drag_preparing": "Preparazione di {{name}} per il trascinamento…",
-  "explorer.drag_too_large": "Troppo grande da trascinare. Usa Scarica."
+  "explorer.drag_too_large": "Troppo grande da trascinare. Usa Scarica.",
+  "lock.title": "Reach è bloccato",
+  "lock.subtitle": "Le sessioni aperte continuano. Sblocca per usare la cassaforte.",
+  "lock.unlock": "Sblocca",
+  "lock.use_password": "Usa la password principale",
+  "lock.back": "Indietro",
+  "lock.password_placeholder": "Password principale",
+  "lock.wrong_password": "Questa password non ha sbloccato la cassaforte.",
+  "lock.unlock_failed": "Impossibile sbloccare la cassaforte. Prova con la password principale.",
+  "security.auto_lock": "Blocco automatico",
+  "security.auto_lock_desc": "Blocca Reach dopo questo tempo senza uso di tastiera o mouse.",
+  "security.auto_lock_never": "Mai",
+  "security.auto_lock_minutes": "Dopo {{count}} min",
+  "security.lock_on_system_lock": "Blocca quando il computer si blocca",
+  "security.lock_on_system_lock_desc": "Blocca Reach quando blocchi il computer o va in sospensione."
 }

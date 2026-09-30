@@ -1645,5 +1645,19 @@
   "explorer.archive_cancel": "取消",
   "explorer.archive_cancelled": "已取消，已删除 {{name}}",
   "explorer.drag_preparing": "正在准备拖拽 {{name}}…",
-  "explorer.drag_too_large": "文件过大，无法拖拽。请改用下载。"
+  "explorer.drag_too_large": "文件过大，无法拖拽。请改用下载。",
+  "lock.title": "Reach 已锁定",
+  "lock.subtitle": "已打开的会话会继续运行。解锁后即可使用保险库。",
+  "lock.unlock": "解锁",
+  "lock.use_password": "使用主密码",
+  "lock.back": "返回",
+  "lock.password_placeholder": "主密码",
+  "lock.wrong_password": "该密码未能解锁保险库。",
+  "lock.unlock_failed": "无法解锁保险库。请尝试使用主密码。",
+  "security.auto_lock": "自动锁定",
+  "security.auto_lock_desc": "在这段时间内未使用键盘或鼠标后锁定 Reach。",
+  "security.auto_lock_never": "从不",
+  "security.auto_lock_minutes": "{{count}} 分钟后",
+  "security.lock_on_system_lock": "电脑锁定时锁定",
+  "security.lock_on_system_lock_desc": "在你锁定电脑或电脑进入睡眠时锁定 Reach。"
 }

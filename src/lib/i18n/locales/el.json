@@ -1645,5 +1645,19 @@
   "explorer.archive_cancel": "Ακύρωση",
   "explorer.archive_cancelled": "Ακυρώθηκε, το {{name}} αφαιρέθηκε",
   "explorer.drag_preparing": "Προετοιμασία του {{name}} για μεταφορά…",
-  "explorer.drag_too_large": "Πολύ μεγάλο για μεταφορά. Χρησιμοποίησε τη Λήψη."
+  "explorer.drag_too_large": "Πολύ μεγάλο για μεταφορά. Χρησιμοποίησε τη Λήψη.",
+  "lock.title": "Το Reach είναι κλειδωμένο",
+  "lock.subtitle": "Οι ανοιχτές συνεδρίες συνεχίζουν. Ξεκλειδώστε για να χρησιμοποιήσετε το θησαυροφυλάκιο.",
+  "lock.unlock": "Ξεκλείδωμα",
+  "lock.use_password": "Χρήση κύριου κωδικού",
+  "lock.back": "Πίσω",
+  "lock.password_placeholder": "Κύριος κωδικός",
+  "lock.wrong_password": "Αυτός ο κωδικός δεν ξεκλείδωσε το θησαυροφυλάκιο.",
+  "lock.unlock_failed": "Το θησαυροφυλάκιο δεν ξεκλείδωσε. Δοκιμάστε τον κύριο κωδικό σας.",
+  "security.auto_lock": "Αυτόματο κλείδωμα",
+  "security.auto_lock_desc": "Κλείδωμα του Reach μετά από τόσο χρόνο χωρίς χρήση πληκτρολογίου ή ποντικιού.",
+  "security.auto_lock_never": "Ποτέ",
+  "security.auto_lock_minutes": "Μετά από {{count}} λεπτά",
+  "security.lock_on_system_lock": "Κλείδωμα όταν κλειδώνει ο υπολογιστής",
+  "security.lock_on_system_lock_desc": "Κλείδωμα του Reach όταν κλειδώνετε τον υπολογιστή ή μπαίνει σε αναστολή."
 }
