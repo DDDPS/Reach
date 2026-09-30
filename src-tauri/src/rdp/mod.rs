@@ -389,8 +389,9 @@ impl RdpManager {
         // The session task ends on its own once the close goes through; the
         // pump ends when the output channel does. Neither needs aborting,
         // and aborting the session would skip the graceful disconnect PDU.
-        let _ = open.pump;
-        let _ = open.session;
+        // Dropping a handle detaches its task; it does not stop it.
+        drop(open.pump);
+        drop(open.session);
         Ok(())
     }
 
@@ -843,7 +844,7 @@ impl Screen {
             // Opaque black until the server has painted it; the canvas on
             // the other side is opaque too, so alpha is only ever 0xff.
             self.fb = vec![0u8; usize::from(self.width) * usize::from(self.height) * 4];
-            for px in self.fb.chunks_exact_mut(4) {
+            for px in self.fb.as_chunks_mut::<4>().0 {
                 px[3] = 0xff;
             }
             self.replaced = true;
@@ -864,7 +865,7 @@ impl Screen {
         // happen, and neither is worth a panic.
         for (row, src) in (region.top..=region.bottom).zip(buffer.chunks(w)) {
             let start = usize::from(row) * stride + usize::from(region.left) * 4;
-            for (dst, &px) in self.fb[start..start + w * 4].chunks_exact_mut(4).zip(src) {
+            for (dst, &px) in self.fb[start..start + w * 4].as_chunks_mut::<4>().0.iter_mut().zip(src) {
                 dst[0] = (px >> 16) as u8;
                 dst[1] = (px >> 8) as u8;
                 dst[2] = px as u8;
@@ -1044,8 +1045,7 @@ mod tests {
 
     #[test]
     fn cursor_goes_first_and_only_the_latest_shape_is_sent() {
-        let mut screen = Screen::default();
-        screen.cursor = Some(Cursor::Hidden);
+        let mut screen = Screen { cursor: Some(Cursor::Hidden), ..Default::default() };
         screen.cursor = Some(Cursor::Shape(Arc::new(DecodedPointer {
             width: 2,
             height: 1,

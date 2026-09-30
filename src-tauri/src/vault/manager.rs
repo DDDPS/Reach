@@ -1223,8 +1223,7 @@ impl VaultManager {
             const UNIFIED_VAULT_NAME: &str = "__personal__";
 
             // Check if we already have the unified vault open
-            if self.vault_names.get(UNIFIED_VAULT_NAME).is_some() {
-                let vault_id = self.vault_names.get(UNIFIED_VAULT_NAME).unwrap().clone();
+            if let Some(vault_id) = self.vault_names.get(UNIFIED_VAULT_NAME).cloned() {
                 tracing::info!(
                     "Unified vault {} already open, mapping all internal vaults",
                     vault_id
@@ -1319,7 +1318,7 @@ impl VaultManager {
         let mut ids_changed = false;
 
         for name in INTERNAL_VAULTS {
-            if self.vault_names.get(name).is_some() {
+            if self.vault_names.contains_key(name) {
                 continue; // Already open
             }
 
@@ -1351,7 +1350,7 @@ impl VaultManager {
                 let mut entries = tokio::fs::read_dir(&vault_dir).await?;
                 while let Some(entry) = entries.next_entry().await? {
                     let path = entry.path();
-                    if path.extension().map_or(false, |e| e == "db") {
+                    if path.extension().is_some_and(|e| e == "db") {
                         if let Some(stem) = path.file_stem() {
                             let vault_id = stem.to_string_lossy().to_string();
                             if let Ok(db) = create_replica(&path, None).await {
@@ -2783,12 +2782,11 @@ impl VaultManager {
 
     /// Save app settings to encrypted __settings__ vault.
     pub async fn save_settings(&self, settings: &AppSettings) -> Result<(), VaultError> {
-        let vault_id = self.settings_vault_id().map_err(|e| {
+        let vault_id = self.settings_vault_id().inspect_err(|_| {
             tracing::error!(
                 "Cannot save settings: vault not available. vault_names keys: {:?}",
                 self.vault_names.keys().collect::<Vec<_>>()
             );
-            e
         })?;
         let settings_key = "app_settings";
 
@@ -3304,7 +3302,7 @@ fn encrypt_with_password(kek: &Kek, plaintext: &[u8]) -> Result<(String, String)
         .encrypt(xnonce, plaintext)
         .map_err(|e| VaultError::EncryptionError(e.to_string()))?;
 
-    Ok((BASE64.encode(&ciphertext), BASE64.encode(&nonce)))
+    Ok((BASE64.encode(ciphertext), BASE64.encode(nonce)))
 }
 
 /// Decrypt data with password-derived KEK.

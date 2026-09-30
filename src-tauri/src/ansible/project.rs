@@ -14,6 +14,12 @@ pub struct AnsibleProjectManager {
     loaded: bool,
 }
 
+impl Default for AnsibleProjectManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AnsibleProjectManager {
     pub fn new() -> Self {
         Self {

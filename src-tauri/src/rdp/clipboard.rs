@@ -794,7 +794,7 @@ mod tests {
         fs::write(dir.join("a.txt"), b"hello").unwrap();
         fs::write(dir.join("sub").join("b.bin"), [0u8; 3]).unwrap();
 
-        let (descriptors, files) = describe(&[dir.clone()]);
+        let (descriptors, files) = describe(std::slice::from_ref(&dir));
         assert_eq!(descriptors.len(), files.len());
         let names: Vec<(String, Option<String>, Option<u64>)> = descriptors
             .iter()

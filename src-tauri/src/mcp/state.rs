@@ -37,10 +37,11 @@ pub type Confirmer = Arc<
 /// guard — which is why echoing the command into the terminal matters more
 /// here than anywhere else. In auto mode that echo is the only place a command
 /// becomes visible.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     /// Confirm every write. The default.
+    #[default]
     Ask,
     /// Skip the prompt for commands the classifier calls benign. Anything
     /// Sensitive or Destructive still stops and asks.
@@ -66,12 +67,6 @@ pub enum Mode {
     /// agent policy are separate mechanisms and collapsing them would remove
     /// the last thing standing between a confused model and a dead machine.
     Dangerous,
-}
-
-impl Default for Mode {
-    fn default() -> Self {
-        Mode::Ask
-    }
 }
 
 impl Mode {
@@ -400,7 +395,7 @@ impl McpState {
 
         // A tool the agent was not granted is not in `tools/list`, so calling it
         // is a mistake worth an explicit refusal rather than silence.
-        let Some(tool) = crate::mcp::agents::ToolName::from_str(name) else {
+        let Some(tool) = crate::mcp::agents::ToolName::from_name(name) else {
             return Err((protocol::INVALID_PARAMS, format!("Unknown tool `{name}`")));
         };
         if let Err(refusal) = crate::mcp::guard::check_tool(&agent, tool) {

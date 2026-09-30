@@ -64,7 +64,7 @@ pub fn list(app_dir: &Path) -> Vec<Recipe> {
             Err(e) => tracing::warn!("Skipping invalid recipe {:?}: {}", path, e),
         }
     }
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.sort_by_cached_key(|r| r.name.to_lowercase());
     out
 }
 

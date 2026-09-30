@@ -54,19 +54,14 @@ impl RecipeParam {
 }
 
 /// Where a recipe came from, which is the same question as how much to trust it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Origin {
     /// Written here. Nobody else has touched it.
+    #[default]
     Local,
     /// Installed from a registry, pinned to the hash that was verified.
     Registry { repo: String, sha256: String },
-}
-
-impl Default for Origin {
-    fn default() -> Self {
-        Origin::Local
-    }
 }
 
 /// A parsed recipe.

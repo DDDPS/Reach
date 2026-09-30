@@ -1074,8 +1074,11 @@ pub async fn db_redis_command(
     Ok(RedisOutcome::Done { reply: r.command(db, &args).await? })
 }
 
+/// Redis INFO: each section's name with its key/value pairs.
+type RedisInfo = Vec<(String, Vec<(String, String)>)>;
+
 #[tauri::command]
-pub async fn db_redis_info(state: State<'_, AppState>, id: String) -> Result<Vec<(String, Vec<(String, String)>)>, String> {
+pub async fn db_redis_info(state: State<'_, AppState>, id: String) -> Result<RedisInfo, String> {
     redis(&state, &id).await?.info().await
 }
 

@@ -164,9 +164,11 @@ impl IStream_Impl for ChannelStream_Impl {
     fn Stat(&self, pstatstg: *mut STATSTG, _flag: &STATFLAG) -> WinResult<()> {
         // The size here is what drives Explorer's progress dialog.
         unsafe {
-            let mut stat = STATSTG::default();
-            stat.cbSize = self.size;
-            stat.r#type = 2; // STGTY_STREAM
+            let mut stat = STATSTG {
+                cbSize: self.size,
+                r#type: 2, // STGTY_STREAM
+                ..Default::default()
+            };
             let wide: Vec<u16> = self
                 .name
                 .encode_utf16()

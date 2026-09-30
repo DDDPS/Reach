@@ -116,6 +116,7 @@ pub async fn session_get(
 /// Otherwise stores in __sessions__ (private).
 #[tauri::command]
 #[tracing::instrument(skip(state))]
+#[expect(clippy::too_many_arguments, reason = "a Tauri command takes each argument from the frontend's invoke by name")]
 pub async fn session_create(
     state: State<'_, AppState>,
     name: String,

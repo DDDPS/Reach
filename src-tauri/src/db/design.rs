@@ -516,14 +516,14 @@ pub fn alter_table(engine: Engine, old: &TableDesign, new: &TableDesign) -> Resu
 
     // Things that depend on columns go first, so dropping a column never
     // trips over its own index or key.
-    let removed_fks: Vec<&ForeignKeyDef> = old.foreign_keys.iter().filter(|o| !kept_same(&new.foreign_keys, o, |f| &f.original, |a, b| fk_eq(a, b))).collect();
+    let removed_fks: Vec<&ForeignKeyDef> = old.foreign_keys.iter().filter(|o| !kept_same(&new.foreign_keys, o, |f| &f.original, fk_eq)).collect();
     for fk in &removed_fks {
         out.push(match engine {
             Engine::Mysql | Engine::Mariadb => format!("ALTER TABLE {table} DROP FOREIGN KEY {}", ident(engine, &fk.name)),
             _ => format!("ALTER TABLE {table} DROP CONSTRAINT {}", ident(engine, &fk.name)),
         });
     }
-    for ix in old.indexes.iter().filter(|o| !kept_same(&new.indexes, o, |i| &i.original, |a, b| ix_eq(a, b))) {
+    for ix in old.indexes.iter().filter(|o| !kept_same(&new.indexes, o, |i| &i.original, ix_eq)) {
         out.push(drop_index_sql(engine, &cur, ix, &ix.name));
     }
     for ck in old.checks.iter().filter(|o| !kept_same(&new.checks, o, |c| &c.original, |a, b| a.expression == b.expression && a.name == b.name)) {

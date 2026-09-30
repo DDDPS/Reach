@@ -139,16 +139,15 @@ pub async fn install_entry(
     std::fs::create_dir_all(plugins_dir)
         .map_err(|e| format!("Cannot create plugins dir: {}", e))?;
     let dest = plugins_dir.join(&entry.id);
-    let staging = plugins_dir.join(format!(".{}.installing", &entry.id));
+    let staging = plugins_dir.join(format!(".{}.installing", entry.id));
     if staging.exists() {
         let _ = std::fs::remove_dir_all(&staging);
     }
     std::fs::create_dir_all(&staging)
         .map_err(|e| format!("Cannot create staging dir: {}", e))?;
 
-    extract_zip_safely(&bytes, &staging).map_err(|e| {
+    extract_zip_safely(&bytes, &staging).inspect_err(|_| {
         let _ = std::fs::remove_dir_all(&staging);
-        e
     })?;
 
     // Manifest must exist at the staging root.

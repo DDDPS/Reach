@@ -43,7 +43,7 @@ impl ToolName {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_name(s: &str) -> Option<Self> {
         match s {
             "list_sessions" => Some(ToolName::ListSessions),
             "describe_session" => Some(ToolName::DescribeSession),
@@ -59,21 +59,16 @@ impl ToolName {
 /// Ordered `Standard < Strict < Paranoid`, and the guard compares with `>=`.
 /// `Standard` is the floor rather than the middle: there is no variant below
 /// it, so an agent cannot express "check less than the baseline".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DangerThreshold {
     /// The compiled-in baseline: unconditionally destructive commands.
+    #[default]
     Standard,
     /// Also flags anything touching system configuration or service state.
     Strict,
     /// Flags any command with side effects. Suits an agent expected to observe.
     Paranoid,
-}
-
-impl Default for DangerThreshold {
-    fn default() -> Self {
-        DangerThreshold::Standard
-    }
 }
 
 /// An additional refusal contributed by an agent.
@@ -431,7 +426,7 @@ mod tests {
         // And there is no field that could disable a baseline check: the only
         // knobs are additive. This test exists so that adding one fails review.
         assert_eq!(
-            serde_json::to_value(&Policy::default()).unwrap().as_object().unwrap().len(),
+            serde_json::to_value(Policy::default()).unwrap().as_object().unwrap().len(),
             5,
             "Policy gained a field — confirm it can only tighten, never loosen"
         );

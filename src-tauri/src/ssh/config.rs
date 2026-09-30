@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ssh2_config::{ParseRule, SshConfig};
 use std::io::BufReader;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A resolved SSH host from ~/.ssh/config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -234,14 +234,14 @@ fn resolve_jump_recursive(
 }
 
 /// Resolve ~ to home directory in a path.
-fn resolve_tilde(path: &PathBuf) -> PathBuf {
+fn resolve_tilde(path: &Path) -> PathBuf {
     let s = path.display().to_string();
     if s.starts_with("~/") || s.starts_with("~\\") {
         if let Some(home) = dirs::home_dir() {
             return home.join(&s[2..]);
         }
     }
-    path.clone()
+    path.to_path_buf()
 }
 
 /// Get the current user's username.

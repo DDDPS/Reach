@@ -14,6 +14,12 @@ pub struct DbConnectionStore {
     loaded: bool,
 }
 
+impl Default for DbConnectionStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DbConnectionStore {
     pub fn new() -> Self {
         Self { connections: HashMap::new(), loaded: false }

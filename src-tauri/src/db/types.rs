@@ -36,22 +36,17 @@ impl Engine {
 }
 
 /// How to reach the server.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 #[serde(tag = "kind", rename_all = "lowercase", rename_all_fields = "camelCase")]
 pub enum Route {
     /// Straight to host:port.
+    #[default]
     Direct,
     /// Through a saved SSH session, logged in on its own when needed.
     Session { session_id: String },
     /// Through a terminal tab's live SSH connection. Never saved: the
     /// connection ends with the tab.
     Live { connection_id: String },
-}
-
-impl Default for Route {
-    fn default() -> Self {
-        Route::Direct
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]

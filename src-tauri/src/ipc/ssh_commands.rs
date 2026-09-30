@@ -74,6 +74,7 @@ pub(crate) async fn resolve_key_source(
 }
 
 #[tauri::command]
+#[expect(clippy::too_many_arguments, reason = "a Tauri command takes each argument from the frontend's invoke by name")]
 pub async fn ssh_connect(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,

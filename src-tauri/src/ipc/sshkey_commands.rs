@@ -182,7 +182,7 @@ pub async fn ssh_key_list(state: State<'_, AppState>) -> Result<Vec<StoredKeyInf
             Err(e) => tracing::warn!("Skipping unreadable key {}: {}", meta.id, e),
         }
     }
-    keys.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    keys.sort_by_cached_key(|k| k.name.to_lowercase());
     Ok(keys)
 }
 

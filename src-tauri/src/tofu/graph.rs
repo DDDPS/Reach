@@ -66,7 +66,7 @@ pub fn build_dependency_graph(resources: &[TofuResourceConfig]) -> DependencyGra
 
     // Find roots (no incoming edges)
     for res in resources {
-        if incoming.get(&res.id).map_or(true, |s| s.is_empty()) {
+        if incoming.get(&res.id).is_none_or(|s| s.is_empty()) {
             queue.push_back(res.id.clone());
             layers.insert(res.id.clone(), 0);
         }

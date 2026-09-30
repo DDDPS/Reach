@@ -37,6 +37,12 @@ pub struct DbManager {
     jobs: HashMap<String, Arc<AtomicBool>>,
 }
 
+impl Default for DbManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DbManager {
     pub fn new() -> Self {
         Self { store: DbConnectionStore::new(), live: HashMap::new(), jobs: HashMap::new() }

@@ -664,6 +664,7 @@ impl SshManager {
     /// connections map — it returns the finished `ActiveConnection` for the
     /// caller to `register` under a brief lock. This keeps the slow handshake/
     /// auth off the global lock so other connections stay responsive.
+    #[expect(clippy::too_many_arguments, reason = "the connection settings ssh_connect receives, passed through as they are")]
     pub(crate) async fn connect(
         id: &str,
         host: &str,
@@ -828,6 +829,7 @@ impl SshManager {
     /// Establish an SSH connection through one or more jump hosts. Like
     /// [`connect`], takes no `self` and returns the finished `ActiveConnection`
     /// for the caller to `register` under a brief lock.
+    #[expect(clippy::too_many_arguments, reason = "the connection settings ssh_connect receives, passed through as they are")]
     pub(crate) async fn connect_via_jump(
         id: &str,
         target_host: &str,
@@ -932,8 +934,7 @@ impl SshManager {
 
             let mut prev_shared = shared;
 
-            for i in 1..jump_chain.len() {
-                let next_jump = &jump_chain[i];
+            for next_jump in jump_chain.iter().skip(1) {
 
                 // Open direct-tcpip channel to next hop through current handle
                 let channel = {
