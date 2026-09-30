@@ -37,6 +37,7 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "Alexander Nt.",
     "targets": "all",
     "createUpdaterArtifacts": "v1Compatible",
     "icon": [
