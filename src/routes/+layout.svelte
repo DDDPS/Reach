@@ -5,6 +5,8 @@
 	import AppShell from '$lib/components/layout/AppShell.svelte';
 	import WelcomeScreen from '$lib/components/setup/WelcomeScreen.svelte';
 	import CommunityPrompt from '$lib/components/shared/CommunityPrompt.svelte';
+	import LockScreen from '$lib/components/shared/LockScreen.svelte';
+	import { startAutoLock } from '$lib/state/autolock.svelte';
 	import { loadSettings, getSettings, syncTraySettings, recordLaunch, markFeaturesSeen } from '$lib/state/settings.svelte';
 	import { addToast } from '$lib/state/toasts.svelte';
 	import { syncDevopsTools } from '$lib/state/devops.svelte';
@@ -25,6 +27,7 @@
 
 	onMount(() => {
 		loadSettings();
+		startAutoLock();
 		// After loadSettings, or the count read back as zero and reset itself
 		// every launch, which would hold the community prompt off forever.
 		recordLaunch();
@@ -130,5 +133,6 @@
 	     is setting the app up, and must never meet this on top of that. -->
 	{#if settings.setupComplete}
 		<CommunityPrompt />
+		<LockScreen />
 	{/if}
 {/if}

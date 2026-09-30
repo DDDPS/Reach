@@ -13,7 +13,7 @@ use crate::vault::crypto::{
     decrypt_secret, encrypt_secret, generate_dek, unwrap_dek, wrap_dek, wrap_dek_with_key, unwrap_dek_with_key,
 };
 use crate::vault::error::{describe_db_error, VaultError};
-use crate::vault::cache;
+use crate::vault::{biometric, cache};
 use crate::vault::schema::init_schema;
 use crate::vault::sync::{create_replica, SyncConfig};
 use crate::vault::types::{
@@ -266,9 +266,8 @@ fn unwrap_member_dek(
     let inviter_pk: [u8; 32] = inviter_pk_bytes
         .try_into()
         .map_err(|b: Vec<u8>| VaultError::InvalidKeyLength { expected: 32, got: b.len() })?;
-    let shared_secret = identity
-        .secret_key()
-        .diffie_hellman(&x25519_dalek::PublicKey::from(inviter_pk));
+    let shared_secret =
+        identity.with_secret(|secret| secret.diffie_hellman(&x25519_dalek::PublicKey::from(inviter_pk)));
 
     // The same wrapping key the inviter derived.
     let mut wrapping_key = [0u8; 32];
@@ -485,6 +484,12 @@ pub struct VaultManager {
 
     /// User-created vaults (shared, private) - for reopening after restart
     user_vaults: Vec<StoredVaultRef>,
+
+    /// Locked by the user, or by auto-lock, rather than never opened. While
+    /// set, the silent keychain unlock is refused: opening again takes the
+    /// user's own act (their password, the unlock button, or biometrics).
+    /// Kept in memory only, so a restart opens as it always has.
+    held: bool,
 }
 
 impl VaultManager {
@@ -502,6 +507,7 @@ impl VaultManager {
             personal_sync_token: None,
             internal_vault_ids: HashMap::new(),
             user_vaults: Vec::new(),
+            held: false,
         }
     }
 
@@ -564,6 +570,14 @@ impl VaultManager {
 
     /// Unlock vault with password.
     pub async fn unlock(&mut self, password: &str) -> Result<bool, VaultError> {
+        let opened = self.unlock_with_password(password).await?;
+        if opened {
+            self.held = false;
+        }
+        Ok(opened)
+    }
+
+    async fn unlock_with_password(&mut self, password: &str) -> Result<bool, VaultError> {
         let identity_path = self.app_dir.join("vault_identity.json");
         if !identity_path.exists() {
             return Err(VaultError::IdentityNotInitialized);
@@ -627,8 +641,10 @@ impl VaultManager {
         self.user_uuid = Some(stored.user_uuid.clone());
         self.identity_public_key = Some(public_key.to_bytes());
 
-        // Store in keychain for auto-unlock
-        if let Err(e) = store_key_in_keychain(&stored.user_uuid, secret_key.as_bytes()) {
+        // Store in keychain for auto-unlock, unless a device method guards the key
+        if self.unlockers().is_some() {
+            tracing::debug!("Device unlock is on; not putting the vault key in the keychain");
+        } else if let Err(e) = store_key_in_keychain(&stored.user_uuid, secret_key.as_bytes()) {
             tracing::error!(
                 "Could not store the vault key in the OS keychain: {}. Auto-unlock will not work on the next launch.",
                 e
@@ -666,7 +682,7 @@ impl VaultManager {
     /// unlock via OS keychain, then set a password here.
     pub async fn change_password(&mut self, new_password: &str) -> Result<(), VaultError> {
         let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;
-        let secret_key_bytes = identity.secret_key().to_bytes();
+        let secret_key_bytes = zeroize::Zeroizing::new(identity.with_secret(|secret| secret.to_bytes()));
 
         let identity_path = self.app_dir.join("vault_identity.json");
         if !identity_path.exists() {
@@ -689,7 +705,7 @@ impl VaultManager {
 
         let password_kek = derive_kek_from_password(new_password.as_bytes(), &salt)?;
         let (encrypted_key, nonce) =
-            encrypt_with_password(&password_kek, &secret_key_bytes)?;
+            encrypt_with_password(&password_kek, &secret_key_bytes[..])?;
 
         self.save_identity(&salt, Some((encrypted_key, nonce))).await?;
         tracing::info!("change_password: identity re-encrypted with new password");
@@ -698,6 +714,9 @@ impl VaultManager {
 
     /// Auto-unlock using OS keychain (TLS-style, no password needed).
     pub async fn auto_unlock(&mut self) -> Result<bool, VaultError> {
+        if self.held || self.unlockers().is_some() {
+            return Ok(false);
+        }
         let identity_path = self.app_dir.join("vault_identity.json");
         if !identity_path.exists() {
             return Err(VaultError::IdentityNotInitialized);
@@ -707,8 +726,27 @@ impl VaultManager {
         let stored: StoredIdentity = serde_json::from_str(&data)?;
 
         // Get secret key from keychain
-        let secret_key_bytes = get_key_from_keychain(&stored.user_uuid)?;
+        let secret_key_bytes = zeroize::Zeroizing::new(get_key_from_keychain(&stored.user_uuid)?);
+        self.open_with_secret_key(stored, &secret_key_bytes).await
+    }
 
+    /// Unlock with the identity's secret key, however it was obtained: from
+    /// the keychain, or released by a biometric check.
+    pub async fn unlock_with_secret_key(&mut self, secret_key: &[u8]) -> Result<bool, VaultError> {
+        let identity_path = self.app_dir.join("vault_identity.json");
+        if !identity_path.exists() {
+            return Err(VaultError::IdentityNotInitialized);
+        }
+        let data = tokio::fs::read_to_string(&identity_path).await?;
+        let stored: StoredIdentity = serde_json::from_str(&data)?;
+        let opened = self.open_with_secret_key(stored, secret_key).await?;
+        if opened {
+            self.held = false;
+        }
+        Ok(opened)
+    }
+
+    async fn open_with_secret_key(&mut self, stored: StoredIdentity, secret_key_bytes: &[u8]) -> Result<bool, VaultError> {
         if secret_key_bytes.len() != 32 {
             return Err(VaultError::InvalidKeyLength {
                 expected: 32,
@@ -716,10 +754,17 @@ impl VaultManager {
             });
         }
 
-        let mut sk_array = [0u8; 32];
-        sk_array.copy_from_slice(&secret_key_bytes);
-        let secret_key = StaticSecret::from(sk_array);
+        let mut sk_array = zeroize::Zeroizing::new([0u8; 32]);
+        sk_array.copy_from_slice(secret_key_bytes);
+        let secret_key = StaticSecret::from(*sk_array);
         let public_key = PublicKey::from(&secret_key);
+        // A key from the keychain or a biometric seal must be this identity's.
+        // Only a real mismatch fails: an identity saved without its public key
+        // still opens as it always has.
+        let recorded = BASE64.decode(&stored.public_key).unwrap_or_default();
+        if recorded.len() == 32 && recorded != public_key.as_bytes() {
+            return Err(VaultError::KeychainError("The stored key does not belong to this vault identity".into()));
+        }
 
         // Decode salt
         let salt_bytes = BASE64
@@ -762,6 +807,107 @@ impl VaultManager {
     }
 
     /// Lock the vault manager.
+    /// Lock, and keep it locked until the user opens it again: see `held`.
+    pub fn hold(&mut self) {
+        self.lock();
+        self.held = true;
+    }
+
+    /// Whether the vault is being kept locked by [`VaultManager::hold`].
+    pub fn is_held(&self) -> bool {
+        self.held || (self.is_locked() && self.unlockers().is_some())
+    }
+
+    /// This identity's device unlock methods (Windows Hello, security keys),
+    /// if any are on. A file left from another identity (after an import)
+    /// does not count.
+    pub fn unlockers(&self) -> Option<biometric::Unlockers> {
+        let unlockers = biometric::load(&self.app_dir)?;
+        let data = std::fs::read(self.app_dir.join("vault_identity.json")).ok()?;
+        let stored: StoredIdentity = serde_json::from_slice(&data).ok()?;
+        (stored.user_uuid == unlockers.user_uuid && !unlockers.is_empty()).then_some(unlockers)
+    }
+
+    /// What adding an unlock method needs, taken while the vault is open: the
+    /// methods so far (or a fresh set) and a copy of the identity key. A master
+    /// password has to be set, so there is always a way in that does not
+    /// depend on the device.
+    pub async fn unlock_enrolment(&self) -> Result<(biometric::Unlockers, zeroize::Zeroizing<[u8; 32]>), VaultError> {
+        if !self.has_password().await {
+            return Err(VaultError::PasswordNotSet);
+        }
+        let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;
+        let secret = identity.with_secret(|s| zeroize::Zeroizing::new(s.to_bytes()));
+        let unlockers = biometric::load(&self.app_dir)
+            .filter(|u| u.user_uuid == identity.uuid)
+            .unwrap_or_else(|| biometric::Unlockers::new(&identity.uuid));
+        Ok((unlockers, secret))
+    }
+
+    /// Keep the methods with a new seal added. The keychain copy stays until
+    /// a method has proven itself.
+    pub fn save_unlockers(&self, unlockers: &biometric::Unlockers) -> Result<(), VaultError> {
+        let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;
+        if unlockers.user_uuid != identity.uuid {
+            return Err(VaultError::AccessDenied("unlock methods of another identity".into()));
+        }
+        biometric::save(&self.app_dir, unlockers)?;
+        Ok(())
+    }
+
+    /// Open with a key an unlock method released. The first time that works,
+    /// the plain keychain copy is no longer needed and is removed.
+    pub async fn unlock_with_device(&mut self, secret: &[u8]) -> Result<bool, VaultError> {
+        let opened = self.unlock_with_secret_key(secret).await?;
+        if let Some(mut unlockers) = self.unlockers().filter(|u| opened && !u.proven) {
+            match delete_key_from_keychain(&unlockers.user_uuid) {
+                Ok(()) => {
+                    unlockers.proven = true;
+                    biometric::save(&self.app_dir, &unlockers)?;
+                    tracing::info!("Device unlock proven; the keychain copy of the vault key was removed");
+                }
+                Err(e) => tracing::warn!("Could not remove the keychain copy of the vault key: {}", e),
+            }
+        }
+        Ok(opened)
+    }
+
+    /// Remove one unlock method; returns its kind. Removing the last one puts
+    /// the key back in the keychain first, and only then drops the file, so
+    /// there is never a moment with neither.
+    pub fn remove_unlocker(&self, id: &str) -> Result<Option<String>, VaultError> {
+        let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;
+        let Some(mut unlockers) = self.unlockers() else {
+            return Ok(None);
+        };
+        let Some(removed) = unlockers.remove(id) else {
+            return Ok(None);
+        };
+        if unlockers.is_empty() {
+            identity.with_secret(|s| store_key_in_keychain(&identity.uuid, s.as_bytes()))?;
+            biometric::remove(&self.app_dir)?;
+        } else {
+            biometric::save(&self.app_dir, &unlockers)?;
+        }
+        Ok(Some(removed.kind))
+    }
+
+    /// The unlock button on the lock screen: lift the hold and open with the
+    /// keychain. Only while there is nothing better to ask for: once a master
+    /// password is set, a lock asks for it (or biometrics), or anyone at the
+    /// computer could undo the lock with one click.
+    pub async fn resume(&mut self) -> Result<bool, VaultError> {
+        if self.has_password().await {
+            return Ok(false);
+        }
+        self.held = false;
+        let opened = self.auto_unlock().await?;
+        if !opened {
+            self.held = true;
+        }
+        Ok(opened)
+    }
+
     pub fn lock(&mut self) {
         self.kek = None;
         self.identity = None;
@@ -820,7 +966,7 @@ impl VaultManager {
     /// Export identity for backup.
     pub fn export_identity(&self) -> Result<String, VaultError> {
         let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;
-        Ok(BASE64.encode(identity.secret_key().as_bytes()))
+        Ok(identity.with_secret(|secret| BASE64.encode(secret.as_bytes())))
     }
 
     /// Reset vault - delete all local data.
@@ -1026,9 +1172,31 @@ impl VaultManager {
         (self.personal_sync_url.clone(), self.personal_sync_token.clone())
     }
 
-    /// Ensure internal vaults exist and are open.
-    /// Uses personal sync config if available for cloud backup of ALL user data.
+    /// Ensure internal vaults exist, are open, and can be read.
     async fn ensure_internal_vaults(&mut self) -> Result<(), VaultError> {
+        self.open_internal_vaults().await?;
+        // A lock wipes every vault's key but leaves its connection open, and
+        // the step above skips a vault that is already open. Put the key back
+        // in each one that lost it, or it stays unreadable after unlocking.
+        let mut ids: Vec<String> = INTERNAL_VAULTS
+            .iter()
+            .filter_map(|name| self.vault_names.get(*name).cloned())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        for id in ids {
+            if self.vaults.get(&id).is_some_and(|v| v.master_dek.is_none()) {
+                if let Err(e) = self.unlock_vault(&id).await {
+                    tracing::error!("Could not unlock internal vault {}: {}", id, e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Open (or create) the internal vaults.
+    /// Uses personal sync config if available for cloud backup of ALL user data.
+    async fn open_internal_vaults(&mut self) -> Result<(), VaultError> {
         // Get personal sync config (if configured, ALL data syncs to cloud)
         let sync_url = self.personal_sync_url.clone();
         let sync_token = self.personal_sync_token.clone();
@@ -1393,14 +1561,6 @@ impl VaultManager {
             ),
         ).await?;
 
-        // Initial sync to push to remote
-        if sync_config.is_some() {
-            tracing::info!("Initial sync for new vault: {}", vault_id);
-            if let Err(e) = db.sync().await {
-                tracing::warn!("Initial sync failed: {}", e);
-            }
-        }
-
         let member_count = match &vault_type {
             VaultType::Private => None,
             VaultType::Shared { members } => Some(members.len()),
@@ -1464,7 +1624,7 @@ impl VaultManager {
     /// before the identity is loaded, which the cache key comes from.
     fn open_cache(&self, vault_id: &str) -> Option<CacheState> {
         let identity = self.identity.as_ref()?;
-        let key = cache::CacheKey::derive(&identity.secret_key().to_bytes(), vault_id).ok()?;
+        let key = identity.with_secret(|secret| cache::CacheKey::derive(secret.as_bytes(), vault_id)).ok()?;
         let path = cache::cache_path(&self.app_dir.join("vaults"), vault_id);
         let snapshot = cache::load(&path, &key);
         Some(CacheState { path, key, snapshot: std::sync::Mutex::new(snapshot) })
@@ -1539,14 +1699,6 @@ impl VaultManager {
         }
 
         let db = create_replica(&db_path, sync_config.as_ref()).await?;
-
-        // Sync to pull latest data from remote
-        if sync_config.is_some() {
-            tracing::info!("Syncing vault on open: {}", vault_id);
-            if let Err(e) = db.sync().await {
-                tracing::warn!("Sync on open failed: {}", e);
-            }
-        }
 
         let conn = db.connect().map_err(|e| VaultError::DatabaseError(e.to_string()))?;
 
@@ -1881,15 +2033,15 @@ impl VaultManager {
         Ok(vaults)
     }
 
-    /// Sync vault with remote.
+    /// Sync a vault with Turso. A synced vault is opened as a remote
+    /// connection (see `sync::create_replica`), so every read and write
+    /// already goes to Turso and there is nothing to sync; libsql refuses
+    /// `sync()` on such a connection. What is left to check is that the vault
+    /// is open.
     pub async fn sync_vault(&mut self, vault_id: &str) -> Result<(), VaultError> {
-        let vault = self
-            .vaults
+        self.vaults
             .get(vault_id)
             .ok_or_else(|| VaultError::NotFound(vault_id.to_string()))?;
-        if let Err(e) = vault.db.sync().await {
-            tracing::warn!("Sync failed: {}", e);
-        }
         Ok(())
     }
 
@@ -1988,13 +2140,6 @@ impl VaultManager {
                 secrets.retain(|c| c.id != row.id);
                 secrets.push(row);
             });
-        }
-
-        // Auto-sync if this is a synced vault
-        if vault.sync_url.is_some() {
-            if let Err(e) = vault.db.sync().await {
-                tracing::warn!("Auto-sync after create failed: {}", e);
-            }
         }
 
         Ok(())
@@ -2144,13 +2289,6 @@ impl VaultManager {
             });
         }
 
-        // Auto-sync if this is a synced vault
-        if vault.sync_url.is_some() {
-            if let Err(e) = vault.db.sync().await {
-                tracing::warn!("Auto-sync after update failed: {}", e);
-            }
-        }
-
         Ok(())
     }
 
@@ -2185,12 +2323,6 @@ impl VaultManager {
             });
         }
 
-        if vault.sync_url.is_some() {
-            if let Err(e) = vault.db.sync().await {
-                tracing::warn!("Auto-sync after rename failed: {}", e);
-            }
-        }
-
         Ok(())
     }
 
@@ -2208,13 +2340,6 @@ impl VaultManager {
 
         if let Some(cache_state) = &vault.cache {
             cache_state.edit(|secrets| secrets.retain(|c| c.id != secret_id));
-        }
-
-        // Auto-sync
-        if vault.sync_url.is_some() {
-            if let Err(e) = vault.db.sync().await {
-                tracing::warn!("Auto-sync after delete failed: {}", e);
-            }
         }
 
         Ok(())
@@ -2310,7 +2435,7 @@ impl VaultManager {
 
         // Re-wrap master DEK for invitee using X25519
         let invitee_pk = x25519_dalek::PublicKey::from(*invitee_public_key);
-        let shared_secret = identity.secret_key().diffie_hellman(&invitee_pk);
+        let shared_secret = identity.with_secret(|secret| secret.diffie_hellman(&invitee_pk));
 
         // Derive wrapping key from shared secret
         let mut wrapping_key = [0u8; 32];
@@ -2348,11 +2473,6 @@ impl VaultManager {
                 ),
             )
             .await?;
-
-        // Sync to push member to remote
-        if let Err(e) = vault.db.sync().await {
-            tracing::warn!("Failed to sync after adding member: {}", e);
-        }
 
         let sync_url = vault.sync_url.clone().unwrap_or_default();
         let token = vault.auth_token.clone().unwrap_or_default();
@@ -2742,7 +2862,7 @@ impl VaultManager {
         // itself is sealed with the export password (XChaCha20-Poly1305).
         let secret_key_b64 = {
             let id = self.identity.as_ref().ok_or(VaultError::Locked)?;
-            BASE64.encode(id.secret_key().as_bytes())
+            id.with_secret(|secret| BASE64.encode(secret.as_bytes()))
         };
 
         let identity = ExportedIdentity {
@@ -3145,10 +3265,7 @@ fn now_timestamp() -> i64 {
 /// Derive KEK from X25519 secret key using HKDF (TLS-style).
 fn derive_kek_from_secret_key(secret_key: &[u8], salt: &[u8; 32]) -> Result<Kek, VaultError> {
     let hk = Hkdf::<Sha256>::new(Some(salt), secret_key);
-    let mut kek_bytes = [0u8; 32];
-    hk.expand(b"reach-vault-kek", &mut kek_bytes)
-        .map_err(|_| VaultError::KeyDerivationFailed)?;
-    Ok(Kek::new(kek_bytes))
+    Kek::try_from_fn(|kek| hk.expand(b"reach-vault-kek", kek).map_err(|_| VaultError::KeyDerivationFailed))
 }
 
 /// Derive KEK from password using Argon2id.
@@ -3158,19 +3275,18 @@ fn derive_kek_from_password(password: &[u8], salt: &[u8; 32]) -> Result<Kek, Vau
     let params = Params::new(65536, 3, 4, Some(32)).map_err(|e| VaultError::KdfError(e.to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let mut kek_bytes = [0u8; 32];
-    argon2
-        .hash_password_into(password, salt, &mut kek_bytes)
-        .map_err(|e| VaultError::KdfError(e.to_string()))?;
-
-    Ok(Kek::new(kek_bytes))
+    Kek::try_from_fn(|kek| {
+        argon2
+            .hash_password_into(password, salt, kek)
+            .map_err(|e| VaultError::KdfError(e.to_string()))
+    })
 }
 
 /// Encrypt data with password-derived KEK.
 fn encrypt_with_password(kek: &Kek, plaintext: &[u8]) -> Result<(String, String), VaultError> {
     use chacha20poly1305::{aead::Aead, KeyInit, XChaCha20Poly1305, XNonce};
 
-    let cipher = XChaCha20Poly1305::new(kek.expose().into());
+    let cipher = kek.with_key(|k| XChaCha20Poly1305::new(k.into()));
     let mut nonce = [0u8; 24];
     rand::fill(&mut nonce[..]);
     let xnonce = &XNonce::from(nonce);
@@ -3186,7 +3302,7 @@ fn encrypt_with_password(kek: &Kek, plaintext: &[u8]) -> Result<(String, String)
 fn decrypt_with_password(kek: &Kek, ciphertext: &[u8], nonce: &[u8]) -> Result<Vec<u8>, VaultError> {
     use chacha20poly1305::{aead::Aead, KeyInit, XChaCha20Poly1305, XNonce};
 
-    let cipher = XChaCha20Poly1305::new(kek.expose().into());
+    let cipher = kek.with_key(|k| XChaCha20Poly1305::new(k.into()));
     let xnonce = &XNonce::try_from(nonce)
         .map_err(|_| VaultError::DecryptionError("Invalid nonce length".to_string()))?;
 
@@ -3232,6 +3348,14 @@ fn store_key_in_keychain(user_uuid: &str, key: &[u8]) -> Result<(), VaultError> 
     Ok(())
 }
 
+/// Remove the key from the OS keychain; a key already gone is fine.
+fn delete_key_from_keychain(user_uuid: &str) -> Result<(), VaultError> {
+    match keychain_entry(user_uuid)?.delete_credential() {
+        Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
+        Err(e) => Err(VaultError::KeychainError(e.to_string())),
+    }
+}
+
 /// Get key from OS keychain.
 fn get_key_from_keychain(user_uuid: &str) -> Result<Vec<u8>, VaultError> {
     let entry = keychain_entry(user_uuid)?;
@@ -3251,424 +3375,9 @@ fn get_key_from_keychain(user_uuid: &str) -> Result<Vec<u8>, VaultError> {
 }
 
 #[cfg(test)]
-mod connection_tests {
-    use super::*;
-    use std::time::Duration;
-    use crate::vault::types::{VaultHeader, VaultType};
-
-    // Leaving Reach open long enough used to stop it reading anything, from
-    // the server or the cache, until it was closed and reopened: a remote
-    // vault kept one connection forever, and libsql cannot recover a stream
-    // whose baton the server expired. These cover when that connection is
-    // given up.
-
-    #[test]
-    fn idleness_never_troubles_a_local_vault() {
-        // No stream, nothing to time out — reconnecting an idle local handle
-        // would only cost time.
-        assert!(!should_reconnect(false, Duration::from_secs(0), Duration::from_secs(0)));
-        assert!(!should_reconnect(false, Duration::from_secs(3600), Duration::from_secs(1)));
-    }
-
-    #[test]
-    fn a_local_connection_is_not_kept_for_the_whole_session() {
-        // The fear worth having: a connection held open all day that quietly
-        // goes bad. A local handle cannot expire, but an I/O error — a laptop
-        // waking up, a synced folder, a disk hiccup — can leave it failing
-        // every query when a fresh one would work. Nothing about that is
-        // idleness, so without an age bound it would be kept until Reach was
-        // restarted, which is the bug we started from wearing a different
-        // hat.
-        assert!(should_reconnect(
-            false,
-            Duration::from_millis(1),
-            STREAM_MAX_AGE + Duration::from_millis(1)
-        ));
-        assert!(should_reconnect(false, Duration::from_secs(0), Duration::from_secs(3600)));
-    }
-
-    #[test]
-    fn back_to_back_work_reuses_one_connection() {
-        // Reading twelve sessions is twelve operations a few milliseconds
-        // apart. Reconnecting for each one measurably slowed the session
-        // list down, which is why this matters.
-        assert!(!should_reconnect(true, Duration::from_millis(5), Duration::from_secs(1)));
-        assert!(!should_reconnect(true, STREAM_IDLE_GRACE, Duration::from_secs(1)));
-    }
-
-    #[test]
-    fn an_idle_connection_is_given_up() {
-        assert!(should_reconnect(
-            true,
-            STREAM_IDLE_GRACE + Duration::from_millis(1),
-            Duration::from_secs(1)
-        ));
-    }
-
-    #[test]
-    fn a_busy_connection_is_still_given_up_eventually() {
-        // The one that nearly got away. A connection can die from something
-        // other than idleness — a network blip, a token refresh, a server
-        // restart — and steady use keeps refreshing the idle clock, so
-        // idleness alone would pin a dead connection for as long as someone
-        // kept hitting retry. Age is what breaks that.
-        assert!(!should_reconnect(true, Duration::from_millis(1), STREAM_MAX_AGE));
-        assert!(should_reconnect(
-            true,
-            Duration::from_millis(1),
-            STREAM_MAX_AGE + Duration::from_millis(1)
-        ));
-    }
-
-    #[test]
-    fn no_connection_outlives_the_age_bound_however_it_is_used() {
-        // Whatever the vault is and whatever the pattern of use, a connection
-        // that has gone bad is replaced within a minute rather than lasting
-        // until the app is closed and reopened.
-        for is_remote in [true, false] {
-            for idle_ms in [0u64, 1, 4_000, 60_000] {
-                assert!(
-                    should_reconnect(
-                        is_remote,
-                        Duration::from_millis(idle_ms),
-                        STREAM_MAX_AGE + Duration::from_millis(1)
-                    ),
-                    "remote={is_remote} idle={idle_ms}ms should have been given up"
-                );
-            }
-        }
-    }
-
-    /// Build a vault backed by a real local database, so the retry path can
-    /// be exercised rather than reasoned about.
-    async fn local_vault(name: &str) -> (VaultConnection, PathBuf) {
-        let path = std::env::temp_dir().join(format!(
-            "reach-conn-test-{}-{}-{:?}.db",
-            name,
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        let db = crate::vault::sync::create_replica(&path, None).await.unwrap();
-        let conn = db.connect().unwrap();
-        let vault = VaultConnection {
-            db,
-            conn: std::sync::Mutex::new(CachedConnection {
-                conn,
-                last_used: std::time::Instant::now(),
-                opened: std::time::Instant::now(),
-                retired: false,
-            }),
-            header: VaultHeader {
-                id: "test".into(),
-                name: name.into(),
-                salt: [0u8; 32],
-                user_uuid: "test-user".into(),
-                created_at: 0,
-                vault_type: VaultType::Private,
-            },
-            master_dek: None,
-            sync_url: None,
-            auth_token: None,
-            cache: None,
-        };
-        (vault, path)
-    }
-
-    #[tokio::test]
-    async fn a_retired_connection_is_replaced_and_the_data_is_still_there() {
-        // The cure, against a real database: throwing the connection away
-        // mid-life must not lose the vault, and the replacement must see
-        // everything the old one wrote.
-        let (vault, path) = local_vault("retire").await;
-        vault
-            .execute("CREATE TABLE t (id TEXT PRIMARY KEY, v TEXT)", ())
-            .await
-            .unwrap();
-        vault
-            .execute("INSERT OR REPLACE INTO t (id, v) VALUES (?, ?)", ("a", "first"))
-            .await
-            .unwrap();
-
-        vault.retire();
-
-        let mut rows = vault.query("SELECT v FROM t WHERE id = ?", ["a"]).await.unwrap();
-        let v: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
-        assert_eq!(v, "first", "the replacement connection must see the old writes");
-
-        // And the vault keeps working afterwards, rather than being retired
-        // once and left broken.
-        vault
-            .execute("INSERT OR REPLACE INTO t (id, v) VALUES (?, ?)", ("b", "second"))
-            .await
-            .unwrap();
-        let mut rows = vault.query("SELECT COUNT(*) FROM t", ()).await.unwrap();
-        let n: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
-        assert_eq!(n, 2);
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[tokio::test]
-    async fn a_statement_that_is_simply_wrong_still_fails() {
-        // Retrying must not turn a broken query into a hang or a false
-        // success — a bad statement fails on both attempts and reports it.
-        let (vault, path) = local_vault("bad-sql").await;
-        assert!(vault.query("SELECT * FROM nope", ()).await.is_err());
-        // And the vault is still usable after that failure, even though the
-        // retry retired the connection on the way through.
-        vault.execute("CREATE TABLE t (id TEXT)", ()).await.unwrap();
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn the_grace_is_shorter_than_the_lifetime() {
-        // Otherwise the age bound would be the only rule in force and idle
-        // streams would go unnoticed.
-        assert!(STREAM_IDLE_GRACE < STREAM_MAX_AGE);
-    }
-}
+#[path = "manager_connection_tests.rs"]
+mod connection_tests;
 
 #[cfg(test)]
-mod password_tests {
-    use super::*;
-
-    fn tmp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "reach-vault-test-{}-{}",
-            name,
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    /// The cache of a synced vault, end to end against a real libsql server:
-    /// built by the first refresh, enough on its own to open, unlock and list
-    /// the vault with the server out of reach, updated when someone else
-    /// changes the vault, and unreadable on disk.
-    ///
-    /// Needs a libsql server, so it is skipped unless one is named, e.g.
-    /// `docker run -d -p 58080:8080 ghcr.io/tursodatabase/libsql-server` and
-    /// `REACH_TEST_SQLD=http://127.0.0.1:58080`.
-    #[tokio::test]
-    #[ignore]
-    async fn a_synced_vault_opens_and_lists_from_its_cache() {
-        let Ok(url) = std::env::var("REACH_TEST_SQLD") else { return };
-        let server = libsql::Builder::new_remote(url.clone(), String::new())
-            .connector(crate::vault::turso_tls::TursoConnector::new().unwrap())
-            .build()
-            .await
-            .unwrap();
-        let other_device = server.connect().unwrap();
-        other_device
-            .execute_batch("DROP TABLE IF EXISTS secrets; DROP TABLE IF EXISTS vault_members; DROP TABLE IF EXISTS vault_header;")
-            .await
-            .unwrap();
-
-        let dir = tmp_dir("cache-e2e");
-        let mut mgr = VaultManager::new(dir.clone());
-        mgr.init_identity("cache-e2e-pass").await.unwrap();
-        let vault = mgr.create_vault("synced", VaultType::Private, Some(&url), Some("")).await.unwrap();
-        let put = |text: &str| SecretBox::new(Box::new(text.as_bytes().to_vec()));
-        let keep = mgr.create_secret(&vault.id, "Production Xostme V2", SecretCategory::Session, put("one")).await.unwrap();
-        let gone = mgr.create_secret(&vault.id, "FiveM BoX", SecretCategory::Session, put("two")).await.unwrap();
-        mgr.create_secret(&vault.id, "Servers", SecretCategory::Folder, put("folder")).await.unwrap();
-
-        // The first refresh makes the cache.
-        let mgr = tokio::sync::Mutex::new(mgr);
-        assert_eq!(refresh_caches(&mgr).await, vec![vault.id.clone()]);
-        let cache_file = cache::cache_path(&dir.join("vaults"), &vault.id);
-        let on_disk = std::fs::read(&cache_file).unwrap();
-        for name in ["Production Xostme V2", "FiveM BoX", "Servers", "session"] {
-            assert!(!on_disk.windows(name.len()).any(|w| w == name.as_bytes()), "{name} is readable on disk");
-        }
-        // Nothing changed since, so a second refresh reports nothing.
-        assert!(refresh_caches(&mgr).await.is_empty());
-
-        // Another run of the app, with the server out of reach: the vault
-        // opens, unlocks and lists from the cache alone.
-        let mut offline = VaultManager::new(dir.clone());
-        offline.unlock("cache-e2e-pass").await.unwrap();
-        offline.close_vault(&vault.id).await.unwrap();
-        offline.open_vault(&vault.id, Some("http://127.0.0.1:9"), Some("")).await.unwrap();
-        offline.unlock_vault(&vault.id).await.unwrap();
-        let mut listed: Vec<Vec<u8>> = offline
-            .read_secrets_in(&vault.id, &["session"])
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|(_, plain)| plain.unwrap().expose_secret().clone())
-            .collect();
-        listed.sort();
-        assert_eq!(listed, vec![b"one".to_vec(), b"two".to_vec()]);
-        assert_eq!(offline.read_secret(&vault.id, &keep).await.unwrap().expose_secret(), b"one");
-
-        // Locked, nothing of the cache stays in memory; unlocked again, it is
-        // read back from the sealed file, still without the server.
-        offline.lock();
-        assert!(offline.vaults.values().all(|v| v.cache.is_none()));
-        offline.unlock("cache-e2e-pass").await.unwrap();
-        offline.unlock_vault(&vault.id).await.unwrap();
-        assert_eq!(offline.read_secret(&vault.id, &keep).await.unwrap().expose_secret(), b"one");
-        drop(offline);
-
-        // Someone else deletes a session on the server; the next refresh
-        // takes it in and says so.
-        other_device.execute("DELETE FROM secrets WHERE id = ?", [gone.as_str()]).await.unwrap();
-        assert_eq!(refresh_caches(&mgr).await, vec![vault.id.clone()]);
-        let names: Vec<String> = mgr
-            .lock()
-            .await
-            .read_secrets_in(&vault.id, &["session"])
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|(meta, _)| meta.name)
-            .collect();
-        assert_eq!(names, ["Production Xostme V2"]);
-    }
-
-    /// A list is read in one query, and it is the same list, with the same
-    /// plaintexts, that one `read_secret` per item gives.
-    #[tokio::test]
-    async fn a_list_of_one_category_is_read_in_one_go() {
-        let dir = tmp_dir("batch-read");
-        let mut mgr = VaultManager::new(dir.clone());
-        mgr.init_identity("batch-read-pass").await.unwrap();
-        let vault = mgr.create_vault("batch", VaultType::Private, None, None).await.unwrap();
-
-        let put = |text: &str| SecretBox::new(Box::new(text.as_bytes().to_vec()));
-        let a = mgr.create_secret(&vault.id, "a", SecretCategory::Session, put("session a")).await.unwrap();
-        let b = mgr.create_secret(&vault.id, "b", SecretCategory::Session, put("session b")).await.unwrap();
-        mgr.create_secret(&vault.id, "f", SecretCategory::Folder, put("a folder")).await.unwrap();
-        mgr.create_secret(&vault.id, "s", SecretCategory::Custom("snippet".into()), put("a snippet")).await.unwrap();
-
-        let mut sessions: Vec<(String, Vec<u8>)> = mgr
-            .read_secrets_in(&vault.id, &["session"])
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|(meta, plain)| (meta.id, plain.unwrap().expose_secret().clone()))
-            .collect();
-        sessions.sort();
-        let mut expected = vec![
-            (a.clone(), mgr.read_secret(&vault.id, &a).await.unwrap().expose_secret().clone()),
-            (b.clone(), mgr.read_secret(&vault.id, &b).await.unwrap().expose_secret().clone()),
-        ];
-        expected.sort();
-        assert_eq!(sessions, expected);
-
-        let mut names: Vec<String> = mgr
-            .read_secrets_in(&vault.id, &["folder", "custom:snippet"])
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|(meta, _)| meta.name)
-            .collect();
-        names.sort();
-        assert_eq!(names, ["f", "s"]);
-
-        assert!(mgr.read_secrets_in(&vault.id, &[]).await.unwrap().is_empty());
-        assert!(mgr.read_secrets_in(&vault.id, &["no-such-category"]).await.unwrap().is_empty());
-    }
-
-    /// Regression test for issue #25: the password-encrypted secret key was
-    /// computed at identity init but discarded, so password unlock never
-    /// worked after a restart — only OS-keychain auto-unlock did.
-    #[tokio::test]
-    async fn password_roundtrip_and_change_issue_25() {
-        let dir = tmp_dir("roundtrip");
-
-        // Init identity with a password.
-        let mut mgr = VaultManager::new(dir.clone());
-        mgr.init_identity("hunter2hunter2").await.unwrap();
-        mgr.lock();
-
-        // Fresh manager (simulated restart): unlock with the init password.
-        let mut mgr2 = VaultManager::new(dir.clone());
-        assert!(
-            mgr2.unlock("hunter2hunter2").await.unwrap(),
-            "unlock with the init password must succeed (issue #25)"
-        );
-
-        // Wrong password must not unlock.
-        mgr2.lock();
-        let mut mgr3 = VaultManager::new(dir.clone());
-        let bad = mgr3.unlock("wrong-password").await;
-        assert!(bad.is_err() || matches!(bad, Ok(false)));
-
-        // Change password while unlocked, then the new one works.
-        let mut mgr4 = VaultManager::new(dir.clone());
-        mgr4.unlock("hunter2hunter2").await.unwrap();
-        mgr4.change_password("second-password").await.unwrap();
-        mgr4.lock();
-
-        let mut mgr5 = VaultManager::new(dir.clone());
-        assert!(mgr5.unlock("second-password").await.unwrap());
-        mgr5.lock();
-
-        // The old password no longer works.
-        let mut mgr6 = VaultManager::new(dir.clone());
-        let old = mgr6.unlock("hunter2hunter2").await;
-        assert!(old.is_err() || matches!(old, Ok(false)));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Issue #30: an identity created before the issue-25 fix has no
-    /// password-encrypted key, so no password can open it — but has_identity()
-    /// is true, and the UI used that to report "password set". The user was
-    /// told they had a recovery path that did not exist.
-    #[tokio::test]
-    async fn has_password_is_false_when_no_password_material_was_persisted() {
-        let dir = tmp_dir("legacy-identity");
-
-        let mut mgr = VaultManager::new(dir.clone());
-        mgr.init_identity("a-real-password").await.unwrap();
-        assert!(mgr.has_identity().await);
-        assert!(
-            mgr.has_password().await,
-            "a freshly created identity does have password material"
-        );
-
-        // Reproduce a pre-fix identity: the file exists, but the
-        // password-encrypted key was discarded rather than written.
-        let path = dir.join("vault_identity.json");
-        let data = std::fs::read_to_string(&path).unwrap();
-        let mut stored: StoredIdentity = serde_json::from_str(&data).unwrap();
-        stored.encrypted_key = String::new();
-        stored.nonce = String::new();
-        std::fs::write(&path, serde_json::to_string(&stored).unwrap()).unwrap();
-
-        let mgr2 = VaultManager::new(dir.clone());
-        assert!(
-            mgr2.has_identity().await,
-            "the identity file is still there, which is why has_identity() misled the UI"
-        );
-        assert!(
-            !mgr2.has_password().await,
-            "no password can open this vault, so has_password() must say so"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Changing the password requires an unlocked manager.
-    #[tokio::test]
-    async fn change_password_requires_unlock() {
-        let dir = tmp_dir("locked-change");
-        let mut mgr = VaultManager::new(dir.clone());
-        mgr.init_identity("initial-pass-123").await.unwrap();
-        mgr.lock();
-
-        let err = mgr
-            .change_password("whatever-else")
-            .await
-            .expect_err("change_password while locked must fail");
-        assert!(matches!(err, VaultError::Locked));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
+#[path = "manager_password_tests.rs"]
+mod password_tests;

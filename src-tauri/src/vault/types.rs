@@ -1,19 +1,25 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use crate::vault::shield::Shielded;
 
 /// 32-byte Key Encryption Key (derived from password via Argon2id).
-/// Zeroized on drop. Never logged or serialized.
-#[derive(Zeroize, ZeroizeOnDrop)]
-pub struct Kek([u8; 32]);
+/// Held only encrypted in memory (see [`crate::vault::shield`]); opened for
+/// the length of [`Kek::with_key`]. Never logged or serialized.
+pub struct Kek(Shielded<32>);
 
 impl Kek {
     pub fn new(key: [u8; 32]) -> Self {
-        Self(key)
+        Self(Shielded::new(key))
     }
 
-    pub fn expose(&self) -> &[u8; 32] {
-        &self.0
+    /// A key derived straight into shielded storage, with no copy left over.
+    pub fn try_from_fn<E>(derive: impl FnOnce(&mut [u8; 32]) -> Result<(), E>) -> Result<Self, E> {
+        Shielded::try_from_fn(derive).map(Self)
+    }
+
+    /// Use the key. It is in the clear only inside `use_it`.
+    pub fn with_key<T>(&self, use_it: impl FnOnce(&[u8; 32]) -> T) -> T {
+        self.0.with(use_it)
     }
 }
 
@@ -23,18 +29,24 @@ impl fmt::Debug for Kek {
     }
 }
 
-/// 32-byte Data Encryption Key (random per secret).
-/// Zeroized on drop. Never logged or serialized.
-#[derive(Zeroize, ZeroizeOnDrop)]
-pub struct Dek([u8; 32]);
+/// 32-byte Data Encryption Key (random per secret, or a vault's master key).
+/// Held only encrypted in memory (see [`crate::vault::shield`]); opened for
+/// the length of [`Dek::with_key`]. Never logged or serialized.
+pub struct Dek(Shielded<32>);
 
 impl Dek {
     pub fn new(key: [u8; 32]) -> Self {
-        Self(key)
+        Self(Shielded::new(key))
     }
 
-    pub fn expose(&self) -> &[u8; 32] {
-        &self.0
+    /// A key written straight into shielded storage, with no copy left over.
+    pub fn from_fn(fill: impl FnOnce(&mut [u8; 32])) -> Self {
+        Self(Shielded::from_fn(fill))
+    }
+
+    /// Use the key. It is in the clear only inside `use_it`.
+    pub fn with_key<T>(&self, use_it: impl FnOnce(&[u8; 32]) -> T) -> T {
+        self.0.with(use_it)
     }
 }
 
@@ -218,10 +230,12 @@ pub struct InviteInfo {
 }
 
 /// User identity (X25519 keypair).
-/// Secret key is zeroized on drop.
+/// The secret key is held only encrypted in memory (see
+/// [`crate::vault::shield`]) and rebuilt for the length of
+/// [`UserIdentity::with_secret`]; the rebuilt key wipes itself on drop.
 pub struct UserIdentity {
     pub uuid: String,
-    secret_key: x25519_dalek::StaticSecret,
+    secret_key: Shielded<32>,
     pub public_key: x25519_dalek::PublicKey,
 }
 
@@ -230,13 +244,14 @@ impl UserIdentity {
         let public_key = x25519_dalek::PublicKey::from(&secret_key);
         Self {
             uuid,
-            secret_key,
+            secret_key: Shielded::new(secret_key.to_bytes()),
             public_key,
         }
     }
 
-    pub fn secret_key(&self) -> &x25519_dalek::StaticSecret {
-        &self.secret_key
+    /// Use the secret key. It exists in the clear only inside `use_it`.
+    pub fn with_secret<T>(&self, use_it: impl FnOnce(&x25519_dalek::StaticSecret) -> T) -> T {
+        self.secret_key.with(|bytes| use_it(&x25519_dalek::StaticSecret::from(*bytes)))
     }
 }
 

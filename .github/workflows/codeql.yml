@@ -41,8 +41,9 @@ jobs:
               - src-tauri/gen
               - node_modules
               - docs/node_modules
-              # Test-only: known answers recorded with fixed keys on purpose.
-              - src-tauri/src/vault/compat_tests.rs
+              # Test-only: fixed keys, salts and passwords on purpose (known
+              # answers, test vaults). Unit tests live in *_tests.rs files.
+              - src-tauri/src/**/*_tests.rs
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4

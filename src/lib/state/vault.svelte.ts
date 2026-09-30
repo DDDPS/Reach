@@ -31,6 +31,9 @@ class VaultState {
 	locked = $state(true);
 	hasIdentity = $state(false);
 	keychainError = $state(false); // True when identity exists but keychain access failed
+	/** Locked by the user or by auto-lock: shows the lock screen, and the
+	 * vault stays locked until the user opens it again. */
+	held = $state(false);
 	vaults = $state(new SvelteMap<string, VaultInfo>());
 	activeVaultId = $state<string | null>(null);
 	secrets = $state(new SvelteMap<string, SecretMetadata>());
@@ -145,6 +148,7 @@ export async function initIdentity(password: string): Promise<string> {
 export async function unlock(password: string): Promise<boolean> {
 	const success = await vaultIpc.unlock(password);
 	if (success) {
+		vaultState.held = false;
 		vaultState.locked = false;
 		vaultState.userUuid = await vaultIpc.getUserUuid();
 		vaultState.publicKey = await vaultIpc.getPublicKey();
@@ -186,17 +190,43 @@ export async function importIdentity(secretKey: string): Promise<string> {
 export async function lock(): Promise<void> {
 	await vaultIpc.lock();
 	vaultState.locked = true;
+	vaultState.held = true;
 	vaultState.secrets.clear();
 	vaultState.activeVaultId = null;
+}
+
+/** Open a held vault with the keychain: the lock screen's unlock button. */
+/** How a held vault is opened: the keychain (only without a master
+ * password), Windows Hello, or a security key. */
+export type ResumeVia = { hello: true } | { key: true; pin?: string };
+
+/** Open a held vault. */
+export async function resume(via?: ResumeVia): Promise<boolean> {
+	const success = !via
+		? await vaultIpc.resume()
+		: 'hello' in via
+			? await vaultIpc.helloUnlock()
+			: await vaultIpc.securityKeyUnlock(via.pin);
+	if (success) {
+		vaultState.held = false;
+		vaultState.locked = false;
+		vaultState.userUuid = await vaultIpc.getUserUuid();
+		vaultState.publicKey = await vaultIpc.getPublicKey();
+		await refreshVaults();
+		restoreLocalSettingsFromVault();
+	}
+	return success;
 }
 
 export async function checkState(): Promise<void> {
 	vaultState.hasIdentity = await vaultIpc.hasIdentity();
 	vaultState.locked = await vaultIpc.isLocked();
+	vaultState.held = await vaultIpc.isHeld();
 	vaultState.keychainError = false;
 
-	// TLS-style: auto-unlock using OS keychain if identity exists
-	if (vaultState.hasIdentity && vaultState.locked) {
+	// TLS-style: auto-unlock using OS keychain if identity exists, unless the
+	// user locked it: then only the lock screen opens it.
+	if (vaultState.hasIdentity && vaultState.locked && !vaultState.held) {
 		try {
 			const success = await vaultIpc.autoUnlock();
 			if (success) {

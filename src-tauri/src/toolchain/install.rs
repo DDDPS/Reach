@@ -20,7 +20,6 @@ fn silent_async_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process:
     let mut cmd = tokio::process::Command::new(program);
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000);
     }
     cmd

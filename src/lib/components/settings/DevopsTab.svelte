@@ -18,8 +18,12 @@
 	onMount(() => {
 		for (const tool of DEVOPS_TOOLS.filter((d) => d.binary)) {
 			toolchainCheck(tool.binary)
-				.then((status) => (found[tool.id] = status))
-				.catch(() => (found[tool.id] = null));
+				.then((status) => {
+					found[tool.id] = status;
+				})
+				.catch(() => {
+					found[tool.id] = null;
+				});
 		}
 	});
 

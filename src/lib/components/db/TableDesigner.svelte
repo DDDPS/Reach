@@ -486,10 +486,10 @@
 							{#each draft.foreignKeys as fk, i (i)}
 								<tr>
 									<td><input bind:value={fk.name} spellcheck="false" /></td>
-									<td><input value={fk.columns.join(', ')} onchange={(e) => (fk.columns = list(e.currentTarget.value))} spellcheck="false" /></td>
+									<td><input value={fk.columns.join(', ')} onchange={(e) => { fk.columns = list(e.currentTarget.value); }} spellcheck="false" /></td>
 									{#if st.hasSchemas(engine)}<td><input value={fk.refSchema ?? ''} oninput={(e) => (fk.refSchema = textOrNull(e.currentTarget.value))} placeholder={draft.schema ?? ''} /></td>{/if}
 									<td><input bind:value={fk.refTable} spellcheck="false" /></td>
-									<td><input value={fk.refColumns.join(', ')} onchange={(e) => (fk.refColumns = list(e.currentTarget.value))} spellcheck="false" /></td>
+									<td><input value={fk.refColumns.join(', ')} onchange={(e) => { fk.refColumns = list(e.currentTarget.value); }} spellcheck="false" /></td>
 									<td>
 										<select value={fk.onDelete ?? 'NO ACTION'} onchange={(e) => (fk.onDelete = e.currentTarget.value === 'NO ACTION' ? null : e.currentTarget.value)}>
 											{#each FK_ACTIONS as a (a)}<option value={a}>{a}</option>{/each}

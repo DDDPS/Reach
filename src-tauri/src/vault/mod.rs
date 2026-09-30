@@ -1,12 +1,15 @@
 #[cfg(test)]
 mod compat_tests;
+pub mod biometric;
 pub mod cache;
 pub mod crypto;
 pub mod error;
 pub mod export;
+pub mod fido2;
 pub mod kdf;
 pub mod manager;
 pub mod schema;
+pub mod shield;
 pub mod sharing;
 pub mod sync;
 pub mod turso_api;

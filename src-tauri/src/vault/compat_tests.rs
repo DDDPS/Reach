@@ -58,14 +58,14 @@ const BACKUP: &str = "UkVBQ0hCQUsBACFuiZOwduBiGNcBgPImsWUVouZyeAjIfIHpgpfEfbPjsG
 #[test]
 fn a_password_still_derives_the_same_key() {
     let kek = derive_kek(PASSWORD, &SALT).unwrap();
-    assert_eq!(B64.encode(kek.expose()), KEK);
+    assert_eq!(kek.with_key(|k| B64.encode(k)), KEK);
 }
 
 #[test]
 fn keys_wrapped_before_still_unwrap() {
     let kek = Kek::new(B64.decode(KEK).unwrap().try_into().unwrap());
-    assert_eq!(unwrap_dek(&kek, &wrapped(WRAPPED_BY_KEK)).unwrap().expose(), &DEK);
-    assert_eq!(unwrap_dek_with_key(&DEK, &wrapped(WRAPPED_BY_KEY)).unwrap().expose(), &MASTER);
+    assert_eq!(unwrap_dek(&kek, &wrapped(WRAPPED_BY_KEK)).unwrap().with_key(|k| *k), DEK);
+    assert_eq!(unwrap_dek_with_key(&DEK, &wrapped(WRAPPED_BY_KEY)).unwrap().with_key(|k| *k), MASTER);
 }
 
 #[test]
@@ -79,11 +79,11 @@ fn secrets_encrypted_before_still_decrypt() {
 fn a_stored_identity_and_a_shared_vault_key_still_open() {
     let kek = derive_kek(PASSWORD, &SALT).unwrap();
     let nonce: [u8; 24] = B64.decode(IDENTITY_NONCE).unwrap().try_into().unwrap();
-    let secret = decrypt_identity_key(kek.expose(), &B64.decode(IDENTITY_KEY).unwrap(), &nonce).unwrap();
+    let secret = kek.with_key(|k| decrypt_identity_key(k, &B64.decode(IDENTITY_KEY).unwrap(), &nonce)).unwrap();
     assert_eq!(secret.to_bytes(), IDENTITY);
 
     let identity = UserIdentity::new("u".into(), secret);
-    assert_eq!(unwrap_dek_for_member(&identity, &wrapped(FOR_MEMBER)).unwrap().expose(), &DEK);
+    assert_eq!(unwrap_dek_for_member(&identity, &wrapped(FOR_MEMBER)).unwrap().with_key(|k| *k), DEK);
 }
 
 #[test]
@@ -101,13 +101,13 @@ fn print_known_answers() {
     use super::sharing::{encrypt_identity_key, wrap_dek_for_member};
 
     let kek = derive_kek(PASSWORD, &SALT).unwrap();
-    println!("KEK {}", B64.encode(kek.expose()));
+    println!("KEK {}", kek.with_key(|k| B64.encode(k)));
     println!("WRAPPED_BY_KEK {}", flat(&wrap_dek(&kek, &Dek::new(DEK)).unwrap()));
     println!("WRAPPED_BY_KEY {}", flat(&wrap_dek_with_key(&DEK, &Dek::new(MASTER)).unwrap()));
     let payload = encrypt_secret(&Dek::new(MASTER), SECRET).unwrap();
     println!("PAYLOAD {}", B64.encode(serde_json::to_vec(&payload).unwrap()));
     let identity = x25519_dalek::StaticSecret::from(IDENTITY);
-    let (ct, nonce) = encrypt_identity_key(kek.expose(), &identity).unwrap();
+    let (ct, nonce) = kek.with_key(|k| encrypt_identity_key(k, &identity)).unwrap();
     println!("IDENTITY_KEY {} {}", B64.encode(ct), B64.encode(nonce));
     let public = x25519_dalek::PublicKey::from(&identity);
     println!("FOR_MEMBER {}", flat(&wrap_dek_for_member(&Dek::new(DEK), public.as_bytes()).unwrap()));
