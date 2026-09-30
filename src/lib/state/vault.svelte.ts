@@ -1,5 +1,6 @@
 import { SvelteMap } from 'svelte/reactivity';
 import * as vaultIpc from '$lib/ipc/vault';
+import { t } from '$lib/state/i18n.svelte';
 import { restoreLocalSettingsFromVault } from '$lib/state/settings.svelte';
 import type {
 	VaultInfo,
@@ -197,15 +198,27 @@ export async function lock(): Promise<void> {
 
 /** Open a held vault with the keychain: the lock screen's unlock button. */
 /** How a held vault is opened: the keychain (only without a master
- * password), Windows Hello, or a security key. */
-export type ResumeVia = { hello: true } | { key: true; pin?: string };
+ * password), the platform biometric, or a security key. */
+export type ResumeVia = { biometric: true } | { key: true; pin?: string };
+
+/** What people call a platform biometric. */
+export function biometricName(kind: vaultIpc.PlatformBiometric | null | undefined): string {
+	switch (kind) {
+		case 'windows_hello':
+			return 'Windows Hello';
+		case 'touch_id':
+			return 'Touch ID';
+		default:
+			return t('lock.fingerprint');
+	}
+}
 
 /** Open a held vault. */
 export async function resume(via?: ResumeVia): Promise<boolean> {
 	const success = !via
 		? await vaultIpc.resume()
-		: 'hello' in via
-			? await vaultIpc.helloUnlock()
+		: 'biometric' in via
+			? await vaultIpc.biometricUnlock()
 			: await vaultIpc.securityKeyUnlock(via.pin);
 	if (success) {
 		vaultState.held = false;

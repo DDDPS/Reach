@@ -58,8 +58,10 @@ pub async fn vault_resume(state: State<'_, AppState>) -> Result<bool, String> {
 /// keys, and which of them are on.
 #[derive(serde::Serialize)]
 pub struct UnlockMethods {
-    hello_offered: bool,
-    hello_available: bool,
+    /// The platform biometric this build offers: "windows_hello",
+    /// "touch_id", or none.
+    platform: Option<&'static str>,
+    platform_available: bool,
     keys_supported: bool,
     /// Reach asks for the key's PIN itself (macOS, Linux); Windows asks.
     keys_ask_pin: bool,
@@ -70,25 +72,27 @@ pub struct UnlockMethods {
 #[tracing::instrument(skip(state))]
 pub async fn vault_unlock_methods(state: State<'_, AppState>) -> Result<UnlockMethods, String> {
     let methods = state.vault_manager.lock().await.unlockers().map(|u| u.list()).unwrap_or_default();
-    let hello_offered = biometric::hello_offered();
-    let hello_available = hello_offered && tokio::task::spawn_blocking(biometric::hello_available).await.unwrap_or(false);
+    let platform = biometric::platform_method();
+    let platform_available =
+        platform.is_some() && tokio::task::spawn_blocking(biometric::platform_available).await.unwrap_or(false);
     Ok(UnlockMethods {
-        hello_offered,
-        hello_available,
+        platform,
+        platform_available,
         keys_supported: fido2::supported(),
         keys_ask_pin: fido2::asks_pin_itself(),
         methods,
     })
 }
 
-/// Turn Windows Hello unlock on. The vault must be open and a master password
-/// set. The manager is not held while the system prompt is up.
+/// Turn the platform biometric (Windows Hello, Touch ID) on. The vault must
+/// be open and a master password set. The manager is not held while the
+/// system prompt is up.
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn vault_hello_enable(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn vault_biometric_enable(state: State<'_, AppState>) -> Result<(), String> {
     let (mut unlockers, secret) = state.vault_manager.lock().await.unlock_enrolment().await.map_err(|e| e.to_string())?;
     let unlockers = tokio::task::spawn_blocking(move || {
-        let seal = unlockers.seal_with_hello(&*secret)?;
+        let seal = unlockers.seal_with_platform(&*secret)?;
         unlockers.add(seal);
         Ok::<_, String>(unlockers)
     })
@@ -97,12 +101,12 @@ pub async fn vault_hello_enable(state: State<'_, AppState>) -> Result<(), String
     state.vault_manager.lock().await.save_unlockers(&unlockers).map_err(|e| e.to_string())
 }
 
-/// Open the vault with Windows Hello.
+/// Open the vault with the platform biometric.
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub async fn vault_hello_unlock(state: State<'_, AppState>) -> Result<bool, String> {
-    let unlockers = state.vault_manager.lock().await.unlockers().ok_or("Windows Hello is not turned on")?;
-    let secret = tokio::task::spawn_blocking(move || unlockers.open_with_hello())
+pub async fn vault_biometric_unlock(state: State<'_, AppState>) -> Result<bool, String> {
+    let unlockers = state.vault_manager.lock().await.unlockers().ok_or("Biometric unlock is not turned on")?;
+    let secret = tokio::task::spawn_blocking(move || unlockers.open_with_platform())
         .await
         .map_err(|e| e.to_string())??;
     let mut manager = state.vault_manager.lock().await;
@@ -148,9 +152,9 @@ pub async fn vault_security_key_unlock(state: State<'_, AppState>, pin: Option<S
 #[tauri::command]
 #[tracing::instrument(skip(state))]
 pub async fn vault_unlock_method_remove(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let kind = state.vault_manager.lock().await.remove_unlocker(&id).map_err(|e| e.to_string())?;
-    if kind.as_deref() == Some(biometric::WINDOWS_HELLO) {
-        tokio::task::spawn_blocking(biometric::hello_forget).await.map_err(|e| e.to_string())?;
+    let removed = state.vault_manager.lock().await.remove_unlocker(&id).map_err(|e| e.to_string())?;
+    if let Some(seal) = removed {
+        tokio::task::spawn_blocking(move || biometric::forget(&seal)).await.map_err(|e| e.to_string())?;
     }
     Ok(())
 }

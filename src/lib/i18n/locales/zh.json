@@ -1678,5 +1678,6 @@
   "security.keys_remove": "移除",
   "security.keys_name_placeholder": "名称，例如 YubiKey 5C",
   "security.keys_default_name": "安全密钥",
-  "security.keys_touch_twice": "密钥闪烁时请触摸。会要求两次：一次添加 Reach，一次封存保险库密钥。"
+  "security.keys_touch_twice": "密钥闪烁时请触摸。会要求两次：一次添加 Reach，一次封存保险库密钥。",
+  "lock.fingerprint": "指纹"
 }

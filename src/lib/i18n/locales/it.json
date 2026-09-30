@@ -1678,5 +1678,6 @@
   "security.keys_remove": "Rimuovi",
   "security.keys_name_placeholder": "Nome, ad es. YubiKey 5C",
   "security.keys_default_name": "Chiave di sicurezza",
-  "security.keys_touch_twice": "Tocca la chiave quando lampeggia. Lo chiede due volte: una per aggiungere Reach, una per sigillare la chiave della cassaforte."
+  "security.keys_touch_twice": "Tocca la chiave quando lampeggia. Lo chiede due volte: una per aggiungere Reach, una per sigillare la chiave della cassaforte.",
+  "lock.fingerprint": "impronta digitale"
 }

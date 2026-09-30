@@ -1678,5 +1678,6 @@
   "security.keys_remove": "Удалить",
   "security.keys_name_placeholder": "Название, например YubiKey 5C",
   "security.keys_default_name": "Ключ безопасности",
-  "security.keys_touch_twice": "Коснитесь ключа, когда он замигает. Он спросит дважды: чтобы добавить Reach и чтобы запечатать ключ хранилища."
+  "security.keys_touch_twice": "Коснитесь ключа, когда он замигает. Он спросит дважды: чтобы добавить Reach и чтобы запечатать ключ хранилища.",
+  "lock.fingerprint": "отпечаток пальца"
 }

@@ -74,18 +74,22 @@ export async function resume(): Promise<boolean> {
 	return invoke<boolean>('vault_resume');
 }
 
-/** A device unlock method that is on: Windows Hello, or one security key. */
+/** The platform biometric: Windows Hello, Touch ID, or Android's fingerprint. */
+export type PlatformBiometric = 'windows_hello' | 'touch_id' | 'android_biometric';
+
+/** A device unlock method that is on: the platform biometric, or one security key. */
 export interface UnlockMethod {
 	id: string;
-	kind: 'windows_hello' | 'fido2';
+	kind: PlatformBiometric | 'fido2';
 	label: string;
 	created: number;
 }
 
 /** The device unlock methods this build offers here, and which are on. */
 export interface UnlockMethods {
-	hello_offered: boolean;
-	hello_available: boolean;
+	/** The platform biometric this build offers, if any. */
+	platform: PlatformBiometric | null;
+	platform_available: boolean;
 	keys_supported: boolean;
 	/** Reach asks for the key's PIN itself (macOS, Linux); Windows asks. */
 	keys_ask_pin: boolean;
@@ -96,14 +100,14 @@ export async function unlockMethods(): Promise<UnlockMethods> {
 	return invoke<UnlockMethods>('vault_unlock_methods');
 }
 
-/** Turn Windows Hello unlock on; shows the system prompt. */
-export async function helloEnable(): Promise<void> {
-	return invoke<void>('vault_hello_enable');
+/** Turn the platform biometric on; shows the system prompt. */
+export async function biometricEnable(): Promise<void> {
+	return invoke<void>('vault_biometric_enable');
 }
 
-/** Open the vault with Windows Hello; shows the system prompt. */
-export async function helloUnlock(): Promise<boolean> {
-	return invoke<boolean>('vault_hello_unlock');
+/** Open the vault with the platform biometric; shows the system prompt. */
+export async function biometricUnlock(): Promise<boolean> {
+	return invoke<boolean>('vault_biometric_unlock');
 }
 
 /** Add a security key; the user touches it twice. */

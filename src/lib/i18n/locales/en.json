@@ -1678,5 +1678,6 @@
   "security.keys_remove": "Remove",
   "security.keys_name_placeholder": "Name, e.g. YubiKey 5C",
   "security.keys_default_name": "Security key",
-  "security.keys_touch_twice": "Touch the key when it blinks. It asks twice: once to add Reach, once to seal the vault key."
+  "security.keys_touch_twice": "Touch the key when it blinks. It asks twice: once to add Reach, once to seal the vault key.",
+  "lock.fingerprint": "fingerprint"
 }

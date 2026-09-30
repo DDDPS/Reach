@@ -1678,5 +1678,6 @@
   "security.keys_remove": "Entfernen",
   "security.keys_name_placeholder": "Name, z. B. YubiKey 5C",
   "security.keys_default_name": "Sicherheitsschlüssel",
-  "security.keys_touch_twice": "Berühren Sie den Schlüssel, wenn er blinkt. Er fragt zweimal: einmal zum Hinzufügen von Reach, einmal zum Versiegeln des Tresorschlüssels."
+  "security.keys_touch_twice": "Berühren Sie den Schlüssel, wenn er blinkt. Er fragt zweimal: einmal zum Hinzufügen von Reach, einmal zum Versiegeln des Tresorschlüssels.",
+  "lock.fingerprint": "Fingerabdruck"
 }

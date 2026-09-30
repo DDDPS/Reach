@@ -872,10 +872,10 @@ impl VaultManager {
         Ok(opened)
     }
 
-    /// Remove one unlock method; returns its kind. Removing the last one puts
+    /// Remove one unlock method; returns it. Removing the last one puts
     /// the key back in the keychain first, and only then drops the file, so
     /// there is never a moment with neither.
-    pub fn remove_unlocker(&self, id: &str) -> Result<Option<String>, VaultError> {
+    pub fn remove_unlocker(&self, id: &str) -> Result<Option<biometric::Seal>, VaultError> {
         let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;
         let Some(mut unlockers) = self.unlockers() else {
             return Ok(None);
@@ -889,7 +889,7 @@ impl VaultManager {
         } else {
             biometric::save(&self.app_dir, &unlockers)?;
         }
-        Ok(Some(removed.kind))
+        Ok(Some(removed))
     }
 
     /// The unlock button on the lock screen: lift the hold and open with the
@@ -3327,6 +3327,11 @@ fn decrypt_with_password(kek: &Kek, ciphertext: &[u8], nonce: &[u8]) -> Result<V
 /// the Linux kernel keyring. Android has no store of its own here; as before,
 /// a key saved there lasts only until the app closes.
 fn keychain_entry(user_uuid: &str) -> Result<keyring_core::Entry, VaultError> {
+    keychain_entry_in("reach-vault", user_uuid)
+}
+
+/// An entry under `service` in the same OS credential store.
+pub(crate) fn keychain_entry_in(service: &str, user: &str) -> Result<keyring_core::Entry, VaultError> {
     static STORE: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
     STORE
         .get_or_init(|| {
@@ -3345,7 +3350,7 @@ fn keychain_entry(user_uuid: &str) -> Result<keyring_core::Entry, VaultError> {
         })
         .clone()
         .map_err(VaultError::KeychainUnavailable)?;
-    keyring_core::Entry::new("reach-vault", user_uuid).map_err(|e| VaultError::KeychainError(e.to_string()))
+    keyring_core::Entry::new(service, user).map_err(|e| VaultError::KeychainError(e.to_string()))
 }
 
 /// Store key in OS keychain.

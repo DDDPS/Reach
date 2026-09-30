@@ -1,5 +1,6 @@
 //! Opening the vault with something on this device instead of the keychain:
-//! Windows Hello, or FIDO2 security keys (Settings → Security).
+//! the platform's biometric (Windows Hello, Touch ID) or FIDO2 security keys
+//! (Settings → Security).
 //!
 //! Each method produces a key only it can produce, and that key seals a copy
 //! of the vault identity's secret key (XChaCha20-Poly1305). The seals live in
@@ -11,6 +12,11 @@
 //!   a fixed random challenge, and the SHA-256 of that signature is the key.
 //!   Hello's keys are RSA with PKCS#1 v1.5 signatures, which are
 //!   deterministic, so the same challenge always gives the same key.
+//! - Touch ID is a gate, not a seal: binding a key to Touch ID in hardware
+//!   needs a keychain access group, which only an Apple Developer signing
+//!   identity grants, and Reach's macOS builds have none. So a random key in
+//!   the login keychain seals the vault key, and Reach reads that key only
+//!   after `LAContext` has confirmed the owner's fingerprint.
 //! - A security key gives its `hmac-secret` over a stored salt (see
 //!   [`super::fido2`]); HKDF-SHA256 turns that into the key.
 //!
@@ -36,7 +42,26 @@ use super::fido2;
 const FILE: &str = "vault_unlock.json";
 
 pub const WINDOWS_HELLO: &str = "windows_hello";
+pub const TOUCH_ID: &str = "touch_id";
 pub const FIDO2: &str = "fido2";
+
+/// The keychain service Touch ID's sealing keys live under, one per seal.
+const TOUCH_ID_SERVICE: &str = "reach-vault-touch-id";
+
+/// The platform biometric this build offers, if any.
+pub fn platform_method() -> Option<&'static str> {
+    if cfg!(windows) {
+        Some(WINDOWS_HELLO)
+    } else if cfg!(target_os = "macos") {
+        Some(TOUCH_ID)
+    } else {
+        None
+    }
+}
+
+fn is_platform(kind: &str) -> bool {
+    kind == WINDOWS_HELLO || kind == TOUCH_ID
+}
 
 /// Every way this device can open the vault besides the password.
 #[derive(Serialize, Deserialize, Clone)]
@@ -107,10 +132,11 @@ impl Unlockers {
             .collect()
     }
 
-    /// Add a seal. Windows Hello has one seal at most; a new one replaces it.
+    /// Add a seal. The platform biometric has one seal at most; a new one
+    /// replaces it.
     pub fn add(&mut self, seal: Seal) {
-        if seal.kind == WINDOWS_HELLO {
-            self.seals.retain(|s| s.kind != WINDOWS_HELLO);
+        if is_platform(&seal.kind) {
+            self.seals.retain(|s| !is_platform(&s.kind));
         }
         self.seals.push(seal);
     }
@@ -171,25 +197,60 @@ impl Unlockers {
             .map_err(|_| "The key did not open the vault key".to_string())
     }
 
-    /// Seal `secret` behind Windows Hello. Blocking; shows the system prompt.
-    pub fn seal_with_hello(&self, secret: &[u8]) -> Result<Seal, String> {
-        let challenge: [u8; 32] = rand::random();
-        let key = hello::key_for(&challenge, true)?;
-        let mut seal = self.seal_with(&key, WINDOWS_HELLO, "Windows Hello", secret)?;
-        seal.challenge = BASE64.encode(challenge);
-        Ok(seal)
+    /// Seal `secret` behind the platform biometric. Blocking; shows the
+    /// system prompt.
+    pub fn seal_with_platform(&self, secret: &[u8]) -> Result<Seal, String> {
+        match platform_method() {
+            Some(WINDOWS_HELLO) => {
+                let challenge: [u8; 32] = rand::random();
+                let key = hello::key_for(&challenge, true)?;
+                let mut seal = self.seal_with(&key, WINDOWS_HELLO, "Windows Hello", secret)?;
+                seal.challenge = BASE64.encode(challenge);
+                Ok(seal)
+            }
+            Some(TOUCH_ID) => {
+                touch::verify("turn on Touch ID for your Reach vault")?;
+                let key: Zeroizing<[u8; 32]> = Zeroizing::new(rand::random());
+                let seal = self.seal_with(&key, TOUCH_ID, "Touch ID", secret)?;
+                super::manager::keychain_entry_in(TOUCH_ID_SERVICE, &seal.id)
+                    .and_then(|e| {
+                        e.set_password(&BASE64.encode(*key))
+                            .map_err(|e| super::error::VaultError::KeychainError(e.to_string()))
+                    })
+                    .map_err(|e| e.to_string())?;
+                Ok(seal)
+            }
+            _ => Err("This device has no biometric unlock".into()),
+        }
     }
 
-    /// Open the Windows Hello seal. Blocking; shows the system prompt.
-    pub fn open_with_hello(&self) -> Result<Zeroizing<Vec<u8>>, String> {
+    /// Open the platform biometric's seal. Blocking; shows the system prompt.
+    pub fn open_with_platform(&self) -> Result<Zeroizing<Vec<u8>>, String> {
         let seal = self
             .seals
             .iter()
-            .find(|s| s.kind == WINDOWS_HELLO)
-            .ok_or("Windows Hello is not turned on")?;
-        let challenge = BASE64.decode(&seal.challenge).map_err(|e| e.to_string())?;
-        let key = hello::key_for(&challenge, false)?;
-        self.open_with(&key, seal)
+            .find(|s| is_platform(&s.kind))
+            .ok_or("Biometric unlock is not turned on")?;
+        match seal.kind.as_str() {
+            WINDOWS_HELLO => {
+                let challenge = BASE64.decode(&seal.challenge).map_err(|e| e.to_string())?;
+                let key = hello::key_for(&challenge, false)?;
+                self.open_with(&key, seal)
+            }
+            TOUCH_ID => {
+                touch::verify("unlock your Reach vault")?;
+                let stored = super::manager::keychain_entry_in(TOUCH_ID_SERVICE, &seal.id)
+                    .and_then(|e| e.get_password().map_err(|e| super::error::VaultError::KeychainError(e.to_string())))
+                    .map_err(|e| e.to_string())?;
+                let key: [u8; 32] = BASE64
+                    .decode(stored)
+                    .ok()
+                    .and_then(|k| k.try_into().ok())
+                    .ok_or("The Touch ID key is damaged")?;
+                self.open_with(&Zeroizing::new(key), seal)
+            }
+            _ => Err("Biometric unlock is not turned on".into()),
+        }
     }
 
     /// Seal `secret` behind a security key. Blocking: the user touches the
@@ -226,19 +287,28 @@ fn fido_key(output: &[u8; 32]) -> Zeroizing<[u8; 32]> {
     key
 }
 
-/// Whether this build offers Windows Hello.
-pub fn hello_offered() -> bool {
-    cfg!(windows)
+/// Whether the platform biometric can be used now (Windows Hello set up,
+/// a fingerprint enrolled for Touch ID). Blocking.
+pub fn platform_available() -> bool {
+    match platform_method() {
+        Some(WINDOWS_HELLO) => hello::available(),
+        Some(TOUCH_ID) => touch::available(),
+        _ => false,
+    }
 }
 
-/// Whether Windows Hello can be used now (a PIN or better is set up). Blocking.
-pub fn hello_available() -> bool {
-    hello::available()
-}
-
-/// Delete Reach's Windows Hello credential. Best-effort; blocking.
-pub fn hello_forget() {
-    hello::forget();
+/// Clean up after a removed seal: Reach's Windows Hello credential, or the
+/// Touch ID key in the keychain. Best-effort; blocking.
+pub fn forget(seal: &Seal) {
+    match seal.kind.as_str() {
+        WINDOWS_HELLO => hello::forget(),
+        TOUCH_ID => {
+            if let Ok(entry) = super::manager::keychain_entry_in(TOUCH_ID_SERVICE, &seal.id) {
+                let _ = entry.delete_credential();
+            }
+        }
+        _ => {}
+    }
 }
 
 pub fn load(app_dir: &Path) -> Option<Unlockers> {
@@ -372,6 +442,61 @@ mod hello {
         let result = f();
         waiting.store(false, Ordering::Relaxed);
         result
+    }
+}
+
+/// Touch ID through LocalAuthentication, as a check of the owner.
+#[cfg(target_os = "macos")]
+mod touch {
+    use block2::RcBlock;
+    use objc2::runtime::Bool;
+    use objc2_foundation::{NSError, NSString};
+    use objc2_local_authentication::{LAContext, LAPolicy};
+    use std::time::Duration;
+
+    pub fn available() -> bool {
+        // SAFETY: a fresh context asked whether the policy can be evaluated.
+        unsafe { LAContext::new().canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthenticationWithBiometrics).is_ok() }
+    }
+
+    /// Ask for the owner's fingerprint; `reason` completes the system's
+    /// sentence "Reach is trying to …".
+    pub fn verify(reason: &str) -> Result<(), String> {
+        let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        let reply = RcBlock::new(move |ok: Bool, error: *mut NSError| {
+            let result = if ok.as_bool() {
+                Ok(())
+            } else {
+                // SAFETY: LocalAuthentication passes a valid NSError or null.
+                Err(unsafe { error.as_ref() }
+                    .map(|e| e.localizedDescription().to_string())
+                    .unwrap_or_else(|| "Touch ID did not confirm it is you".into()))
+            };
+            let _ = tx.send(result);
+        });
+        // SAFETY: the context lives until the reply has arrived (or the wait
+        // gave up); the reply block is copied by LocalAuthentication.
+        unsafe {
+            let context = LAContext::new();
+            context.evaluatePolicy_localizedReason_reply(
+                LAPolicy::DeviceOwnerAuthenticationWithBiometrics,
+                &NSString::from_str(reason),
+                &reply,
+            );
+            rx.recv_timeout(Duration::from_secs(120))
+                .unwrap_or_else(|_| Err("Touch ID did not answer".into()))
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod touch {
+    pub fn available() -> bool {
+        false
+    }
+
+    pub fn verify(_: &str) -> Result<(), String> {
+        Err("Touch ID is only on macOS".into())
     }
 }
 

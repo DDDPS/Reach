@@ -141,7 +141,7 @@ async fn a_device_guarded_vault_opens_only_with_its_own_key() {
     mgr.save_unlockers(&unlockers).unwrap();
 
     // Removing one key keeps the other; the last one needs the keychain.
-    assert_eq!(mgr.remove_unlocker(&yubikey_id).unwrap().as_deref(), Some(biometric::FIDO2));
+    assert_eq!(mgr.remove_unlocker(&yubikey_id).unwrap().map(|s| s.kind).as_deref(), Some(biometric::FIDO2));
     assert!(mgr.unlockers().is_some());
     if mgr.remove_unlocker(&backup_id).is_ok() {
         assert!(mgr.unlockers().is_none());
