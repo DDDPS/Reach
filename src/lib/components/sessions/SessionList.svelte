@@ -14,6 +14,7 @@
 	} from '@fortawesome/free-solid-svg-icons';
 	import { registerSessionActions, shortcutLabel } from '$lib/state/shortcuts.svelte';
 	import { onMount, tick } from 'svelte';
+	import { listen } from '@tauri-apps/api/event';
 	import SessionEditor from './SessionEditor.svelte';
 	import SshConfigImport from './SshConfigImport.svelte';
 	import SessionCard from './SessionCard.svelte';
@@ -135,7 +136,16 @@
 				showQuickConnect = true;
 			}
 		});
-		return () => registerSessionActions(null);
+		// Synced vaults list from an encrypted copy on this device that is
+		// refreshed from Turso in the background. When a refresh brings in a
+		// change, such as a session someone added to a shared vault, show it.
+		const unlistenSynced = listen<string>('vault-synced', () => {
+			void loadSessions();
+		});
+		return () => {
+			registerSessionActions(null);
+			void unlistenSynced.then((unlisten) => unlisten());
+		};
 	});
 
 	// Folders

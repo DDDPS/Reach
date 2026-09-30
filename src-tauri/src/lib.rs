@@ -1073,6 +1073,28 @@ pub fn run() {
                 tracing::info!("Tools directory added to PATH: {:?}", tools_dir);
             }
 
+            // Synced vaults open and list from an encrypted copy on this device.
+            // Refresh it from Turso once a vault unlocks and every minute after,
+            // and tell the interface when a refresh changed something (someone
+            // edited a shared vault) so it reloads what it shows.
+            {
+                let vaults = app.state::<AppState>().vault_manager.clone();
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut every_minute = tokio::time::interval(std::time::Duration::from_secs(60));
+                    every_minute.tick().await;
+                    loop {
+                        tokio::select! {
+                            _ = every_minute.tick() => {}
+                            _ = vault::cache::refresh_requested() => {}
+                        }
+                        for vault_id in vault::manager::refresh_caches(&vaults).await {
+                            let _ = tauri::Emitter::emit(&handle, "vault-synced", vault_id);
+                        }
+                    }
+                });
+            }
+
             let handle = app.handle().clone();
 
             // Clone state arcs for plugin auto-loading
