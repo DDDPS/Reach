@@ -224,6 +224,7 @@ impl CliprdrBackend for Backend {
 
 /// What is on the local clipboard, as far as the remote is concerned.
 enum Local {
+    #[cfg_attr(target_os = "android", expect(dead_code, reason = "Android's clipboard carries text only"))]
     Files(Vec<PathBuf>),
     Text(String),
     Empty,

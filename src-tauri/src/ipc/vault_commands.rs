@@ -88,8 +88,11 @@ impl Default for PromptText {
 /// which waits on the fingerprint or the key without holding a thread here.
 mod device {
     use super::PromptText;
+    #[cfg(not(target_os = "android"))]
     use crate::vault::biometric::{Seal, Unlockers};
+    #[cfg(not(target_os = "android"))]
     use tauri::AppHandle;
+    #[cfg(not(target_os = "android"))]
     use zeroize::Zeroizing;
 
     #[cfg(not(target_os = "android"))]
@@ -273,7 +276,7 @@ mod device {
                 )
                 .await?;
             let credential = BASE64.decode(&answer.credential_id).map_err(|e| e.to_string())?;
-            unlockers.seal_with_key_output(&label, &credential, &decode_32(&answer.output)?, &*secret)
+            unlockers.seal_with_key_output(&label, &credential, &*decode_32(&answer.output)?, &*secret)
         }
 
         pub async fn open_key(
@@ -294,7 +297,7 @@ mod device {
                 )
                 .await?;
             let credential = BASE64.decode(&answer.credential_id).map_err(|e| e.to_string())?;
-            unlockers.open_with_key_output(&credential, &decode_32(&answer.output)?)
+            unlockers.open_with_key_output(&credential, &*decode_32(&answer.output)?)
         }
 
         pub async fn forget(app: &AppHandle, seal: Seal) {

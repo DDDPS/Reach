@@ -48,12 +48,15 @@ fn first_line(s: &str) -> Option<String> {
 }
 
 fn silent(program: &str) -> std::process::Command {
-    let mut cmd = std::process::Command::new(program);
+    let cmd = std::process::Command::new(program);
+    // Windows alone needs the flag, so no console window flashes up.
     #[cfg(windows)]
-    {
+    let cmd = {
+        let mut cmd = cmd;
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000);
-    }
+        cmd
+    };
     cmd
 }
 
