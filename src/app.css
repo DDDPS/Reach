@@ -260,6 +260,23 @@ body {
   justify-self: end;
 }
 
+/* A phone: each setting's text takes the full width, with its control
+   underneath, instead of squeezing the text into a column a word wide. */
+@media (max-width: 640px) {
+  .settings-content .setting-row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 10px;
+  }
+
+  .settings-content .setting-control {
+    justify-content: flex-start;
+  }
+
+  .settings-content .setting-row > :not(.setting-info):not(.setting-control) {
+    justify-self: start;
+  }
+}
+
 /* Fields fill the column; buttons and toggles keep their size at its edge. */
 .settings-content .setting-control > .dropdown,
 .settings-content .setting-control > .select,

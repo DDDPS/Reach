@@ -325,6 +325,17 @@
 
 	// Vault state (TLS-style: auto-unlock, no password needed)
 	let locked = $derived(vaultState.locked);
+
+	// Unlocking from the lock screen (password, fingerprint, security key) has
+	// to bring the list back: a load that ran while the vault was locked found
+	// nothing, and the list would otherwise stay empty until something else
+	// asked it to reload.
+	let wasOpen = !vaultState.locked && !vaultState.held;
+	$effect(() => {
+		const open = !vaultState.locked && !vaultState.held;
+		if (open && !wasOpen) void loadSessions();
+		wasOpen = open;
+	});
 	let hasIdentity = $derived(vaultState.hasIdentity);
 	let keychainError = $derived(vaultState.keychainError);
 	let initializing = $state(false);
@@ -532,6 +543,7 @@
 				rows: 24,
 				shell: session.shell ?? undefined,
 				injectColors: getSettings().injectShellColors,
+				showLoginMessage: getSettings().showLoginMessage,
 				jumpChain,
 				proxy: session.proxy ? {
 					proxy_type: session.proxy.proxy_type,

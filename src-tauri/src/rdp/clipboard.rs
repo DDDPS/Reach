@@ -224,6 +224,7 @@ impl CliprdrBackend for Backend {
 
 /// What is on the local clipboard, as far as the remote is concerned.
 enum Local {
+    #[cfg_attr(target_os = "android", expect(dead_code, reason = "Android's clipboard carries text only"))]
     Files(Vec<PathBuf>),
     Text(String),
     Empty,
@@ -794,7 +795,7 @@ mod tests {
         fs::write(dir.join("a.txt"), b"hello").unwrap();
         fs::write(dir.join("sub").join("b.bin"), [0u8; 3]).unwrap();
 
-        let (descriptors, files) = describe(&[dir.clone()]);
+        let (descriptors, files) = describe(std::slice::from_ref(&dir));
         assert_eq!(descriptors.len(), files.len());
         let names: Vec<(String, Option<String>, Option<u64>)> = descriptors
             .iter()

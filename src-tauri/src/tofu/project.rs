@@ -14,6 +14,12 @@ pub struct TofuProjectManager {
     loaded: bool,
 }
 
+impl Default for TofuProjectManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TofuProjectManager {
     pub fn new() -> Self {
         Self {

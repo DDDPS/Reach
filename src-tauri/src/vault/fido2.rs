@@ -29,7 +29,7 @@ pub fn supported() -> bool {
 
 /// Whether Reach must ask for the key's PIN itself (Windows asks on its own).
 pub const fn asks_pin_itself() -> bool {
-    cfg!(any(target_os = "macos", target_os = "linux"))
+    cfg!(any(target_os = "macos", target_os = "linux", target_os = "android"))
 }
 
 /// Register a credential for Reach on a key, and return its ID. Blocking;
@@ -67,6 +67,8 @@ mod platform {
     const MIN_API: u32 = 4;
     const TIMEOUT_MS: u32 = 120_000;
 
+    /// What GetProcAddress hands back, before it is cast to its signature.
+    type Export = unsafe extern "system" fn() -> isize;
     type GetApiVersion = unsafe extern "system" fn() -> u32;
     type MakeCredential = unsafe extern "system" fn(
         HWND,
@@ -104,13 +106,21 @@ mod platform {
             unsafe {
                 let dll = LoadLibraryExW(w!("webauthn.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).ok()?;
                 let get = |name: windows::core::PCSTR| GetProcAddress(dll, name);
-                let version: GetApiVersion = std::mem::transmute(get(windows::core::s!("WebAuthNGetApiVersionNumber"))?);
+                let version = std::mem::transmute::<Export, GetApiVersion>(get(windows::core::s!("WebAuthNGetApiVersionNumber"))?);
                 Some(Api {
                     version: version(),
-                    make_credential: std::mem::transmute(get(windows::core::s!("WebAuthNAuthenticatorMakeCredential"))?),
-                    get_assertion: std::mem::transmute(get(windows::core::s!("WebAuthNAuthenticatorGetAssertion"))?),
-                    free_attestation: std::mem::transmute(get(windows::core::s!("WebAuthNFreeCredentialAttestation"))?),
-                    free_assertion: std::mem::transmute(get(windows::core::s!("WebAuthNFreeAssertion"))?),
+                    make_credential: std::mem::transmute::<Export, MakeCredential>(get(windows::core::s!(
+                        "WebAuthNAuthenticatorMakeCredential"
+                    ))?),
+                    get_assertion: std::mem::transmute::<Export, GetAssertion>(get(windows::core::s!(
+                        "WebAuthNAuthenticatorGetAssertion"
+                    ))?),
+                    free_attestation: std::mem::transmute::<Export, FreeAttestation>(get(windows::core::s!(
+                        "WebAuthNFreeCredentialAttestation"
+                    ))?),
+                    free_assertion: std::mem::transmute::<Export, FreeAssertion>(get(windows::core::s!(
+                        "WebAuthNFreeAssertion"
+                    ))?),
                 })
             }
         })
@@ -415,11 +425,16 @@ mod platform {
     }
 }
 
+/// Android reaches security keys through Reach's Kotlin plugin (see
+/// `ipc::vault_commands`), not through these calls.
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod platform {
     use zeroize::Zeroizing;
 
     pub fn supported() -> bool {
+        // The Android plugin can already do it (keyMakeCredential and
+        // keyHmacSecret), but nobody has run it with a real phone and key
+        // yet, so it is not offered until someone has.
         false
     }
 

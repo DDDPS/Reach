@@ -4,11 +4,14 @@ use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 fn silent_async_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new(program);
+    let cmd = tokio::process::Command::new(program);
+    // Windows alone needs the flag, so no console window flashes up.
     #[cfg(windows)]
-    {
+    let cmd = {
+        let mut cmd = cmd;
         cmd.creation_flags(0x08000000);
-    }
+        cmd
+    };
     cmd
 }
 

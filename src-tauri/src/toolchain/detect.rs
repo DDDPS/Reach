@@ -3,12 +3,15 @@ use std::process::Command;
 
 /// Create a Command that hides the console window on Windows.
 fn silent_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
-    let mut cmd = Command::new(program);
+    let cmd = Command::new(program);
+    // Windows alone needs the flag, so no console window flashes up.
     #[cfg(windows)]
-    {
+    let cmd = {
+        let mut cmd = cmd;
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
+        cmd
+    };
     cmd
 }
 

@@ -1678,5 +1678,14 @@
   "security.keys_remove": "Удалить",
   "security.keys_name_placeholder": "Название, например YubiKey 5C",
   "security.keys_default_name": "Ключ безопасности",
-  "security.keys_touch_twice": "Коснитесь ключа, когда он замигает. Он спросит дважды: чтобы добавить Reach и чтобы запечатать ключ хранилища."
+  "security.keys_touch_twice": "Коснитесь ключа, когда он замигает. Он спросит дважды: чтобы добавить Reach и чтобы запечатать ключ хранилища.",
+  "lock.fingerprint": "отпечаток пальца",
+  "rdp.keyboard": "Клавиатура",
+  "keys.extra": "Дополнительные клавиши",
+  "keys.left": "Влево",
+  "keys.up": "Вверх",
+  "keys.down": "Вниз",
+  "keys.right": "Вправо",
+  "settings.login_message": "Показывать сообщение при входе",
+  "settings.login_message_desc": "Оставлять на экране приветствие сервера (MOTD, последний вход, состояние системы) после подключения, как в других SSH-клиентах."
 }

@@ -1678,5 +1678,14 @@
   "security.keys_remove": "Remove",
   "security.keys_name_placeholder": "Name, e.g. YubiKey 5C",
   "security.keys_default_name": "Security key",
-  "security.keys_touch_twice": "Touch the key when it blinks. It asks twice: once to add Reach, once to seal the vault key."
+  "security.keys_touch_twice": "Touch the key when it blinks. It asks twice: once to add Reach, once to seal the vault key.",
+  "lock.fingerprint": "fingerprint",
+  "rdp.keyboard": "Keyboard",
+  "keys.extra": "Extra keys",
+  "keys.left": "Left",
+  "keys.up": "Up",
+  "keys.down": "Down",
+  "keys.right": "Right",
+  "settings.login_message": "Show the login message",
+  "settings.login_message_desc": "Keep the server's welcome message (MOTD, last login, system status) on screen after connecting, as other SSH clients do."
 }

@@ -94,7 +94,7 @@ pub fn installed_versions() -> Vec<String> {
             .collect(),
         Err(_) => Vec::new(),
     };
-    out.sort_by(|a, b| version_key(b).cmp(&version_key(a)));
+    out.sort_by_cached_key(|v| std::cmp::Reverse(version_key(v)));
     out
 }
 
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn versions_order_newest_first_and_prereleases_last() {
         let mut v = vec!["1.9.0", "1.11.4", "1.11.0-beta1", "1.10.10", "1.11.10"];
-        v.sort_by(|a, b| version_key(b).cmp(&version_key(a)));
+        v.sort_by_cached_key(|v| std::cmp::Reverse(version_key(v)));
         assert_eq!(v, vec!["1.11.10", "1.11.4", "1.11.0-beta1", "1.10.10", "1.9.0"]);
     }
 

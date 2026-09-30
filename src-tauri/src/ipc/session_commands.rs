@@ -116,6 +116,7 @@ pub async fn session_get(
 /// Otherwise stores in __sessions__ (private).
 #[tauri::command]
 #[tracing::instrument(skip(state))]
+#[expect(clippy::too_many_arguments, reason = "a Tauri command takes each argument from the frontend's invoke by name")]
 pub async fn session_create(
     state: State<'_, AppState>,
     name: String,
@@ -453,7 +454,7 @@ async fn find_session_vault(manager: &crate::vault::VaultManager, session_id: &s
 }
 
 /// Share a session with another user via X25519 key re-wrap.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 #[tracing::instrument(skip(state, recipient_public_key))]
 pub async fn session_share(
     state: State<'_, AppState>,

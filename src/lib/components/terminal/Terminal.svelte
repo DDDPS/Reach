@@ -14,7 +14,7 @@
 	import { countPasteLines, shouldWarnOnPaste } from '$lib/terminal/paste';
 	import { shouldRearmIme, nudgeCaret, REARM_SETTLE_MS } from '$lib/terminal/ime';
 	import { installWebkitInputFix } from '$lib/terminal/webkit-input-fix';
-	import { isWebKit } from '$lib/platform';
+	import { isMobile, isWebKit } from '$lib/platform';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { invoke } from '@tauri-apps/api/core';
 	import { trieMatch } from '$lib/state/snippets.svelte';
@@ -22,6 +22,7 @@
 	import { readText as clipboardReadText, writeText as clipboardWriteText } from '@tauri-apps/plugin-clipboard-manager';
 	import { open as shellOpen } from '@tauri-apps/plugin-shell';
 	import Modal from '$lib/components/shared/Modal.svelte';
+	import MobileKeyBar, { type BarKey } from '$lib/components/shared/MobileKeyBar.svelte';
 	import Button from '$lib/components/shared/Button.svelte';
 
 	interface Props {
@@ -51,6 +52,61 @@
 
 	let containerEl: HTMLDivElement | undefined = $state();
 	let terminal: Terminal | undefined = $state();
+
+	// A phone: the extra-keys bar, and the sticky Ctrl and Alt it holds.
+	const onPhone = isMobile();
+	let barCtrl = $state(false);
+	let barAlt = $state(false);
+
+	/** Apply a sticky Ctrl or Alt from the key bar to text the phone keyboard
+	 *  typed, then let go of them: they apply to one key, as on Termux. */
+	function applyBarModifiers(data: string): string {
+		if (!barCtrl && !barAlt) return data;
+		let out = data;
+		if (barCtrl && data.length === 1) {
+			const c = data.toLowerCase().charCodeAt(0);
+			if (c >= 97 && c <= 122) out = String.fromCharCode(c - 96);
+			else if (data === ' ' || data === '@') out = '\x00';
+			else if ('[\\]^_'.includes(data)) out = String.fromCharCode(data.charCodeAt(0) & 0x1f);
+			else if (data === '?') out = '\x7f';
+		}
+		if (barAlt) out = '\x1b' + out;
+		barCtrl = false;
+		barAlt = false;
+		return out;
+	}
+
+	/** A key from the bar, as the bytes a real keyboard's key would send. */
+	function onBarKey(key: BarKey): void {
+		const appCursor = terminal?.modes.applicationCursorKeysMode ?? false;
+		// xterm's modifier parameter: 3 is Alt, 5 is Ctrl, 7 is both.
+		const mod = (barAlt ? 2 : 0) + (barCtrl ? 4 : 0);
+		const cursor = (letter: string): string =>
+			mod ? `\x1b[1;${mod + 1}${letter}` : appCursor ? `\x1bO${letter}` : `\x1b[${letter}`;
+		const tilde = (n: number): string => (mod ? `\x1b[${n};${mod + 1}~` : `\x1b[${n}~`);
+		let seq: string;
+		if (typeof key === 'object') {
+			seq = applyBarModifiers(key.char);
+		} else {
+			switch (key) {
+				case 'esc': seq = '\x1b'; break;
+				case 'tab': seq = barAlt ? '\x1b\t' : '\t'; break;
+				case 'up': seq = cursor('A'); break;
+				case 'down': seq = cursor('B'); break;
+				case 'right': seq = cursor('C'); break;
+				case 'left': seq = cursor('D'); break;
+				case 'home': seq = cursor('H'); break;
+				case 'end': seq = cursor('F'); break;
+				case 'pgup': seq = tilde(5); break;
+				case 'pgdn': seq = tilde(6); break;
+				default: return;
+			}
+			barCtrl = false;
+			barAlt = false;
+		}
+		sendData(Array.from(new TextEncoder().encode(seq)));
+		terminal?.focus();
+	}
 	let fitAddon: FitAddon | undefined = $state();
 
 	// Pending multiline paste awaiting user confirmation (guards against
@@ -424,6 +480,7 @@
 		disposeWebkitInputFix = installWebkitInputFix(term);
 
 		term.onData((data: string) => {
+			data = applyBarModifiers(data);
 			// Track input buffer for snippet autocomplete
 			if (data === '\r' || data === '\n') {
 				inputBuffer = '';
@@ -780,9 +837,12 @@
 
 <div
 	class="terminal-wrapper"
-	style:display={active ? 'block' : 'none'}
+	style:display={active ? 'flex' : 'none'}
 >
 	<div bind:this={containerEl} class="terminal-container"></div>
+	{#if onPhone && !disconnected}
+		<MobileKeyBar bind:ctrl={barCtrl} bind:alt={barAlt} onkey={onBarKey} />
+	{/if}
 	{#if disconnected && termType === 'ssh'}
 		<div class="reconnect-overlay">
 			<div class="reconnect-card">
@@ -862,15 +922,18 @@
 	}
 
 	.terminal-wrapper {
+		flex-direction: column;
 		width: 100%;
 		height: 100%;
 		background: var(--bg-primary, var(--color-bg-primary));
 		position: relative;
 	}
 
+	/* Takes what the key bar leaves, on a phone; all of it elsewhere. */
 	.terminal-container {
 		width: 100%;
-		height: 100%;
+		flex: 1;
+		min-height: 0;
 	}
 
 

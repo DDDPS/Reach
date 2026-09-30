@@ -54,57 +54,304 @@ pub async fn vault_resume(state: State<'_, AppState>) -> Result<bool, String> {
     manager.resume().await.map_err(|e| e.to_string())
 }
 
-/// The device unlock methods: Windows Hello (where offered) and security
-/// keys, and which of them are on.
+/// The device unlock methods: the platform biometric (Windows Hello, Touch ID,
+/// Android's fingerprint) and security keys, and which of them are on.
 #[derive(serde::Serialize)]
 pub struct UnlockMethods {
-    hello_offered: bool,
-    hello_available: bool,
+    /// The platform biometric this build offers, if any.
+    platform: Option<&'static str>,
+    platform_available: bool,
     keys_supported: bool,
-    /// Reach asks for the key's PIN itself (macOS, Linux); Windows asks.
+    /// Reach asks for the key's PIN itself (macOS, Linux, Android); Windows asks.
     keys_ask_pin: bool,
     methods: Vec<biometric::SealInfo>,
 }
 
+/// What Android's fingerprint prompt says, in the user's language. The
+/// desktop prompts are the system's own and ignore it.
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct PromptText {
+    title: String,
+    #[serde(default)]
+    subtitle: Option<String>,
+    cancel: String,
+}
+
+impl Default for PromptText {
+    fn default() -> Self {
+        PromptText { title: "Reach".into(), subtitle: None, cancel: "Cancel".into() }
+    }
+}
+
+/// Where each device method's key comes from. On desktop, Reach's own code on
+/// a blocking thread; on Android, the Kotlin plugin (tauri-plugin-reach-unlock),
+/// which waits on the fingerprint or the key without holding a thread here.
+mod device {
+    use super::PromptText;
+    #[cfg(not(target_os = "android"))]
+    use crate::vault::biometric::{Seal, Unlockers};
+    #[cfg(not(target_os = "android"))]
+    use tauri::AppHandle;
+    #[cfg(not(target_os = "android"))]
+    use zeroize::Zeroizing;
+
+    #[cfg(not(target_os = "android"))]
+    async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+        tokio::task::spawn_blocking(work).await.map_err(|e| e.to_string())?
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub async fn platform_available(_app: &AppHandle) -> bool {
+        blocking(|| Ok(crate::vault::biometric::platform_available())).await.unwrap_or(false)
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub async fn seal_biometric(
+        _app: &AppHandle,
+        unlockers: Unlockers,
+        secret: Zeroizing<[u8; 32]>,
+        _prompt: PromptText,
+    ) -> Result<Seal, String> {
+        blocking(move || unlockers.seal_with_platform(&*secret)).await
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub async fn open_biometric(_app: &AppHandle, unlockers: Unlockers, _prompt: PromptText) -> Result<Zeroizing<Vec<u8>>, String> {
+        blocking(move || unlockers.open_with_platform()).await
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub async fn seal_key(
+        _app: &AppHandle,
+        unlockers: Unlockers,
+        label: String,
+        secret: Zeroizing<[u8; 32]>,
+        pin: Option<Zeroizing<String>>,
+    ) -> Result<Seal, String> {
+        blocking(move || unlockers.seal_with_key(&label, &*secret, pin.as_deref().map(|p| p.as_str()))).await
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub async fn open_key(
+        _app: &AppHandle,
+        unlockers: Unlockers,
+        pin: Option<Zeroizing<String>>,
+    ) -> Result<Zeroizing<Vec<u8>>, String> {
+        blocking(move || unlockers.open_with_key(pin.as_deref().map(|p| p.as_str()))).await
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub async fn forget(_app: &AppHandle, seal: Seal) {
+        let _ = blocking(move || {
+            crate::vault::biometric::forget(&seal);
+            Ok(())
+        })
+        .await;
+    }
+
+    #[cfg(target_os = "android")]
+    mod android {
+        use super::PromptText;
+        use crate::vault::biometric::{Seal, Unlockers, ANDROID_BIOMETRIC, ANDROID_KEY_ALIAS};
+        use crate::vault::fido2::RP_ID;
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        use serde::Deserialize;
+        use serde_json::json;
+        use tauri::{AppHandle, Manager};
+        use tauri_plugin_reach_unlock::Unlock;
+        use zeroize::Zeroizing;
+
+        fn plugin(app: &AppHandle) -> tauri::State<'_, Unlock<tauri::Wry>> {
+            app.state::<Unlock<tauri::Wry>>()
+        }
+
+        fn decode_32(text: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+            let bytes = Zeroizing::new(BASE64.decode(text).map_err(|e| e.to_string())?);
+            let mut out = Zeroizing::new([0u8; 32]);
+            if bytes.len() != 32 {
+                return Err("The security key's answer has the wrong length".into());
+            }
+            out.copy_from_slice(&bytes);
+            Ok(out)
+        }
+
+        #[derive(Deserialize)]
+        struct Status {
+            available: bool,
+        }
+
+        #[derive(Deserialize)]
+        struct Sealed {
+            iv: String,
+            ciphertext: String,
+        }
+
+        #[derive(Deserialize)]
+        struct Opened {
+            secret: String,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Credential {
+            credential_id: String,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct KeyOutput {
+            credential_id: String,
+            output: String,
+        }
+
+        pub async fn platform_available(app: &AppHandle) -> bool {
+            plugin(app)
+                .call::<Status>("biometricStatus", json!({}))
+                .await
+                .map(|s| s.available)
+                .unwrap_or(false)
+        }
+
+        pub async fn seal_biometric(
+            app: &AppHandle,
+            unlockers: Unlockers,
+            secret: Zeroizing<[u8; 32]>,
+            prompt: PromptText,
+        ) -> Result<Seal, String> {
+            let payload = json!({
+                "alias": ANDROID_KEY_ALIAS,
+                "secret": BASE64.encode(*secret),
+                "title": prompt.title,
+                "subtitle": prompt.subtitle,
+                "cancel": prompt.cancel,
+            });
+            let sealed: Sealed = plugin(app).call("biometricSeal", payload).await?;
+            Ok(unlockers.android_seal(&sealed.iv, &sealed.ciphertext))
+        }
+
+        pub async fn open_biometric(app: &AppHandle, unlockers: Unlockers, prompt: PromptText) -> Result<Zeroizing<Vec<u8>>, String> {
+            let (iv, ciphertext) = unlockers.android_sealed().ok_or("Fingerprint unlock is not turned on")?;
+            let payload = json!({
+                "alias": ANDROID_KEY_ALIAS,
+                "iv": iv,
+                "ciphertext": ciphertext,
+                "title": prompt.title,
+                "subtitle": prompt.subtitle,
+                "cancel": prompt.cancel,
+            });
+            let opened: Opened = plugin(app).call("biometricOpen", payload).await?;
+            Ok(Zeroizing::new(BASE64.decode(&opened.secret).map_err(|e| e.to_string())?))
+        }
+
+        pub async fn seal_key(
+            app: &AppHandle,
+            unlockers: Unlockers,
+            label: String,
+            secret: Zeroizing<[u8; 32]>,
+            pin: Option<Zeroizing<String>>,
+        ) -> Result<Seal, String> {
+            let (existing, salt) = unlockers.key_request()?;
+            let pin = pin.as_deref().map(|p| p.as_str());
+            let made: Credential = plugin(app)
+                .call(
+                    "keyMakeCredential",
+                    json!({
+                        "rpId": RP_ID,
+                        "userId": BASE64.encode(unlockers.user_uuid.as_bytes()),
+                        "label": label,
+                        "pin": pin,
+                        "exclude": existing.iter().map(|id| BASE64.encode(id)).collect::<Vec<_>>(),
+                    }),
+                )
+                .await?;
+            let answer: KeyOutput = plugin(app)
+                .call(
+                    "keyHmacSecret",
+                    json!({
+                        "rpId": RP_ID,
+                        "credentialIds": [made.credential_id],
+                        "salt": BASE64.encode(salt),
+                        "pin": pin,
+                    }),
+                )
+                .await?;
+            let credential = BASE64.decode(&answer.credential_id).map_err(|e| e.to_string())?;
+            unlockers.seal_with_key_output(&label, &credential, &*decode_32(&answer.output)?, &*secret)
+        }
+
+        pub async fn open_key(
+            app: &AppHandle,
+            unlockers: Unlockers,
+            pin: Option<Zeroizing<String>>,
+        ) -> Result<Zeroizing<Vec<u8>>, String> {
+            let (existing, salt) = unlockers.key_request()?;
+            let answer: KeyOutput = plugin(app)
+                .call(
+                    "keyHmacSecret",
+                    json!({
+                        "rpId": RP_ID,
+                        "credentialIds": existing.iter().map(|id| BASE64.encode(id)).collect::<Vec<_>>(),
+                        "salt": BASE64.encode(salt),
+                        "pin": pin.as_deref().map(|p| p.as_str()),
+                    }),
+                )
+                .await?;
+            let credential = BASE64.decode(&answer.credential_id).map_err(|e| e.to_string())?;
+            unlockers.open_with_key_output(&credential, &*decode_32(&answer.output)?)
+        }
+
+        pub async fn forget(app: &AppHandle, seal: Seal) {
+            if seal.kind == ANDROID_BIOMETRIC {
+                let _ = plugin(app).call::<serde_json::Value>("biometricForget", json!({ "alias": ANDROID_KEY_ALIAS })).await;
+            }
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    pub use android::*;
+}
+
 #[tauri::command]
-#[tracing::instrument(skip(state))]
-pub async fn vault_unlock_methods(state: State<'_, AppState>) -> Result<UnlockMethods, String> {
+#[tracing::instrument(skip(state, app))]
+pub async fn vault_unlock_methods(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<UnlockMethods, String> {
     let methods = state.vault_manager.lock().await.unlockers().map(|u| u.list()).unwrap_or_default();
-    let hello_offered = biometric::hello_offered();
-    let hello_available = hello_offered && tokio::task::spawn_blocking(biometric::hello_available).await.unwrap_or(false);
+    let platform = biometric::platform_method();
+    let platform_available = platform.is_some() && device::platform_available(&app).await;
     Ok(UnlockMethods {
-        hello_offered,
-        hello_available,
+        platform,
+        platform_available,
         keys_supported: fido2::supported(),
         keys_ask_pin: fido2::asks_pin_itself(),
         methods,
     })
 }
 
-/// Turn Windows Hello unlock on. The vault must be open and a master password
-/// set. The manager is not held while the system prompt is up.
+/// Turn the platform biometric (Windows Hello, Touch ID, Android's
+/// fingerprint) on. The vault must be open and a master password set. The
+/// manager is not held while the system prompt is up.
 #[tauri::command]
-#[tracing::instrument(skip(state))]
-pub async fn vault_hello_enable(state: State<'_, AppState>) -> Result<(), String> {
+#[tracing::instrument(skip(state, app, prompt))]
+pub async fn vault_biometric_enable(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    prompt: Option<PromptText>,
+) -> Result<(), String> {
     let (mut unlockers, secret) = state.vault_manager.lock().await.unlock_enrolment().await.map_err(|e| e.to_string())?;
-    let unlockers = tokio::task::spawn_blocking(move || {
-        let seal = unlockers.seal_with_hello(&*secret)?;
-        unlockers.add(seal);
-        Ok::<_, String>(unlockers)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let seal = device::seal_biometric(&app, unlockers.clone(), secret, prompt.unwrap_or_default()).await?;
+    unlockers.add(seal);
     state.vault_manager.lock().await.save_unlockers(&unlockers).map_err(|e| e.to_string())
 }
 
-/// Open the vault with Windows Hello.
+/// Open the vault with the platform biometric.
 #[tauri::command]
-#[tracing::instrument(skip(state))]
-pub async fn vault_hello_unlock(state: State<'_, AppState>) -> Result<bool, String> {
-    let unlockers = state.vault_manager.lock().await.unlockers().ok_or("Windows Hello is not turned on")?;
-    let secret = tokio::task::spawn_blocking(move || unlockers.open_with_hello())
-        .await
-        .map_err(|e| e.to_string())??;
+#[tracing::instrument(skip(state, app, prompt))]
+pub async fn vault_biometric_unlock(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    prompt: Option<PromptText>,
+) -> Result<bool, String> {
+    let unlockers = state.vault_manager.lock().await.unlockers().ok_or("Biometric unlock is not turned on")?;
+    let secret = device::open_biometric(&app, unlockers, prompt.unwrap_or_default()).await?;
     let mut manager = state.vault_manager.lock().await;
     manager.unlock_with_device(&secret).await.map_err(|e| e.to_string())
 }
@@ -112,33 +359,35 @@ pub async fn vault_hello_unlock(state: State<'_, AppState>) -> Result<bool, Stri
 /// Add a security key. The user touches it twice (and gives its PIN): once
 /// to add Reach's credential to it, once for the secret that seals the key.
 #[tauri::command]
-#[tracing::instrument(skip(state, pin))]
-pub async fn vault_security_key_add(state: State<'_, AppState>, label: String, pin: Option<String>) -> Result<(), String> {
+#[tracing::instrument(skip(state, app, pin))]
+pub async fn vault_security_key_add(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    label: String,
+    pin: Option<String>,
+) -> Result<(), String> {
     let label = match label.trim() {
         "" => "Security key".to_string(),
         l => l.chars().take(64).collect(),
     };
     let pin = pin.map(zeroize::Zeroizing::new);
     let (mut unlockers, secret) = state.vault_manager.lock().await.unlock_enrolment().await.map_err(|e| e.to_string())?;
-    let unlockers = tokio::task::spawn_blocking(move || {
-        let seal = unlockers.seal_with_key(&label, &*secret, pin.as_deref().map(|p| p.as_str()))?;
-        unlockers.add(seal);
-        Ok::<_, String>(unlockers)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let seal = device::seal_key(&app, unlockers.clone(), label, secret, pin).await?;
+    unlockers.add(seal);
     state.vault_manager.lock().await.save_unlockers(&unlockers).map_err(|e| e.to_string())
 }
 
 /// Open the vault with whichever added security key is plugged in.
 #[tauri::command]
-#[tracing::instrument(skip(state, pin))]
-pub async fn vault_security_key_unlock(state: State<'_, AppState>, pin: Option<String>) -> Result<bool, String> {
+#[tracing::instrument(skip(state, app, pin))]
+pub async fn vault_security_key_unlock(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    pin: Option<String>,
+) -> Result<bool, String> {
     let pin = pin.map(zeroize::Zeroizing::new);
     let unlockers = state.vault_manager.lock().await.unlockers().ok_or("No security key has been added")?;
-    let secret = tokio::task::spawn_blocking(move || unlockers.open_with_key(pin.as_deref().map(|p| p.as_str())))
-        .await
-        .map_err(|e| e.to_string())??;
+    let secret = device::open_key(&app, unlockers, pin).await?;
     let mut manager = state.vault_manager.lock().await;
     manager.unlock_with_device(&secret).await.map_err(|e| e.to_string())
 }
@@ -146,11 +395,11 @@ pub async fn vault_security_key_unlock(state: State<'_, AppState>, pin: Option<S
 /// Remove an unlock method. Removing the last one puts the key back in the
 /// keychain, so Reach opens by itself at start-up again.
 #[tauri::command]
-#[tracing::instrument(skip(state))]
-pub async fn vault_unlock_method_remove(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let kind = state.vault_manager.lock().await.remove_unlocker(&id).map_err(|e| e.to_string())?;
-    if kind.as_deref() == Some(biometric::WINDOWS_HELLO) {
-        tokio::task::spawn_blocking(biometric::hello_forget).await.map_err(|e| e.to_string())?;
+#[tracing::instrument(skip(state, app))]
+pub async fn vault_unlock_method_remove(app: tauri::AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let removed = state.vault_manager.lock().await.remove_unlocker(&id).map_err(|e| e.to_string())?;
+    if let Some(seal) = removed {
+        device::forget(&app, seal).await;
     }
     Ok(())
 }
@@ -196,7 +445,7 @@ pub async fn vault_export_identity(state: State<'_, AppState>) -> Result<String,
 }
 
 /// Import identity from backup (for new device).
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 #[tracing::instrument(skip(state, secret_key))]
 pub async fn vault_import_identity(
     secret_key: String,
@@ -639,48 +888,101 @@ pub async fn turso_create_database_token(
 
 use crate::vault::export::BackupPreview;
 
+/// A file the user picked in the system's file dialog. On desktop that is a
+/// path. On Android the picker hands back a `content://` link, which is not a
+/// path the app may open: it is read and written through the ContentResolver,
+/// in Reach's Android plugin.
+mod picked_file {
+    use tauri::AppHandle;
+
+    #[cfg(target_os = "android")]
+    fn is_link(path: &str) -> bool {
+        path.starts_with("content://")
+    }
+
+    pub async fn read(_app: &AppHandle, path: &str) -> Result<Vec<u8>, String> {
+        #[cfg(target_os = "android")]
+        if is_link(path) {
+            use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+            use tauri::Manager;
+            #[derive(serde::Deserialize)]
+            struct Read {
+                data: String,
+            }
+            let read: Read = _app
+                .state::<tauri_plugin_reach_unlock::Unlock<tauri::Wry>>()
+                .call("readUri", serde_json::json!({ "uri": path }))
+                .await?;
+            return BASE64.decode(read.data).map_err(|e| e.to_string());
+        }
+        tokio::fs::read(path).await.map_err(|e| format!("Cannot read {path}: {e}"))
+    }
+
+    pub async fn write(_app: &AppHandle, path: &str, bytes: &[u8]) -> Result<(), String> {
+        #[cfg(target_os = "android")]
+        if is_link(path) {
+            use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+            use tauri::Manager;
+            return _app
+                .state::<tauri_plugin_reach_unlock::Unlock<tauri::Wry>>()
+                .call::<serde_json::Value>("writeUri", serde_json::json!({ "uri": path, "data": BASE64.encode(bytes) }))
+                .await
+                .map(|_| ());
+        }
+        tokio::fs::write(path, bytes).await.map_err(|e| format!("Cannot write {path}: {e}"))
+    }
+}
+
 /// Export a full encrypted backup to a file.
 #[tauri::command(rename_all = "snake_case")]
-#[tracing::instrument(skip(state, export_password))]
+#[tracing::instrument(skip(app, state, export_password))]
 pub async fn vault_export_backup(
+    app: tauri::AppHandle,
     export_password: String,
     file_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let manager = state.vault_manager.lock().await;
-    manager
-        .export_full_backup(&export_password, &file_path)
+    let sealed = state
+        .vault_manager
+        .lock()
         .await
-        .map_err(|e| e.to_string())
+        .export_full_backup(&export_password)
+        .await
+        .map_err(|e| e.to_string())?;
+    picked_file::write(&app, &file_path, &sealed).await
 }
 
 /// Preview a backup file (validate and return metadata).
 #[tauri::command(rename_all = "snake_case")]
-#[tracing::instrument(skip(state, export_password))]
+#[tracing::instrument(skip(app, state, export_password))]
 pub async fn vault_preview_backup(
+    app: tauri::AppHandle,
     file_path: String,
     export_password: String,
     state: State<'_, AppState>,
 ) -> Result<BackupPreview, String> {
+    let data = picked_file::read(&app, &file_path).await?;
     let manager = state.vault_manager.lock().await;
     manager
-        .preview_backup(&file_path, &export_password)
+        .preview_backup(&data, &export_password)
         .await
         .map_err(|e| e.to_string())
 }
 
 /// Import a full encrypted backup from a file.
 #[tauri::command(rename_all = "snake_case")]
-#[tracing::instrument(skip(state, export_password, master_password))]
+#[tracing::instrument(skip(app, state, export_password, master_password))]
 pub async fn vault_import_backup(
+    app: tauri::AppHandle,
     file_path: String,
     export_password: String,
     master_password: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    let data = picked_file::read(&app, &file_path).await?;
     let mut manager = state.vault_manager.lock().await;
     manager
-        .import_full_backup(&file_path, &export_password, &master_password)
+        .import_full_backup(&data, &export_password, &master_password)
         .await
         .map_err(|e| e.to_string())
 }

@@ -36,6 +36,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'x86_64-apple-darwin' || '' }}
+          components: clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -59,6 +60,12 @@ jobs:
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --lib
+
+      # Each platform compiles its own code (Windows Hello, Touch ID, USB
+      # security keys), so each one is linted: no warning gets merged.
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --lib --tests -- -D warnings
 
       # The runner is Apple silicon; Intel Macs get their own release build.
       - name: Build for Intel Macs
@@ -183,7 +190,11 @@ jobs:
         run: npm ci
 
       - name: Initialize Android project
-        run: npx tauri android init
+        run: |
+          npx tauri android init
+          # init generates the project with Tauri's placeholder icon; Reach's
+          # launcher icons (adaptive included) replace it.
+          cp -r src-tauri/icons/android/. src-tauri/gen/android/app/src/main/res/
 
       - name: Make a throwaway signing key
         run: keytool -genkeypair -keystore "$RUNNER_TEMP/check.keystore" -alias reach -keyalg RSA -keysize 2048 -validity 1 -storepass checkcheck -keypass checkcheck -dname "CN=Build check"

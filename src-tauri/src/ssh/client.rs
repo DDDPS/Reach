@@ -136,9 +136,17 @@ const POSIX_COLOR_INIT: &str = concat!(
     // no binary, and being last it wipes its own echo along with every other
     // line above, so the user lands on a clean screen with one prompt on it.
     "clear 2>/dev/null\n",
-    r#"printf '\033[H\033[2J' 2>/dev/null"#,
+    // The same line prints INIT_DONE right after its clear, so Reach knows
+    // where the init's output ends without typing another line (which would
+    // be echoed onto the clean screen).
+    r#"printf '\033[H\033[2J\033]7776;reach-init\007' 2>/dev/null"#,
     "\n",
 );
+
+/// What the init prints the moment its clear is done: an OSC sequence no
+/// terminal acts on, taken out of the output before it is shown. The
+/// server's login message is drawn again in its place (see `LoginFlow`).
+const INIT_DONE: &str = "\x1b]7776;reach-init\x07";
 
 /// The largest line we will ever type into a remote shell. BusyBox's smallest
 /// configurable input buffer is 128 bytes and it reserves two, so 126 is the
@@ -180,7 +188,7 @@ fn shell_init(shell: Option<&str>) -> Option<String> {
         ShellFamily::Posix => Some(POSIX_COLOR_INIT.to_string()),
         // Valid fish: avoids the bash-isms (`export`, `$(...)`, `if…then…fi`)
         // that make fish throw a syntax error on every connect.
-        ShellFamily::Fish => Some("set -gx COLORTERM truecolor; clear\n".to_string()),
+        ShellFamily::Fish => Some("set -gx COLORTERM truecolor; clear; printf '\\e]7776;reach-init\\a'\n".to_string()),
         ShellFamily::Other => None,
     }
 }
@@ -517,6 +525,122 @@ pub enum SshError {
     SendError(String),
 }
 
+/// What happens in the shell right after login.
+#[derive(Clone, Copy, Debug)]
+pub struct LoginOptions {
+    /// Type the color and prompt init into the shell (Settings → Appearance).
+    pub inject_colors: bool,
+    /// Keep the server's login message (MOTD, "Last login") on screen. The
+    /// init ends with a clear that used to wipe it (issue #76).
+    pub show_login_message: bool,
+}
+
+/// Getting the server's login message past the init's clear. The init is
+/// typed only once the server has gone quiet after login, so everything
+/// printed before it is the message (MOTD, "Last login") and the first
+/// prompt. The init's last line clears the screen and prints `INIT_DONE`;
+/// that marker is replaced with the message, so it ends up above the prompt
+/// the shell prints next, where PuTTY and ssh leave it.
+struct LoginFlow {
+    /// The init, until it is typed.
+    init: Option<String>,
+    /// What the server printed before the init was typed.
+    captured: String,
+    started: std::time::Instant,
+    last_output: Option<std::time::Instant>,
+    /// When the init was typed; the marker is looked for after that.
+    typed_at: Option<std::time::Instant>,
+    /// The end of an output chunk that might be the start of the marker.
+    held: String,
+    done: bool,
+}
+
+impl LoginFlow {
+    /// How long the server must be quiet before the login counts as over.
+    const QUIET: std::time::Duration = std::time::Duration::from_millis(300);
+    /// Type the init by then even if the server never stops talking.
+    const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+    /// Give up on the marker (a shell that did not run the init) by then.
+    const MARKER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    fn new(init: String, now: std::time::Instant) -> Self {
+        LoginFlow {
+            init: Some(init),
+            captured: String::new(),
+            started: now,
+            last_output: None,
+            typed_at: None,
+            held: String::new(),
+            done: false,
+        }
+    }
+
+    fn done(&self) -> bool {
+        self.done
+    }
+
+    /// Output from the server; returns what to show now.
+    fn output(&mut self, text: &str, now: std::time::Instant) -> String {
+        if self.done {
+            return text.to_string();
+        }
+        if self.init.is_some() {
+            self.captured.push_str(text);
+            self.last_output = Some(now);
+            return text.to_string();
+        }
+        let mut buf = std::mem::take(&mut self.held);
+        buf.push_str(text);
+        if let Some(at) = buf.find(INIT_DONE) {
+            self.done = true;
+            let mut out = String::with_capacity(buf.len() + self.captured.len());
+            out.push_str(&buf[..at]);
+            out.push_str(&self.message());
+            out.push_str(&buf[at + INIT_DONE.len()..]);
+            return out;
+        }
+        let keep = partial_suffix(&buf, INIT_DONE);
+        self.held = buf.split_off(buf.len() - keep);
+        buf
+    }
+
+    /// Time passing: returns the init to type once the server has gone
+    /// quiet, or output held back if the marker never came.
+    fn tick(&mut self, now: std::time::Instant) -> (Option<String>, Option<String>) {
+        if self.done {
+            return (None, None);
+        }
+        if self.init.is_some() {
+            let quiet = self.last_output.is_some_and(|t| now.duration_since(t) >= Self::QUIET);
+            if quiet || now.duration_since(self.started) >= Self::MAX_WAIT {
+                self.typed_at = Some(now);
+                return (self.init.take(), None);
+            }
+            return (None, None);
+        }
+        if self.typed_at.is_some_and(|t| now.duration_since(t) >= Self::MARKER_WAIT) {
+            self.done = true;
+            let held = std::mem::take(&mut self.held);
+            return (None, (!held.is_empty()).then_some(held));
+        }
+        (None, None)
+    }
+
+    /// The login message: what was printed before the init, up to its last
+    /// line break, which leaves out the first prompt.
+    fn message(&self) -> String {
+        match self.captured.rfind('\n') {
+            Some(end) => self.captured[..=end].to_string(),
+            None => String::new(),
+        }
+    }
+}
+
+/// The length of the longest proper start of `marker` that `buf` ends with.
+fn partial_suffix(buf: &str, marker: &str) -> usize {
+    (1..marker.len()).rev().find(|&k| buf.ends_with(&marker[..k])).unwrap_or(0)
+}
+
 enum SessionCommand {
     Data(Vec<u8>),
     Resize { cols: u32, rows: u32 },
@@ -664,6 +788,7 @@ impl SshManager {
     /// connections map — it returns the finished `ActiveConnection` for the
     /// caller to `register` under a brief lock. This keeps the slow handshake/
     /// auth off the global lock so other connections stay responsive.
+    #[expect(clippy::too_many_arguments, reason = "the connection settings ssh_connect receives, passed through as they are")]
     pub(crate) async fn connect(
         id: &str,
         host: &str,
@@ -675,7 +800,7 @@ impl SshManager {
         app_handle: tauri::AppHandle,
         proxy: Option<ProxyConfig>,
         shell: Option<String>,
-        inject_colors: bool,
+        login: LoginOptions,
     ) -> Result<ActiveConnection, SshError> {
         tracing::info!("SSH connecting to {}@{}:{}", username, host, port);
 
@@ -705,7 +830,7 @@ impl SshManager {
             username: username.to_string(),
         };
 
-        into_active_connection(channel, handle, info, shell.as_deref(), inject_colors, app_handle, Vec::new()).await
+        into_active_connection(channel, handle, info, shell.as_deref(), login, app_handle, Vec::new()).await
     }
 
     /// Connect and authenticate, directly or through a proxy. Opens no channel:
@@ -828,6 +953,7 @@ impl SshManager {
     /// Establish an SSH connection through one or more jump hosts. Like
     /// [`connect`], takes no `self` and returns the finished `ActiveConnection`
     /// for the caller to `register` under a brief lock.
+    #[expect(clippy::too_many_arguments, reason = "the connection settings ssh_connect receives, passed through as they are")]
     pub(crate) async fn connect_via_jump(
         id: &str,
         target_host: &str,
@@ -839,7 +965,7 @@ impl SshManager {
         rows: u16,
         app_handle: tauri::AppHandle,
         shell: Option<String>,
-        inject_colors: bool,
+        login: LoginOptions,
     ) -> Result<ActiveConnection, SshError> {
         tracing::info!(
             "SSH connecting to {}@{}:{} via {} jump host(s)",
@@ -886,7 +1012,7 @@ impl SshManager {
             username: target_username.to_string(),
         };
 
-        into_active_connection(channel, target_handle, info, shell.as_deref(), inject_colors, app_handle, jump_handles).await
+        into_active_connection(channel, target_handle, info, shell.as_deref(), login, app_handle, jump_handles).await
     }
 
     /// Connect and authenticate on the target through each jump host in turn.
@@ -932,8 +1058,7 @@ impl SshManager {
 
             let mut prev_shared = shared;
 
-            for i in 1..jump_chain.len() {
-                let next_jump = &jump_chain[i];
+            for next_jump in jump_chain.iter().skip(1) {
 
                 // Open direct-tcpip channel to next hop through current handle
                 let channel = {
@@ -1627,27 +1752,32 @@ async fn into_active_connection(
     handle: russh::client::Handle<SshClientHandler>,
     info: ConnectionInfo,
     shell: Option<&str>,
-    inject_colors: bool,
+    login: LoginOptions,
     app_handle: tauri::AppHandle,
     jump_handles: Vec<SharedHandle>,
 ) -> Result<ActiveConnection, SshError> {
     // Inject shell-appropriate color/prompt init (chosen per shell family so a
     // fish login never gets bash syntax), unless the user disabled it. `None`
-    // shell-family => nothing injected.
-    if inject_colors {
-        if let Some(init) = shell_init(shell) {
+    // shell-family => nothing injected. Keeping the login message means
+    // typing it later, once the server is quiet; otherwise it goes now.
+    let init = if login.inject_colors { shell_init(shell) } else { None };
+    let flow = match init {
+        Some(init) if login.show_login_message => Some(LoginFlow::new(init, std::time::Instant::now())),
+        Some(init) => {
             channel
                 .data(init.as_bytes())
                 .await
                 .map_err(|e| SshError::ChannelError(format!("Color init failed: {}", e)))?;
+            None
         }
-    }
+        None => None,
+    };
 
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let task_id = info.id.clone();
     let task_handle = app_handle.clone();
     tokio::spawn(async move {
-        ssh_session_task(channel, cmd_rx, task_id, task_handle).await;
+        ssh_session_task(channel, cmd_rx, task_id, task_handle, flow).await;
     });
 
     Ok(ActiveConnection {
@@ -1663,8 +1793,13 @@ async fn ssh_session_task(
     mut cmd_rx: mpsc::UnboundedReceiver<SessionCommand>,
     connection_id: String,
     app_handle: tauri::AppHandle,
+    mut flow: Option<LoginFlow>,
 ) {
     let data_event = format!("ssh-data-{}", connection_id);
+    // Drives the login flow while it runs: types the init once the server
+    // is quiet, and lets go of output if the init's marker never comes.
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(50));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let exit_event = format!("ssh-exit-{}", connection_id);
 
     // Remote output arrives in arbitrary packet-sized chunks, so a
@@ -1728,7 +1863,10 @@ async fn ssh_session_task(
             msg = channel.wait() => {
                 match msg {
                     Some(ChannelMsg::Data { ref data }) => {
-                        let text = out_decoder.push(data);
+                        let mut text = out_decoder.push(data);
+                        if let Some(f) = flow.as_mut() {
+                            text = f.output(&text, std::time::Instant::now());
+                        }
                         if !text.is_empty() {
                             deliver!(text);
                         }
@@ -1753,6 +1891,17 @@ async fn ssh_session_task(
                         break;
                     }
                     _ => {}
+                }
+            }
+            _ = tick.tick(), if flow.as_ref().is_some_and(|f| !f.done()) => {
+                let (init, held) = flow.as_mut().map(|f| f.tick(std::time::Instant::now())).unwrap_or_default();
+                if let Some(init) = init {
+                    if let Err(e) = channel.data(init.as_bytes()).await {
+                        tracing::error!("SSH '{}' color init failed: {}", connection_id, e);
+                    }
+                }
+                if let Some(held) = held {
+                    deliver!(held);
                 }
             }
             cmd = cmd_rx.recv() => {
@@ -2003,6 +2152,54 @@ mod shell_tests {
                 v,
                 unset
             );
+        }
+    }
+
+    #[test]
+    fn the_login_message_is_drawn_again_after_the_init_clears() {
+        let t0 = std::time::Instant::now();
+        let ms = |n| t0 + std::time::Duration::from_millis(n);
+        let mut flow = LoginFlow::new("init\n".into(), t0);
+
+        // The login message and the first prompt pass through as they come.
+        assert_eq!(flow.output("Welcome to Debian\r\nLast login: today\r\n", ms(10)), "Welcome to Debian\r\nLast login: today\r\n");
+        assert_eq!(flow.output("user@host:~$ ", ms(20)), "user@host:~$ ");
+        // Not quiet long enough yet: no init.
+        assert_eq!(flow.tick(ms(100)).0, None);
+        // Quiet: the init is typed.
+        assert_eq!(flow.tick(ms(400)).0.as_deref(), Some("init\n"));
+
+        // The init's echo, then its clear and marker split across two chunks.
+        let first = flow.output("echo of the init\x1b[H\x1b[2J\x1b]7776;rea", ms(450));
+        assert_eq!(first, "echo of the init\x1b[H\x1b[2J");
+        let second = flow.output("ch-init\x07user@host:~$ ", ms(460));
+        // The message comes back after the clear, without the first prompt;
+        // the marker itself never reaches the screen.
+        assert_eq!(second, "Welcome to Debian\r\nLast login: today\r\nuser@host:~$ ");
+        assert!(flow.done());
+        assert_eq!(flow.output("ls\r\n", ms(500)), "ls\r\n");
+    }
+
+    #[test]
+    fn a_marker_that_never_comes_lets_the_output_go() {
+        let t0 = std::time::Instant::now();
+        let ms = |n| t0 + std::time::Duration::from_millis(n);
+        let mut flow = LoginFlow::new("init\n".into(), t0);
+        // A server that says nothing: the init is typed anyway, in time.
+        assert_eq!(flow.tick(ms(3100)).0.as_deref(), Some("init\n"));
+        assert_eq!(flow.output("prompt\x1b]77", ms(3200)), "prompt");
+        let (init, held) = flow.tick(ms(9000));
+        assert_eq!(init, None);
+        assert_eq!(held.as_deref(), Some("\x1b]77"));
+        assert!(flow.done());
+    }
+
+    #[test]
+    fn the_init_prints_its_marker_last() {
+        for shell in [None, Some("fish")] {
+            let init = shell_init(shell).unwrap();
+            let last = init.lines().last().unwrap();
+            assert!(last.contains("7776;reach-init"), "{shell:?}: {last}");
         }
     }
 

@@ -71,9 +71,9 @@ fn the_seal_key_from_a_security_key_is_derived_not_raw() {
 fn hello_probe() {
     let t = std::time::Instant::now();
     println!(
-        "hello_offered={} hello_available={} fido2={} in {:?}",
-        hello_offered(),
-        hello_available(),
+        "platform={:?} available={} fido2={} in {:?}",
+        platform_method(),
+        platform_available(),
         fido2::supported(),
         t.elapsed()
     );

@@ -422,10 +422,9 @@ pub fn count_to_extract(tools: &ArchiveTools, dir: &str, archive: &str) -> Optio
                 format!("unzip -Z1 {src}")
             } else if tools.has("bsdtar") {
                 format!("bsdtar -tf {src}")
-            } else if let Some(sz) = tools.seven_zip() {
-                format!("{sz} l -ba -slt {src} | grep -c '^Path = '")
             } else {
-                return None;
+                let sz = tools.seven_zip()?;
+                format!("{sz} l -ba -slt {src} | grep -c '^Path = '")
             }
         }
     };

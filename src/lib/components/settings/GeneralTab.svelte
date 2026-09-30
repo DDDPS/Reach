@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { invoke } from '@tauri-apps/api/core';
 	import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart';
+	import { isMobile } from '$lib/platform';
 	import { open as shellOpen } from '@tauri-apps/plugin-shell';
 	import FaIcon from '$lib/components/shared/FaIcon.svelte';
 	import { faCopy, faUpRightFromSquare } from '@fortawesome/free-solid-svg-icons';
@@ -141,35 +142,38 @@
 		</div>
 	{/if}
 
-	<div class="setting-row">
-		<div class="setting-info">
-			<span class="setting-label">{t('settings.minimize_to_tray')}</span>
-			<span class="setting-description">{t('settings.tray_desc')}</span>
+	<!-- A phone has no tray, and apps do not start with it: desktop only. -->
+	{#if !isMobile()}
+		<div class="setting-row">
+			<div class="setting-info">
+				<span class="setting-label">{t('settings.minimize_to_tray')}</span>
+				<span class="setting-description">{t('settings.tray_desc')}</span>
+			</div>
+			<div class="setting-control">
+				<Toggle
+					hideLabel
+					checked={settings.minimizeToTray}
+					label={t('settings.minimize_to_tray')}
+					onchange={onMinimizeToTrayChange}
+				/>
+			</div>
 		</div>
-		<div class="setting-control">
-			<Toggle
-				hideLabel
-				checked={settings.minimizeToTray}
-				label={t('settings.minimize_to_tray')}
-				onchange={onMinimizeToTrayChange}
-			/>
-		</div>
-	</div>
 
-	<div class="setting-row">
-		<div class="setting-info">
-			<span class="setting-label">{t('settings.start_with_system')}</span>
-			<span class="setting-description">{t('settings.system_startup_desc')}</span>
+		<div class="setting-row">
+			<div class="setting-info">
+				<span class="setting-label">{t('settings.start_with_system')}</span>
+				<span class="setting-description">{t('settings.system_startup_desc')}</span>
+			</div>
+			<div class="setting-control">
+				<Toggle
+					hideLabel
+					checked={settings.startWithSystem}
+					label={t('settings.start_with_system')}
+					onchange={onStartWithSystemChange}
+				/>
+			</div>
 		</div>
-		<div class="setting-control">
-			<Toggle
-				hideLabel
-				checked={settings.startWithSystem}
-				label={t('settings.start_with_system')}
-				onchange={onStartWithSystemChange}
-			/>
-		</div>
-	</div>
+	{/if}
 
 	<!-- The permanent route to the community. The launch prompt can be
 	     dismissed forever; this is what makes that safe to do. -->

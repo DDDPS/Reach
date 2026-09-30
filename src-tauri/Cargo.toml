@@ -1,6 +1,6 @@
 [package]
 name = "reach"
-version = "0.7.0"
+version = "0.7.1"
 description = "Cross-platform SSH & Remote Management Tool"
 authors = ["Reach Contributors"]
 edition = "2021"
@@ -117,6 +117,8 @@ zip = "8"
 flate2 = "1"
 tar = "0.4"
 tauri-plugin-process = "2.3.1"
+# The Android half of vault unlock (fingerprint, security keys); a no-op elsewhere.
+tauri-plugin-reach-unlock = { path = "plugins/reach-unlock" }
 
 # Remote desktop. IronRDP is pure Rust end to end — the connector, CredSSP,
 # TLS via rustls, the codecs — so it builds on all four targets, Android
@@ -245,6 +247,8 @@ objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSDistributedNotificationCenter", "NSNotification", "NSString", "NSOperation", "block2"] }
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "block2"] }
+# Touch ID for vault unlock (Settings > Security).
+objc2-local-authentication = { version = "0.3", features = ["LAContext", "LAError", "block2"] }
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
 openssl-sys = { version = "0.9", features = ["vendored"] }

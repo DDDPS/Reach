@@ -320,7 +320,7 @@ pub fn check_write(
     }
 
     // A rationale of "ok" is not a rationale. The human reads this.
-    if req.rationale.trim().split_whitespace().count() < 3 {
+    if req.rationale.split_whitespace().count() < 3 {
         return Err(Refusal::RationaleMissing);
     }
 

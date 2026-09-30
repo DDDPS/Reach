@@ -10,9 +10,9 @@
 	import Dropdown from '$lib/components/shared/Dropdown.svelte';
 	import Toggle from '$lib/components/shared/Toggle.svelte';
 	import { getSettings, updateSetting } from '$lib/state/settings.svelte';
-	import { lock as lockVault } from '$lib/state/vault.svelte';
+	import { biometricName, biometricPrompt, lock as lockVault } from '$lib/state/vault.svelte';
 	import {
-		helloEnable,
+		biometricEnable,
 		securityKeyAdd,
 		unlockMethodRemove,
 		unlockMethods,
@@ -35,19 +35,20 @@
 	let error = $state('');
 	let saving = $state(false);
 
-	// Device unlock methods: Windows Hello and security keys.
+	// Device unlock methods: the platform biometric and security keys.
 	let methods = $state<UnlockMethods | null>(null);
 	let methodBusy = $state(false);
 	let methodError = $state('');
 	let addingKey = $state(false);
 	let keyLabel = $state('');
 	let keyPin = $state('');
-	const hello = $derived(methods?.methods.find((m) => m.kind === 'windows_hello'));
+	const biometric = $derived(methods?.methods.find((m) => m.kind !== 'fido2'));
+	const method = $derived(biometricName(methods?.platform));
 	const keys = $derived(methods?.methods.filter((m) => m.kind === 'fido2') ?? []);
-	const helloNote = $derived.by(() => {
-		if (!methods?.hello_available) return t('security.biometric_unavailable', { method: 'Windows Hello' });
-		if (!hasPassword) return t('security.biometric_needs_password', { method: 'Windows Hello' });
-		return t('security.biometric_desc', { method: 'Windows Hello' });
+	const biometricNote = $derived.by(() => {
+		if (!methods?.platform_available) return t('security.biometric_unavailable', { method });
+		if (!hasPassword) return t('security.biometric_needs_password', { method });
+		return t('security.biometric_desc', { method });
 	});
 
 	async function changeMethods(change: () => Promise<void>) {
@@ -66,10 +67,10 @@
 		methodBusy = false;
 	}
 
-	function toggleHello(on: boolean) {
+	function toggleBiometric(on: boolean) {
 		void changeMethods(async () => {
-			if (on) await helloEnable();
-			else if (hello) await unlockMethodRemove(hello.id);
+			if (on) await biometricEnable(biometricPrompt(t('security.biometric', { method })));
+			else if (biometric) await unlockMethodRemove(biometric.id);
 		});
 	}
 
@@ -245,19 +246,19 @@
 		</div>
 	</div>
 
-	{#if methods?.hello_offered}
+	{#if methods?.platform}
 		<div class="setting-row">
 			<div class="setting-info">
-				<span class="setting-label">{t('security.biometric', { method: 'Windows Hello' })}</span>
-				<span class="setting-description">{helloNote}</span>
+				<span class="setting-label">{t('security.biometric', { method })}</span>
+				<span class="setting-description">{biometricNote}</span>
 			</div>
 			<div class="setting-control">
 				<Toggle
 					hideLabel
-					checked={!!hello}
-					label={t('security.biometric', { method: 'Windows Hello' })}
-					disabled={methodBusy || locked || (!hello && (!methods.hello_available || !hasPassword))}
-					onchange={toggleHello}
+					checked={!!biometric}
+					label={t('security.biometric', { method })}
+					disabled={methodBusy || locked || (!biometric && (!methods.platform_available || !hasPassword))}
+					onchange={toggleBiometric}
 				/>
 			</div>
 		</div>

@@ -5,7 +5,7 @@
 	 * this gates is the vault, and with it every saved password and key.
 	 *
 	 * With a master password set, a lock is only undone by it or by a device
-	 * method (Windows Hello, a security key), never by one click: the backend
+	 * method (Windows Hello, Touch ID, a security key), never by one click: the backend
 	 * refuses that too.
 	 */
 	import Button from '$lib/components/shared/Button.svelte';
@@ -13,7 +13,7 @@
 	import { hasMasterPassword } from '$lib/ipc/credentials';
 	import { unlockMethods, type UnlockMethods } from '$lib/ipc/vault';
 	import { t } from '$lib/state/i18n.svelte';
-	import { resume, unlock, vaultState } from '$lib/state/vault.svelte';
+	import { biometricName, resume, unlock, vaultState } from '$lib/state/vault.svelte';
 
 	type View = 'choose' | 'password' | 'key-pin';
 
@@ -25,9 +25,11 @@
 	let passwordAvailable = $state(false);
 	let methods = $state<UnlockMethods | null>(null);
 
-	const hasHello = $derived(!!methods?.methods.some((m) => m.kind === 'windows_hello'));
+	const platform = $derived(methods?.methods.find((m) => m.kind !== 'fido2'));
+	const hasBiometric = $derived(!!platform);
+	const method = $derived(biometricName(platform?.kind as UnlockMethods['platform']));
 	const hasKey = $derived(!!methods?.methods.some((m) => m.kind === 'fido2'));
-	const hasDeviceMethod = $derived(hasHello || hasKey);
+	const hasDeviceMethod = $derived(hasBiometric || hasKey);
 	const passwordHint = $derived(
 		t('lock.set_password_hint', { place: `${t('settings.title')} → ${t('settings.security')}` })
 	);
@@ -125,16 +127,16 @@
 				</form>
 				<button class="link" onclick={() => (view = 'choose')}>{t('lock.back')}</button>
 			{:else}
-				{#if hasHello}
+				{#if hasBiometric}
 					<Button
-						onclick={() => void attempt(() => resume({ hello: true }), t('lock.biometric_failed', { method: 'Windows Hello' }))}
+						onclick={() => void attempt(() => resume({ biometric: true }), t('lock.biometric_failed', { method }))}
 						disabled={busy}
 					>
-						{t('lock.unlock_biometric', { method: 'Windows Hello' })}
+						{t('lock.unlock_biometric', { method })}
 					</Button>
 				{/if}
 				{#if hasKey}
-					<Button variant={hasHello ? 'secondary' : 'primary'} onclick={openWithKey} disabled={busy}>
+					<Button variant={hasBiometric ? 'secondary' : 'primary'} onclick={openWithKey} disabled={busy}>
 						{t('lock.unlock_key')}
 					</Button>
 					{#if busy && !methods?.keys_ask_pin}

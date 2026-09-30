@@ -306,7 +306,7 @@ pub async fn ansible_run_command(
                 system(&app_handle, &rid, "Syncing project to the remote host…".to_string());
                 let remote_dir = match engine::sync_project(&handle, std::path::Path::new(&working_dir), &project_id).await {
                     Ok((dir, files, bytes)) => {
-                        system(&app_handle, &rid, format!("Synced {} files ({} KB) to {}", files, (bytes + 1023) / 1024, dir));
+                        system(&app_handle, &rid, format!("Synced {} files ({} KB) to {}", files, bytes.div_ceil(1024), dir));
                         dir
                     }
                     Err(e) => {
@@ -340,9 +340,9 @@ pub async fn ansible_run_command(
 #[tauri::command]
 pub async fn ansible_engines() -> Result<Vec<engine::EngineInfo>, String> {
     devops::require(Tool::Ansible)?;
-    Ok(tokio::task::spawn_blocking(engine::detect_local_engines)
+    tokio::task::spawn_blocking(engine::detect_local_engines)
         .await
-        .map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())
 }
 
 /// Whether an open connection can act as a control node.

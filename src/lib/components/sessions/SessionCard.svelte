@@ -294,4 +294,21 @@
 	.delete-btn:hover {
 		color: var(--color-danger);
 	}
+
+	/* A phone: the row is the button. Tapping it connects; a long press opens
+	   the same menu a right-click does, with Edit and Delete. The drag handle,
+	   the three buttons and the auth badge would otherwise leave the name two
+	   letters wide ("Pro…"), and a delete button under a thumb is one slip from
+	   losing a session. */
+	@media (max-width: 700px) {
+		.drag-handle,
+		.session-actions,
+		.auth-badge {
+			display: none;
+		}
+
+		.session-card {
+			padding-left: 4px;
+		}
+	}
 </style>

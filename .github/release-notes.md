@@ -1,25 +1,19 @@
-Your vault, locked down and instant.
+Unlock with your finger, and Reach on Android that works.
 
-Security
-- Lock Reach whenever you like, after it sits idle, or when your computer
-  locks or sleeps. Open sessions keep running underneath.
-- Unlock with Windows Hello, or with a security key: a YubiKey or any FIDO2
-  key. Add a spare key as a backup; your master password always works too.
-- With a master password set, a lock can no longer be undone with one click.
-- Vault keys stay encrypted in memory and never reach the swap file, and other
-  programs are kept out of Reach's memory.
-
-Speed
-- Synced vaults open instantly and work offline, from an encrypted copy on
-  this device.
-- Session lists load in one step instead of one request per session.
-
-Fixes and updates
-- Fixed a crash on Windows when a vault closed, and the vault staying
-  unreadable after locking and unlocking.
-- Every library Reach is built on is on its latest version, closing all the
-  known security issues in them, including 12 in the SSH library. Remote
-  desktop runs on the newest IronRDP.
-- Your vault, saved logins and known servers carry over untouched.
+- Your fingerprint on Android, and Touch ID on macOS (beta: tell us how
+  it works for you), now open the vault, alongside Windows Hello.
+- Android: the vault stays set up after a restart, remote desktop
+  connects, backups restore, and there are keys for typing (Esc, Tab,
+  Ctrl, Alt, arrows) and a keyboard button for remote desktops. The app
+  also fits a phone screen and has its proper icon.
+- The server's login message (MOTD, last login) now stays on screen
+  after connecting, as in other SSH clients.
+- Fixed: the session list could stay on "Loading sessions..." forever
+  when Turso stopped answering. Reach now gives up after ten seconds,
+  retries, and shows the rest of your sessions.
+- Fixed: after locking Reach, your own vaults could show no sessions until
+  Reach restarted. Nothing was lost: your sessions were safe the whole time.
+- Fixed: importing a backup key and sharing a session failed with
+  "invalid args".
 
 Full details: https://github.com/alexandrosnt/Reach/blob/main/CHANGELOG.md

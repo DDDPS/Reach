@@ -33,6 +33,17 @@
 	let activeTab = $derived(getActiveTab());
 	let activeConnectionId = $derived(activeTab?.connectionId);
 
+	// On a phone the sidebar is a full-screen drawer over the terminal: once a
+	// tab opens or another is picked, close it so that tab is what you see.
+	let lastTabId: string | undefined;
+	$effect(() => {
+		const id = activeTab?.id;
+		if (id && id !== lastTabId && window.matchMedia('(max-width: 700px)').matches) {
+			sidebarCollapsed = true;
+		}
+		lastTabId = id;
+	});
+
 	// --- Active-session guards for window close / app quit + update relaunch ---
 	let closeOpen = $state(false);
 	let closeCount = $state(0);

@@ -39,6 +39,8 @@ export interface SshConnectParams {
   shell?: string;
   /** Inject the auto shell-color/prompt init after login (default true). */
   injectColors?: boolean;
+  /** Keep the server's login message (MOTD) on screen (default true). */
+  showLoginMessage?: boolean;
 }
 
 export interface ConnectionInfo {
@@ -65,6 +67,7 @@ export async function sshConnect(params: SshConnectParams): Promise<string> {
     proxy: params.proxy ?? null,
     shell: params.shell?.trim() ? params.shell.trim() : null,
     injectColors: params.injectColors ?? null,
+    showLoginMessage: params.showLoginMessage ?? null,
   });
 }
 

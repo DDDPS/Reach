@@ -299,6 +299,7 @@ async fn count_files(handle: &crate::ssh::client::SharedHandle, command: Option<
 /// so the caller can count files as they are written. That is why the commands
 /// are built verbose: a quiet tool cannot be measured.
 #[tauri::command]
+#[expect(clippy::too_many_arguments, reason = "a Tauri command takes each argument from the frontend's invoke by name")]
 pub async fn sftp_archive_create(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,

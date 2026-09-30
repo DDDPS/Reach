@@ -74,6 +74,16 @@ use std::sync::OnceLock;
 /// store read from this instead.
 static APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
+/// The app, for code with no handle of its own that needs a mobile plugin:
+/// the keychain functions, which on Android go through the Keystore.
+#[cfg(target_os = "android")]
+static ANDROID_APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+#[cfg(target_os = "android")]
+pub fn android_app() -> Option<&'static tauri::AppHandle> {
+    ANDROID_APP.get()
+}
+
 /// Record the resolved app data directory. Call once, early in `setup()`.
 pub fn set_app_data_dir(dir: PathBuf) {
     let _ = APP_DATA_DIR.set(dir);
@@ -130,7 +140,7 @@ fn disable_press_and_hold() {
     // SAFETY: plain Foundation constructors and one setter, each null-checked
     // before it is used. Nothing here is kept past the call.
     unsafe {
-        let name = b"ApplePressAndHoldEnabled\0".as_ptr() as *const c_char;
+        let name = c"ApplePressAndHoldEnabled".as_ptr() as *const c_char;
         let key: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: name];
         let value: *mut AnyObject = msg_send![class!(NSNumber), numberWithBool: Bool::NO];
         if key.is_null() || value.is_null() {
@@ -148,14 +158,49 @@ fn disable_press_and_hold() {
         let _: () = msg_send![defaults, registerDefaults: dict];
     }
 }
+/// Log to the console as before, and on desktop also to
+/// `<app data>/logs/reach.log`, so a user who hits a problem has something to
+/// send (issue #77 came with a screenshot and nothing else). The file starts
+/// over past 5 MB, keeping the one before as `reach.1.log`.
+fn init_logging() {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let file = log_file().map(|f| {
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(f))
+    });
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(file)
+        .init();
+}
+
+#[cfg(desktop)]
+fn log_file() -> Option<std::fs::File> {
+    const LIMIT: u64 = 5 * 1024 * 1024;
+    let dir = app_data_dir().join("logs");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("reach.log");
+    if std::fs::metadata(&path).map(|m| m.len() > LIMIT).unwrap_or(false) {
+        let _ = std::fs::rename(&path, dir.join("reach.1.log"));
+    }
+    std::fs::OpenOptions::new().create(true).append(true).open(path).ok()
+}
+
+/// Mobile platforms keep their own system log (logcat on Android).
+#[cfg(mobile)]
+fn log_file() -> Option<std::fs::File> {
+    None
+}
+
 /// Build and run the Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    init_logging();
 
     // TLS for HTTPS (reqwest) and every other rustls user: ring, which the
     // database drivers already build in. reqwest is compiled without a
@@ -164,6 +209,23 @@ pub fn run() {
 
     // Before any secret is in memory: keep other programs out of it.
     hardening::protect_process();
+
+    // Android keeps its trusted certificate authorities in a directory, not in
+    // a file or store rustls-native-certs knows, so it found none and every
+    // TLS user that asks for the platform's roots failed there: RDP's TLS
+    // upgrade stopped with "the platform certificate store contains no usable
+    // roots". That crate honours SSL_CERT_DIR, so point it at Android's own
+    // (Android 14 moved it into the Conscrypt APEX).
+    #[cfg(target_os = "android")]
+    if std::env::var_os("SSL_CERT_DIR").is_none() {
+        let dir = ["/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts"]
+            .into_iter()
+            .find(|d| std::path::Path::new(d).is_dir());
+        if let Some(dir) = dir {
+            std::env::set_var("SSL_CERT_DIR", dir);
+            tracing::info!("Trusted certificates from {}", dir);
+        }
+    }
 
     tracing::info!("Starting Reach application");
 
@@ -180,7 +242,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_reach_unlock::init());
     // NOTE: AppState is managed inside `setup()` (not here) so it can be rooted
     // at the Tauri-resolved, writable app data dir — required on Android/iOS.
 
@@ -330,8 +393,8 @@ pub fn run() {
             vault_is_held,
             vault_resume,
             vault_unlock_methods,
-            vault_hello_enable,
-            vault_hello_unlock,
+            vault_biometric_enable,
+            vault_biometric_unlock,
             vault_security_key_add,
             vault_security_key_unlock,
             vault_unlock_method_remove,
@@ -650,8 +713,8 @@ pub fn run() {
             vault_is_held,
             vault_resume,
             vault_unlock_methods,
-            vault_hello_enable,
-            vault_hello_unlock,
+            vault_biometric_enable,
+            vault_biometric_unlock,
             vault_security_key_add,
             vault_security_key_unlock,
             vault_unlock_method_remove,
@@ -894,6 +957,8 @@ pub fn run() {
                 Ok(dir) => set_app_data_dir(dir),
                 Err(e) => tracing::error!("Failed to resolve app_data_dir: {}", e),
             }
+            #[cfg(target_os = "android")]
+            let _ = ANDROID_APP.set(app.handle().clone());
             let data_dir = app_data_dir();
             let _ = std::fs::create_dir_all(&data_dir);
             tracing::info!("App data dir: {:?}", data_dir);
@@ -917,9 +982,10 @@ pub fn run() {
             // the terminal listens for.
             #[cfg(desktop)]
             {
-                use tauri::menu::{
-                    MenuBuilder, SubmenuBuilder, MenuItemBuilder, PredefinedMenuItem,
-                };
+                use tauri::menu::{MenuBuilder, PredefinedMenuItem, SubmenuBuilder};
+                // Only the Windows and Linux edit menu builds its own items.
+                #[cfg(not(target_os = "macos"))]
+                use tauri::menu::MenuItemBuilder;
                 use tauri::Emitter;
 
                 let app_name = "Reach";
