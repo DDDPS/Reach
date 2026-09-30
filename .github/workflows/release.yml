@@ -11,7 +11,40 @@ permissions:
   actions: write
 
 jobs:
+  # The one release every build uploads into. When each build made the
+  # release itself, two finishing at the same moment each found none and made
+  # one: in 0.7.1 the Windows files and their updater entries went into a
+  # second draft that was never published, so Windows was never offered the
+  # update. Created once here, before any build starts, it cannot be doubled.
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create the draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A re-run finds the draft its first run made.
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -1)
+          if [ -z "$id" ]; then
+            id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$GITHUB_REF_NAME" \
+              -f name="Reach $GITHUB_REF_NAME" \
+              -F body=@.github/release-notes.md \
+              -F draft=true \
+              --jq .id)
+          fi
+          echo "Release $id"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
   build-desktop:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -121,11 +154,10 @@ jobs:
           NO_STRIP: true
           APPIMAGE_EXTRACT_AND_RUN: 1
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Reach ${{ github.ref_name }}'
+          # Into the release made above, never a new one.
+          releaseId: ${{ needs.create-release.outputs.id }}
+          # Still read for the in-app updater's notes in latest.json.
           releaseBody: ${{ steps.notes.outputs.body }}
-          releaseDraft: true
-          prerelease: false
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
@@ -159,9 +191,36 @@ jobs:
     # Android too: the docs site is rebuilt from the published release, and a
     # release published before its APKs arrive gives the site a download page
     # with no Android link until the next release.
-    needs: [build-desktop, build-android]
+    needs: [create-release, build-desktop, build-android]
     runs-on: ubuntu-latest
     steps:
+      # The last look before users see it: every platform the updater serves
+      # must be in latest.json with a signature. Anything missing stops the
+      # release here, as a draft, instead of leaving those users without the
+      # update and nobody knowing.
+      - name: Check the updater manifest lists every platform
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.create-release.outputs.id }}
+        run: |
+          set -euo pipefail
+          asset=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+            --jq '.[] | select(.name == "latest.json") | .id')
+          [ -n "$asset" ] || { echo "::error::latest.json is missing from the release."; exit 1; }
+          gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$asset" > latest.json
+          missing=0
+          for platform in windows-x86_64 darwin-aarch64 darwin-x86_64 linux-x86_64; do
+            sig=$(jq -r --arg p "$platform" '.platforms[$p].signature // empty' latest.json)
+            if [ -z "$sig" ]; then
+              echo "::error::latest.json has no signed entry for $platform."
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          apks=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --jq '[.[] | select(.name | endswith(".apk"))] | length')
+          [ "$apks" -ge 2 ] || { echo "::error::The Android APKs are missing from the release."; exit 1; }
+          echo "Every platform is in latest.json, and the APKs are attached."
+
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
@@ -179,6 +238,7 @@ jobs:
         run: gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref main
 
   build-android:
+    needs: create-release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
