@@ -125,7 +125,7 @@ pub enum RdpStatus {
 /// One message may hold several frames back to back — a cursor change, a
 /// pointer position, then any number of regions. The receiver walks them in
 /// order and acknowledges the message once, after the last one is painted.
-mod kind {
+pub(crate) mod kind {
     pub const REGION: u8 = 1;
     pub const FULL: u8 = 2;
     pub const POINTER: u8 = 3;
@@ -134,7 +134,7 @@ mod kind {
     pub const POINTER_DEFAULT: u8 = 6;
 }
 
-const HEADER_LEN: usize = 13;
+pub(crate) const HEADER_LEN: usize = 13;
 
 /// How many messages may be on their way to the webview at once. One is
 /// being painted while the next is already in transit; a third would only be
@@ -161,7 +161,7 @@ const QUIET: Duration = Duration::from_millis(2);
 const MAX_HOLD: Duration = Duration::from_millis(16);
 
 /// What the cursor should look like, as the server last said.
-enum Cursor {
+pub(crate) enum Cursor {
     Shape(Arc<DecodedPointer>),
     Hidden,
     Default,
@@ -177,13 +177,13 @@ enum Cursor {
 /// newer, not in a queue that only ever gets longer.
 pub struct Flow {
     in_flight: AtomicU32,
-    notify: Notify,
+    pub(crate) notify: Notify,
     /// A new canvas is listening: send it the whole picture next.
     refresh: std::sync::atomic::AtomicBool,
 }
 
 impl Flow {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             in_flight: AtomicU32::new(0),
             notify: Notify::new(),
@@ -193,21 +193,21 @@ impl Flow {
 
     /// A new webview attached: nothing it has not painted is in flight, and
     /// it needs the whole picture.
-    fn reattached(&self) {
+    pub(crate) fn reattached(&self) {
         self.in_flight.store(0, Ordering::Release);
         self.refresh.store(true, Ordering::Release);
         self.notify.notify_one();
     }
 
-    fn take_refresh(&self) -> bool {
+    pub(crate) fn take_refresh(&self) -> bool {
         self.refresh.swap(false, Ordering::AcqRel)
     }
 
-    fn can_send(&self) -> bool {
+    pub(crate) fn can_send(&self) -> bool {
         self.in_flight.load(Ordering::Acquire) < MAX_IN_FLIGHT
     }
 
-    fn sent(&self) {
+    pub(crate) fn sent(&self) {
         self.in_flight.fetch_add(1, Ordering::AcqRel);
     }
 
@@ -694,7 +694,7 @@ async fn pump_output(
 /// The pump's own picture of the desktop, plus what has changed on it since
 /// the webview last saw it.
 #[derive(Default)]
-struct Screen {
+pub(crate) struct Screen {
     /// RGBA, row-major, `width × height × 4` bytes.
     fb: Vec<u8>,
     width: u16,
@@ -703,7 +703,7 @@ struct Screen {
     /// frame covers them all.
     damage: Vec<InclusiveRectangle>,
     /// The framebuffer changed size, or the server sent the whole thing.
-    replaced: bool,
+    pub(crate) replaced: bool,
     pointer: Option<(u16, u16)>,
     cursor: Option<Cursor>,
     /// When the oldest unsent change arrived, and when the newest did. The
@@ -714,23 +714,23 @@ struct Screen {
 }
 
 impl Screen {
-    fn pending(&self) -> bool {
+    pub(crate) fn pending(&self) -> bool {
         self.replaced || !self.damage.is_empty() || self.pointer.is_some() || self.cursor.is_some()
     }
 
     /// What is pending may be sent: the picture has been still for
     /// [`QUIET`], or has been held for [`MAX_HOLD`].
-    fn settled(&self) -> bool {
+    pub(crate) fn settled(&self) -> bool {
         self.deadline().is_none_or(|t| t <= Instant::now())
     }
 
     /// When what is pending becomes sendable, if anything is pending.
-    fn deadline(&self) -> Option<Instant> {
+    pub(crate) fn deadline(&self) -> Option<Instant> {
         let (since, last) = (self.since?, self.last?);
         Some((last + QUIET).min(since + MAX_HOLD))
     }
 
-    fn touch(&mut self) {
+    pub(crate) fn touch(&mut self) {
         let now = Instant::now();
         if self.since.is_none() {
             self.since = Some(now);
@@ -837,19 +837,7 @@ impl Screen {
     /// Write one region of IronRDP's `0x00RRGGBB` pixels into the framebuffer
     /// and remember that it changed.
     fn apply(&mut self, buffer: &[u32], width: NonZeroU16, height: NonZeroU16, region: InclusiveRectangle) {
-        if self.width != width.get() || self.height != height.get() {
-            tracing::info!("RDP: desktop is now {}x{}", width.get(), height.get());
-            self.width = width.get();
-            self.height = height.get();
-            // Opaque black until the server has painted it; the canvas on
-            // the other side is opaque too, so alpha is only ever 0xff.
-            self.fb = vec![0u8; usize::from(self.width) * usize::from(self.height) * 4];
-            for px in self.fb.as_chunks_mut::<4>().0 {
-                px[3] = 0xff;
-            }
-            self.replaced = true;
-            self.damage.clear();
-        }
+        self.resize(width.get(), height.get());
 
         if region.right >= self.width || region.bottom >= self.height || region.left > region.right || region.top > region.bottom {
             // IronRDP validates its own updates against the extent it
@@ -879,8 +867,97 @@ impl Screen {
         self.touch();
     }
 
+    /// Take on a new desktop size. Nothing happens if it is the same size.
+    pub(crate) fn resize(&mut self, width: u16, height: u16) {
+        if self.width == width && self.height == height {
+            return;
+        }
+        tracing::info!("remote desktop is now {width}x{height}");
+        self.width = width;
+        self.height = height;
+        // Opaque black until the server has painted it; the canvas on
+        // the other side is opaque too, so alpha is only ever 0xff.
+        self.fb = vec![0u8; usize::from(width) * usize::from(height) * 4];
+        for px in self.fb.as_chunks_mut::<4>().0 {
+            px[3] = 0xff;
+        }
+        self.replaced = true;
+        self.damage.clear();
+        self.touch();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn size(&self) -> (u16, u16) {
+        (self.width, self.height)
+    }
+
+    /// The rectangle `x, y, w × h`, if it is non-empty and on the desktop.
+    fn rect_within(&self, x: u16, y: u16, w: u16, h: u16) -> Option<InclusiveRectangle> {
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let right = u32::from(x) + u32::from(w) - 1;
+        let bottom = u32::from(y) + u32::from(h) - 1;
+        if right >= u32::from(self.width) || bottom >= u32::from(self.height) {
+            tracing::debug!("remote update {x},{y} {w}x{h} outside a {}x{} desktop", self.width, self.height);
+            return None;
+        }
+        Some(InclusiveRectangle { left: x, top: y, right: right as u16, bottom: bottom as u16 })
+    }
+
+    fn changed(&mut self, region: InclusiveRectangle) {
+        if !self.replaced {
+            self.damage.push(region);
+        }
+        self.touch();
+    }
+
+    /// Write `w × h` pixels of RGBA (alpha ignored) at `x, y`. A rectangle
+    /// off the desktop, or short of pixels, is skipped rather than trusted.
+    pub(crate) fn blit_rgba(&mut self, x: u16, y: u16, w: u16, h: u16, pixels: &[u8]) {
+        let Some(region) = self.rect_within(x, y, w, h) else { return };
+        let row_len = usize::from(w) * 4;
+        if pixels.len() < row_len * usize::from(h) {
+            tracing::debug!("remote update {x},{y} {w}x{h} is short of pixels");
+            return;
+        }
+        let stride = usize::from(self.width) * 4;
+        for (row, src) in (region.top..=region.bottom).zip(pixels.chunks_exact(row_len)) {
+            let start = usize::from(row) * stride + usize::from(x) * 4;
+            let dst = &mut self.fb[start..start + row_len];
+            dst.copy_from_slice(src);
+            for px in dst.as_chunks_mut::<4>().0 {
+                px[3] = 0xff;
+            }
+        }
+        self.changed(region);
+    }
+
+    /// Copy the `w × h` rectangle at `src` to `dst`, the framebuffer's own
+    /// pixels moved, as a scroll does. Overlap is handled: rows are copied
+    /// in the order that never reads one already overwritten.
+    pub(crate) fn copy_rect(&mut self, dst: (u16, u16), src: (u16, u16), w: u16, h: u16) {
+        let (Some(to), Some(_)) = (self.rect_within(dst.0, dst.1, w, h), self.rect_within(src.0, src.1, w, h)) else {
+            return;
+        };
+        let stride = usize::from(self.width) * 4;
+        let row_len = usize::from(w) * 4;
+        let rows: Box<dyn Iterator<Item = u16>> = if dst.1 > src.1 { Box::new((0..h).rev()) } else { Box::new(0..h) };
+        for r in rows {
+            let from = usize::from(src.1 + r) * stride + usize::from(src.0) * 4;
+            let into = usize::from(dst.1 + r) * stride + usize::from(dst.0) * 4;
+            self.fb.copy_within(from..from + row_len, into);
+        }
+        self.changed(to);
+    }
+
+    pub(crate) fn set_cursor(&mut self, cursor: Cursor) {
+        self.cursor = Some(cursor);
+        self.touch();
+    }
+
     /// Everything pending, as one message, and nothing pending afterwards.
-    fn take(&mut self) -> Vec<u8> {
+    pub(crate) fn take(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
 
         match self.cursor.take() {

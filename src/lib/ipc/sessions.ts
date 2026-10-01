@@ -40,9 +40,11 @@ export interface SessionConfig {
   domain?: string | null;
   /** A local folder shown inside the remote desktop as a drive, RDP only. */
   share_path?: string | null;
+  /** VNC only: a saved SSH session to reach the server through. */
+  via_session_id?: string | null;
 }
 
-export type SessionKind = 'ssh' | 'rdp';
+export type SessionKind = 'ssh' | 'rdp' | 'vnc';
 
 export function sessionKind(session: Pick<SessionConfig, 'kind'>): SessionKind {
   return session.kind ?? 'ssh';
@@ -88,6 +90,7 @@ export async function sessionCreate(params: {
   /** For RDP: what the machine is, since the protocol cannot say. */
   detectedOs?: string | null;
   sharePath?: string | null;
+  viaSessionId?: string | null;
 }): Promise<SessionConfig> {
   return invoke<SessionConfig>('session_create', {
     name: params.name,
@@ -105,6 +108,7 @@ export async function sessionCreate(params: {
     domain: params.domain?.trim() ? params.domain.trim() : null,
     detectedOs: params.detectedOs ?? null,
     sharePath: params.sharePath?.trim() ? params.sharePath.trim() : null,
+    viaSessionId: params.viaSessionId || null,
   });
 }
 

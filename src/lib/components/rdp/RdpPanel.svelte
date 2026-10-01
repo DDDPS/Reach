@@ -13,6 +13,10 @@
 	 * it produced. That is why Ctrl+C reaches the remote as Ctrl+C rather than
 	 * being eaten here as a copy. Characters with no scancode on this keyboard
 	 * (an IME commit, a pasted glyph) go as Unicode instead.
+	 *
+	 * A VNC desktop uses this same panel: its backend sends frames in the same
+	 * format, and only the commands differ. VNC wants the character a key
+	 * produced, not its position, so there keys go as X11 keysyms.
 	 */
 	import { onDestroy, onMount } from 'svelte';
 	import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -35,9 +39,20 @@
 		rdpResize,
 		rdpWindowFullscreen,
 		rdpUnicode,
+		type MouseAction,
 		type RdpConnectParams,
 		type RdpStatus,
 	} from '$lib/ipc/rdp';
+	import {
+		vncAck,
+		vncClipboardSync,
+		vncConnect,
+		vncKey,
+		vncMouse,
+		vncResize,
+		type VncConnectParams,
+	} from '$lib/ipc/vnc';
+	import { keysymForChar, keysymForCode, keysymForEvent } from '$lib/vnc/keysym';
 	import { t } from '$lib/state/i18n.svelte';
 	import { getSettings } from '$lib/state/settings.svelte';
 	import { isMobile } from '$lib/platform';
@@ -45,11 +60,50 @@
 
 	interface Props {
 		id: string;
-		params: RdpConnectParams;
+		params: RdpConnectParams | VncConnectParams;
+		/** Which protocol the desktop speaks. RDP unless said otherwise. */
+		protocol?: 'rdp' | 'vnc';
 		active: boolean;
 	}
 
-	let { id, params, active }: Props = $props();
+	let { id, params, protocol = 'rdp', active }: Props = $props();
+
+	const isVnc = (): boolean => protocol === 'vnc';
+	/** Who the desktop is, for the full-screen bar. */
+	const label = $derived('username' in params && params.username ? `${params.username}@${params.host}` : params.host);
+
+	/** The commands both protocols have, each sent the right way. */
+	const remote = {
+		ack: () => (isVnc() ? vncAck(id) : rdpAck(id)),
+		mouse: (x: number, y: number, action: MouseAction, button = 0, delta = 0) =>
+			isVnc() ? vncMouse(id, x, y, action, button, delta) : rdpMouse(id, x, y, action, button, delta),
+		resize: (width: number, height: number) => (isVnc() ? vncResize(id, width, height) : rdpResize(id, width, height)),
+		clipboardSync: () => (isVnc() ? vncClipboardSync(id) : rdpClipboardSync(id)),
+	};
+
+	/** Press or release a key named by its position (`KeyboardEvent.code`). */
+	async function pressCode(code: string, down: boolean): Promise<void> {
+		if (isVnc()) {
+			const keysym = keysymForCode(code);
+			if (keysym !== null) await vncKey(id, keysym, down);
+			return;
+		}
+		const entry = SCANCODES[code];
+		if (entry) await rdpKey(id, entry[0], entry[1], !down);
+	}
+
+	/** Type one character that came without a key: an IME commit, a phone keyboard. */
+	async function typeChar(point: number): Promise<void> {
+		if (isVnc()) {
+			const keysym = keysymForChar(String.fromCodePoint(point));
+			if (keysym === null) return;
+			await vncKey(id, keysym, true);
+			await vncKey(id, keysym, false);
+			return;
+		}
+		await rdpUnicode(id, point, false);
+		await rdpUnicode(id, point, true);
+	}
 
 	let host: HTMLDivElement;
 	let canvas: HTMLCanvasElement;
@@ -271,7 +325,7 @@
 		}
 
 		if (gl && painted) gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-		void rdpAck(id).catch(() => {});
+		void remote.ack().catch(() => {});
 	}
 
 	/**
@@ -326,7 +380,7 @@
 			if (!pendingMove) return;
 			const { x, y } = pendingMove;
 			pendingMove = null;
-			void rdpMouse(id, x, y, 'move');
+			void remote.mouse(x, y, 'move');
 		});
 	}
 
@@ -336,7 +390,7 @@
 		if (!p) return;
 		if (action === 'down') canvas.focus();
 		e.preventDefault();
-		void rdpMouse(id, p.x, p.y, action, e.button);
+		void remote.mouse(p.x, p.y, action, e.button);
 	}
 
 	function onWheel(e: WheelEvent): void {
@@ -346,7 +400,7 @@
 		// A browser notch is deltaY ≈ +100 downwards; an RDP notch is 120 and
 		// positive means towards the user. One notch per event keeps trackpads
 		// from firing a flood of tiny steps.
-		void rdpMouse(id, p.x, p.y, 'wheel', 0, e.deltaY < 0 ? 120 : -120);
+		void remote.mouse(p.x, p.y, 'wheel', 0, e.deltaY < 0 ? 120 : -120);
 	}
 
 	/* --- phone ------------------------------------------------------------- */
@@ -370,9 +424,7 @@
 	let composed = '';
 
 	function tapKey(code: string): void {
-		const entry = SCANCODES[code];
-		if (!entry) return;
-		void rdpKey(id, entry[0], entry[1], false).then(() => rdpKey(id, entry[0], entry[1], true));
+		void pressCode(code, true).then(() => pressCode(code, false));
 	}
 
 	/** Hold Ctrl, Alt and Win as the sticky bar keys say, around `send`. */
@@ -380,9 +432,9 @@
 		const mods = [barCtrl && 'ControlLeft', barAlt && 'AltLeft', win && 'MetaLeft'].filter(Boolean) as string[];
 		barCtrl = false;
 		barAlt = false;
-		for (const m of mods) await rdpKey(id, SCANCODES[m][0], SCANCODES[m][1], false);
+		for (const m of mods) await pressCode(m, true);
 		await send();
-		for (const m of mods.reverse()) await rdpKey(id, SCANCODES[m][0], SCANCODES[m][1], true);
+		for (const m of mods.reverse()) await pressCode(m, false);
 	}
 
 	/** The physical key for a letter or digit, so Ctrl+C is a real Ctrl+C. */
@@ -403,8 +455,7 @@
 				void withModifiers(async () => tapKey(code));
 				continue;
 			}
-			const point = ch.codePointAt(0) ?? 0;
-			void rdpUnicode(id, point, false).then(() => rdpUnicode(id, point, true));
+			void typeChar(ch.codePointAt(0) ?? 0);
 		}
 	}
 
@@ -447,11 +498,11 @@
 	/** A hardware keyboard plugged into the phone still sends real keys: those
 	 *  go the desktop's way. The on-screen keyboard's keys (code 229) do not. */
 	function onSinkKeyDown(e: KeyboardEvent): void {
-		if (e.keyCode !== 229 && SCANCODES[e.code]) onKeyDown(e);
+		if (e.keyCode !== 229 && isKey(e)) onKeyDown(e);
 	}
 
 	function onSinkKeyUp(e: KeyboardEvent): void {
-		if (e.keyCode !== 229 && SCANCODES[e.code]) onKeyUp(e);
+		if (e.keyCode !== 229 && isKey(e)) onKeyUp(e);
 	}
 
 	function toggleKeyboard(): void {
@@ -489,7 +540,7 @@
 		if (!onPhone || phase !== 'connected') return;
 		const p = remotePoint(e);
 		if (!p) return;
-		void rdpMouse(id, p.x, p.y, 'down', 2).then(() => rdpMouse(id, p.x, p.y, 'up', 2));
+		void remote.mouse(p.x, p.y, 'down', 2).then(() => remote.mouse(p.x, p.y, 'up', 2));
 	}
 
 	/* --- keyboard ---------------------------------------------------------- */
@@ -541,6 +592,46 @@
 	 *  down on the remote is the classic remote-desktop misery. */
 	const held = new Set<string>();
 
+	/** VNC: the keysym each held key went down as, so it comes up as the same
+	 *  one even if Shift was let go in between. */
+	const heldKeysyms = new Map<string, number>();
+	/** When Left Ctrl last went down. On Windows AltGr arrives as Left Ctrl
+	 *  then Right Alt at the same instant; that Ctrl is not the user's. */
+	let ctrlDownAt = 0;
+
+	/** Whether a key event is one this desktop takes. */
+	function isKey(e: KeyboardEvent): boolean {
+		return isVnc() ? keysymForEvent(e) !== null || e.key === 'AltGraph' : !!SCANCODES[e.code];
+	}
+
+	function onVncKeyDown(e: KeyboardEvent): void {
+		if (e.key === 'AltGraph') {
+			// What AltGr types arrives as its own character; the remote needs
+			// no modifier for it, and above all not the Ctrl Windows invented.
+			e.preventDefault();
+			const fake = heldKeysyms.get('ControlLeft');
+			if (fake !== undefined && e.timeStamp - ctrlDownAt < 50) {
+				heldKeysyms.delete('ControlLeft');
+				void vncKey(id, fake, false);
+			}
+			return;
+		}
+		const keysym = keysymForEvent(e);
+		if (keysym === null) return;
+		e.preventDefault();
+		if (e.code === 'ControlLeft') ctrlDownAt = e.timeStamp;
+		heldKeysyms.set(e.code, keysym);
+		void vncKey(id, keysym, true);
+	}
+
+	function onVncKeyUp(e: KeyboardEvent): void {
+		const keysym = heldKeysyms.get(e.code);
+		if (keysym === undefined) return;
+		e.preventDefault();
+		heldKeysyms.delete(e.code);
+		void vncKey(id, keysym, false);
+	}
+
 	function onKeyDown(e: KeyboardEvent): void {
 		if (e.ctrlKey && e.altKey && e.code === 'Enter') {
 			e.preventDefault();
@@ -551,6 +642,10 @@
 		// The remote repeats a held key itself; forwarding the browser's
 		// repeats as well would double the rate.
 		if (e.repeat) return;
+		if (isVnc()) {
+			onVncKeyDown(e);
+			return;
+		}
 
 		const entry = SCANCODES[e.code];
 		if (entry) {
@@ -563,13 +658,16 @@
 		// send what it produced.
 		if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
 			e.preventDefault();
-			const code = e.key.charCodeAt(0);
-			void rdpUnicode(id, code, false).then(() => rdpUnicode(id, code, true));
+			void typeChar(e.key.charCodeAt(0));
 		}
 	}
 
 	function onKeyUp(e: KeyboardEvent): void {
 		if (phase !== 'connected') return;
+		if (isVnc()) {
+			onVncKeyUp(e);
+			return;
+		}
 		const entry = SCANCODES[e.code];
 		if (!entry) return;
 		e.preventDefault();
@@ -583,6 +681,8 @@
 			if (entry) void rdpKey(id, entry[0], entry[1], true);
 		}
 		held.clear();
+		for (const keysym of heldKeysyms.values()) void vncKey(id, keysym, false);
+		heldKeysyms.clear();
 	}
 
 	/* --- lifecycle --------------------------------------------------------- */
@@ -604,7 +704,7 @@
 	onMount(async () => {
 		const size = fitSize();
 
-		unlisten = await listen<RdpStatus>(`rdp-status-${id}`, (event) => {
+		unlisten = await listen<RdpStatus>(`${isVnc() ? 'vnc' : 'rdp'}-status-${id}`, (event) => {
 			const s = event.payload;
 			if (s.state === 'connected' || s.state === 'loggedIn') {
 				phase = 'connected';
@@ -622,7 +722,13 @@
 
 		try {
 			initGl();
-			await rdpConnect({ ...params, ...size, graphicsPipeline: getSettings().rdpGraphicsPipeline }, paint);
+			if (isVnc()) {
+				// A VNC desktop comes at the size its server has; the panel
+				// asks for its own size once connected, which some servers allow.
+				await vncConnect(params as VncConnectParams, paint);
+			} else {
+				await rdpConnect({ ...(params as RdpConnectParams), ...size, graphicsPipeline: getSettings().rdpGraphicsPipeline }, paint);
+			}
 		} catch (err) {
 			phase = 'error';
 			message = String(err);
@@ -652,7 +758,7 @@
 			// The size the desktop already has is not a resize. Asking for
 			// it anyway leaves a request the server never answers.
 			if (s.width === canvas.width && s.height === canvas.height) return;
-			void rdpResize(id, s.width, s.height);
+			void remote.resize(s.width, s.height);
 		}
 	}
 
@@ -696,7 +802,7 @@
 		onkeydown={onKeyDown}
 		onkeyup={onKeyUp}
 		onblur={releaseAll}
-		onfocus={() => { if (phase === 'connected') void rdpClipboardSync(id).catch(() => {}); }}
+		onfocus={() => { if (phase === 'connected') void remote.clipboardSync().catch(() => {}); }}
 		oncontextmenu={onLongPress}
 		class:dim={phase !== 'connected'}
 	></canvas>
@@ -728,7 +834,7 @@
 
 	{#if fullscreen && !onPhone}
 		<div class="fs-bar" class:shown={barShown}>
-			<span class="fs-host">{params.username}@{params.host}</span>
+			<span class="fs-host">{label}</span>
 			<button type="button" class="fs-exit" onclick={() => setFullscreen(false)}>{t('rdp.exit_fullscreen')}</button>
 		</div>
 	{/if}

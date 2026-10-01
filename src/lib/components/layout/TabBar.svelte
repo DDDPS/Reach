@@ -99,7 +99,7 @@
 						<svg class="tab-icon" width="14" height="14" viewBox="0 0 24 24" fill="none">
 							{#if tab.type === 'local'}
 								<path d={terminalIcon} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-							{:else if tab.type === 'rdp'}
+							{:else if tab.type === 'rdp' || tab.type === 'vnc'}
 								<path d={rdpIcon} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
 							{:else}
 								<path d={sshIcon} fill="currentColor" />

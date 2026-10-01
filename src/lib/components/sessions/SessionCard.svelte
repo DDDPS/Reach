@@ -59,7 +59,7 @@
 					</span>
 				{/if}
 			</span>
-			<span class="session-detail">{session.username}@{session.host}:{session.port}</span>
+			<span class="session-detail">{session.username ? `${session.username}@` : ''}{session.host}:{session.port}</span>
 		</div>
 		<span class="auth-badge" title={t('session.auth_type', { type: session.auth_method.type })}>{authLabel}</span>
 	</button>

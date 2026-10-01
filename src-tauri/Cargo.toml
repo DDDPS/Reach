@@ -119,6 +119,10 @@ tar = "0.4"
 tauri-plugin-process = "2.3.1"
 # The Android half of vault unlock (fingerprint, security keys); a no-op elsewhere.
 tauri-plugin-reach-unlock = { path = "plugins/reach-unlock" }
+# VNC (RFB) client for VNC sessions.
+vnc-rs = "0.6"
+# Tight-encoded VNC rectangles are JPEG. Already in the tree through `image`.
+zune-jpeg = "0.5"
 
 # Remote desktop. IronRDP is pure Rust end to end — the connector, CredSSP,
 # TLS via rustls, the codecs — so it builds on all four targets, Android
