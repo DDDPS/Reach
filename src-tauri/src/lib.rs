@@ -202,6 +202,14 @@ fn log_file() -> Option<std::fs::File> {
 /// Build and run the Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // A development build can be pointed at a data folder of its own, so
+    // testing never runs against the user's real vault. First, before the
+    // log file opens. Compiled out of release builds: what an installed
+    // Reach opens is never decided by an environment variable.
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var_os("REACH_DEV_DATA_DIR").filter(|d| !d.is_empty()) {
+        set_app_data_dir(PathBuf::from(dir));
+    }
     init_logging();
 
     // TLS for HTTPS (reqwest) and every other rustls user: ring, which the
