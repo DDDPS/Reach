@@ -754,6 +754,12 @@
 	function requestResize(): void {
 		{
 			if (phase !== 'connected') return;
+			// A VNC desktop is usually shared and already laid out: asked to
+			// take a phone's shape, the server cut its windows off at the new
+			// edge, for everyone watching. It is scaled to fit here instead and
+			// never resized, as noVNC does by default. RDP still resizes: each
+			// RDP login is a session of its own.
+			if (isVnc()) return;
 			const s = fitSize();
 			// The size the desktop already has is not a resize. Asking for
 			// it anyway leaves a request the server never answers.
