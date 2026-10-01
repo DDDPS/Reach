@@ -94,18 +94,18 @@ pub async fn db_delete_connection(state: State<'_, AppState>, id: String) -> Res
 // ---------------------------------------------------------------------------
 // Connecting
 
-async fn auth_for(state: &State<'_, AppState>, method: &AuthMethod) -> Result<AuthParams, String> {
+async fn auth_for(state: &State<'_, AppState>, method: &AuthMethod, try_agent_keys: bool) -> Result<AuthParams, String> {
     use crate::ipc::ssh_commands::{build_auth, resolve_key_source};
     match method {
-        AuthMethod::Password { password } => build_auth("password", password.clone(), None, None),
+        AuthMethod::Password { password } => build_auth("password", password.clone(), None, None, false),
         AuthMethod::Key { path, passphrase, key_content, key_id } => {
             let (source, stored) = match key_content.clone().filter(|k| !k.trim().is_empty()) {
                 Some(k) => (Some(KeySource::Material(k)), None),
                 None => resolve_key_source(state, key_id.clone(), path.clone()).await?,
             };
-            build_auth("key", None, source, passphrase.clone().filter(|p| !p.is_empty()).or(stored))
+            build_auth("key", None, source, passphrase.clone().filter(|p| !p.is_empty()).or(stored), try_agent_keys)
         }
-        AuthMethod::Agent => build_auth("agent", None, None, None),
+        AuthMethod::Agent => build_auth("agent", None, None, None, false),
     }
 }
 
@@ -113,7 +113,19 @@ async fn auth_for(state: &State<'_, AppState>, method: &AuthMethod) -> Result<Au
 async fn forward_for(app: &tauri::AppHandle, state: &State<'_, AppState>, conn: &DbConnection) -> Result<Option<Forward>, String> {
     let host = if conn.host.trim().is_empty() { "127.0.0.1".to_string() } else { conn.host.trim().to_string() };
     let port = if conn.port == 0 { conn.engine.default_port() } else { conn.port };
-    match &conn.route {
+    forward_route(app, state, &conn.route, host, port).await
+}
+
+/// The SSH leg to `host:port` for a route, if it has one: a loopback port
+/// that reaches it through the SSH server. Shared with VNC sessions.
+pub(crate) async fn forward_route(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    route: &Route,
+    host: String,
+    port: u16,
+) -> Result<Option<Forward>, String> {
+    match route {
         Route::Direct => Ok(None),
         Route::Live { connection_id } => {
             let handle = state
@@ -126,10 +138,10 @@ async fn forward_for(app: &tauri::AppHandle, state: &State<'_, AppState>, conn: 
         }
         Route::Session { session_id } => {
             let s = crate::ipc::session_commands::session_get(state.clone(), session_id.clone()).await?;
-            let auth = auth_for(state, &s.auth_method).await?;
+            let auth = auth_for(state, &s.auth_method, s.try_agent_keys.unwrap_or(false)).await?;
             let mut jumps = Vec::new();
             for j in s.jump_chain.clone().unwrap_or_default() {
-                jumps.push(JumpHostParams { auth: auth_for(state, &j.auth_method).await?, host: j.host, port: j.port, username: j.username });
+                jumps.push(JumpHostParams { auth: auth_for(state, &j.auth_method, false).await?, host: j.host, port: j.port, username: j.username });
             }
             let ssh = SshManager::open_headless(&s.host, s.port, &s.username, auth, jumps, s.proxy.clone(), app.clone())
                 .await

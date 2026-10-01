@@ -245,15 +245,20 @@ fn describe_key_load_error(
     raw_path: Option<&str>,
     label: &str,
     had_passphrase: bool,
+    encrypted: Option<bool>,
     err: &impl std::fmt::Display,
 ) -> String {
     use crate::ssh::keyfile::{classify_path, KeyFileKind};
 
-    // An imported key has no file to classify; the only thing that can be
-    // wrong with one is the passphrase.
+    // An imported key has no file to classify. It was read once already, at
+    // import, so a key that will not load now is either locked or damaged;
+    // calling every failure "passphrase-protected" sent people looking for a
+    // passphrase their key never had.
     let Some(raw_path) = raw_path else {
         return if had_passphrase {
             format!("Could not open {} — wrong passphrase? ({})", label, err)
+        } else if encrypted == Some(false) || encrypted.is_none() {
+            format!("Could not read {}: it is damaged or not a private key Reach understands. Import it again from the original key file. ({})", label, err)
         } else {
             format!("{} {} ({})", NEEDS_PASSPHRASE, label, err)
         };
@@ -288,6 +293,8 @@ fn describe_key_load_error(
         KeyFileKind::PrivateKey => {
             if had_passphrase {
                 format!("Could not load private key '{}' — wrong passphrase? ({})", label, err)
+            } else if encrypted == Some(false) {
+                format!("Could not read the private key '{}': the file is damaged. ({})", label, err)
             } else {
                 format!("{} '{}' ({})", NEEDS_PASSPHRASE, label, err)
             }
@@ -305,11 +312,48 @@ fn describe_key_load_error(
 /// Returns Err only on hard transport-level errors; all "auth was tried but
 /// rejected" outcomes resolve to Ok(false) so the caller can decide what to
 /// do (e.g. surface a password fallback prompt to the user).
-async fn cascade_authenticate(
-    handle: &mut russh::client::Handle<SshClientHandler>,
+/// How a login got in, and the fingerprint of the session's own key if the
+/// server refused it on the way.
+#[derive(Debug, Default)]
+struct AuthOutcome {
+    by: Option<AuthBy>,
+    refused_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthBy {
+    Key,
+    Agent,
+    Password,
+}
+
+impl AuthOutcome {
+    /// Ok when something got in; otherwise the error that says what to fix.
+    fn into_result(self) -> Result<AuthBy, SshError> {
+        match (self.by, self.refused_key) {
+            (Some(by), _) => Ok(by),
+            (None, Some(fingerprint)) => Err(SshError::KeyRefused(fingerprint)),
+            (None, None) => Err(SshError::AuthFailed),
+        }
+    }
+}
+
+/// The RSA signature hash to offer: the one the server said it accepts
+/// (server-sig-algs, RFC 8308), or SHA-1 when it said nothing, which is what
+/// OpenSSH does (`key_sig_algorithm` in sshconnect2.c). One offer per key,
+/// never a guess at others: each refusal counts against the server's
+/// MaxAuthTries and its brute-force protection. Every server new enough to
+/// refuse SHA-1 (OpenSSH 8.8+) sends its list, as all have since 7.2.
+fn rsa_hashes(known: Option<Option<russh::keys::HashAlg>>) -> Vec<Option<russh::keys::HashAlg>> {
+    vec![known.flatten()]
+}
+
+async fn cascade_authenticate<H: russh::client::Handler>(
+    handle: &mut russh::client::Handle<H>,
     username: &str,
     auth: &AuthParams,
-) -> Result<bool, SshError> {
+) -> Result<AuthOutcome, SshError> {
+    let mut outcome = AuthOutcome::default();
     // 1. Configured private key — a file on this machine, or material the
     //    user imported into the vault.
     if let Some(key_auth) = &auth.key {
@@ -327,6 +371,7 @@ async fn cascade_authenticate(
                         Some(path),
                         &key_auth.label(),
                         key_auth.passphrase.is_some(),
+                        None,
                         &e,
                     ))
                 })?
@@ -345,38 +390,53 @@ async fn cascade_authenticate(
                 },
                 &key_auth.label(),
                 key_auth.passphrase.is_some(),
+                key_is_encrypted(&material),
                 &e,
             ))
         })?;
+        let fingerprint = key.public_key().fingerprint(russh::keys::HashAlg::Sha256).to_string();
         tracing::info!(
             "SSH key loaded successfully, attempting publickey auth as '{}'",
             username
         );
-        // An RSA key signs with whichever SHA-2 the server says it accepts;
-        // left unset it would sign with SHA-1, which current servers refuse.
-        let hash_alg = if key.algorithm().is_rsa() {
-            handle.best_supported_rsa_hash().await.ok().flatten().flatten()
+        // An RSA key signs with a hash the server accepts; see rsa_hashes.
+        let hashes = if key.algorithm().is_rsa() {
+            rsa_hashes(handle.best_supported_rsa_hash().await.ok().flatten())
         } else {
-            None
+            vec![None]
         };
-        let accepted = handle
-            .authenticate_publickey(username, PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg))
-            .await
-            .map_err(|e| {
-                tracing::error!("SSH publickey auth error: {}", e);
-                SshError::ConnectionFailed(format!("Auth error: {}", e))
-            })?
-            .success();
-        tracing::info!("SSH publickey auth result: {}", accepted);
-        if accepted {
-            return Ok(true);
+        let key = Arc::new(key);
+        for hash_alg in hashes {
+            let accepted = handle
+                .authenticate_publickey(username, PrivateKeyWithHashAlg::new(Arc::clone(&key), hash_alg))
+                .await
+                .map_err(|e| {
+                    tracing::error!("SSH publickey auth error: {}", e);
+                    SshError::ConnectionFailed(format!("Auth error: {}", e))
+                })?
+                .success();
+            tracing::info!("SSH publickey auth result for {fingerprint} ({hash_alg:?}): {accepted}");
+            if accepted {
+                outcome.by = Some(AuthBy::Key);
+                return Ok(outcome);
+            }
         }
+        tracing::warn!("SSH: the server refused this session's key {fingerprint}");
+        outcome.refused_key = Some(fingerprint);
     }
 
     // 2. ssh-agent identities (auto-detected: OpenSSH agent / Pageant / SSH_AUTH_SOCK).
     if auth.allow_agent {
         match try_agent_auth(handle, username.to_string()).await {
-            Ok(true) => return Ok(true),
+            Ok(true) => {
+                if let Some(refused) = &outcome.refused_key {
+                    tracing::warn!(
+                        "SSH: logged in with a key from the SSH agent; this session's own key {refused} was refused, so it will not work where there is no agent (a phone, another computer)"
+                    );
+                }
+                outcome.by = Some(AuthBy::Agent);
+                return Ok(outcome);
+            }
             Ok(false) => tracing::info!("SSH agent: no identity accepted"),
             Err(e) => tracing::info!("SSH agent fallback skipped: {}", e),
         }
@@ -399,19 +459,20 @@ async fn cascade_authenticate(
             .success();
         tracing::info!("SSH password auth result: {}", accepted);
         if accepted {
-            return Ok(true);
+            outcome.by = Some(AuthBy::Password);
+            return Ok(outcome);
         }
     }
 
-    Ok(false)
+    Ok(outcome)
 }
 
 /// Try every identity from the local SSH agent. Returns Ok(true) on the first
 /// identity accepted by the server, Ok(false) if none are accepted, or Err if
 /// the agent is unreachable or holds no keys. Cross-platform: uses OpenSSH's
 /// Windows named pipe / Pageant on Windows; SSH_AUTH_SOCK on Unix.
-async fn try_agent_auth(
-    handle: &mut russh::client::Handle<SshClientHandler>,
+async fn try_agent_auth<H: russh::client::Handler>(
+    handle: &mut russh::client::Handle<H>,
     username: String,
 ) -> Result<bool, String> {
     #[cfg(unix)]
@@ -458,8 +519,8 @@ fn pageant_is_running() -> bool {
     unsafe { FindWindowW(w!("Pageant"), w!("Pageant")).is_ok() }
 }
 
-async fn try_agent_auth_inner<S>(
-    handle: &mut russh::client::Handle<SshClientHandler>,
+async fn try_agent_auth_inner<S, H: russh::client::Handler>(
+    handle: &mut russh::client::Handle<H>,
     username: String,
     mut agent: russh::keys::agent::client::AgentClient<S>,
 ) -> Result<bool, String>
@@ -517,6 +578,12 @@ pub enum SshError {
     ConnectionFailed(String),
     #[error("Authentication rejected — server did not accept the public key (not in authorized_keys?) or password is wrong")]
     AuthFailed,
+    /// The session's own key was offered and refused, and nothing else got
+    /// in. Named by fingerprint so it can be compared with the server's
+    /// `authorized_keys` (`ssh-keygen -lf`). Worded to start like
+    /// `AuthFailed`: the connect dialog offers a password on "rejected".
+    #[error("Authentication rejected — the server refused this session's key ({0}). Its public key must be in ~/.ssh/authorized_keys on the server; check with ssh-keygen -lf, or import the key the server already trusts")]
+    KeyRefused(String),
     #[error("Channel error: {0}")]
     ChannelError(String),
     #[error("Connection not found: {0}")]
@@ -698,11 +765,50 @@ impl KeyAuth {
 /// (issue #46). A passphrase that the key does not want is not an error the
 /// user should ever have to understand: try it, then try without it, and keep
 /// the first error if neither works.
+/// Key text as it should have been. A key copied between machines picks up a
+/// byte order mark (Notepad, PowerShell), Windows line ends, trailing spaces
+/// or blank lines; russh wants the `-----BEGIN` line exactly and skips any
+/// body line with a stray character, which then reads as a damaged key. None
+/// of that is part of the key, so it goes. Every format Reach reads (OpenSSH,
+/// PEM, PuTTY's .ppk) is line-based with no meaningful trailing space.
+pub fn normalize_key_text(material: &str) -> String {
+    let text = material.strip_prefix('\u{feff}').unwrap_or(material);
+    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+    let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(lines.len());
+    let end = lines.iter().rposition(|l| !l.trim().is_empty()).map_or(start, |i| i + 1);
+    let mut out = lines[start..end].iter().map(|l| l.trim_start()).collect::<Vec<_>>().join("\n");
+    out.push('\n');
+    out
+}
+
+/// Whether key text is passphrase-protected, when that can be told without
+/// the passphrase: an OpenSSH key says so in its header, a PEM key in its
+/// `Proc-Type`/`ENCRYPTED` label, a .ppk in its `Encryption:` line. `None`
+/// when the text is none of those.
+pub fn key_is_encrypted(material: &str) -> Option<bool> {
+    let text = normalize_key_text(material);
+    if let Ok(key) = russh::keys::ssh_key::PrivateKey::from_openssh(&text) {
+        return Some(key.is_encrypted());
+    }
+    if text.starts_with("PuTTY-User-Key-File-") {
+        return text
+            .lines()
+            .find_map(|l| l.strip_prefix("Encryption:"))
+            .map(|v| v.trim() != "none");
+    }
+    if text.starts_with("-----BEGIN ") {
+        return Some(text.contains("ENCRYPTED"));
+    }
+    None
+}
+
 pub fn decode_key(
     material: &str,
     passphrase: Option<&str>,
 ) -> Result<russh::keys::PrivateKey, russh::keys::Error> {
     let pass = passphrase.filter(|p| !p.is_empty());
+    let normalized = normalize_key_text(material);
+    let material = normalized.as_str();
     match russh::keys::decode_secret_key(material, pass) {
         Ok(key) => Ok(key),
         Err(e) if pass.is_some() => russh::keys::decode_secret_key(material, None).map_err(|_| e),
@@ -712,15 +818,11 @@ pub fn decode_key(
 
 impl AuthParams {
     pub fn from_password(password: String) -> Self {
-        Self { password: Some(password), allow_agent: true, ..Default::default() }
+        Self { password: Some(password), ..Default::default() }
     }
 
     pub fn from_key(path: String, passphrase: Option<String>) -> Self {
-        Self {
-            key: Some(KeyAuth { source: KeySource::Path(path), passphrase }),
-            allow_agent: true,
-            ..Default::default()
-        }
+        Self { key: Some(KeyAuth { source: KeySource::Path(path), passphrase }), ..Default::default() }
     }
 
     pub fn from_agent() -> Self {
@@ -819,9 +921,7 @@ impl SshManager {
             Ok((handle, channel))
         };
 
-        let (handle, channel) = tokio::time::timeout(timeout_duration, connect_future)
-            .await
-            .map_err(|_| SshError::ConnectionFailed("Connection timed out".into()))??;
+        let (handle, channel) = within_connect_limit(timeout_duration, connect_future).await?;
 
         let info = ConnectionInfo {
             id: id.to_string(),
@@ -865,8 +965,17 @@ impl SshManager {
 
         // Authenticate using a cascading strategy: configured key → agent → password.
         // The first method the server accepts wins. Mirrors OpenSSH's progressive auth.
-        if !cascade_authenticate(&mut handle, username, auth).await? {
-            return Err(SshError::AuthFailed);
+        let outcome = cascade_authenticate(&mut handle, username, auth).await?;
+        let refused = outcome.refused_key.clone();
+        let by = outcome.into_result()?;
+        // Logged in, but not with the session's key: the agent or a password
+        // covered for a key the server refuses. Said out loud, because on a
+        // device without that agent the same session fails (a phone has none).
+        if let (Some(fingerprint), AuthBy::Agent | AuthBy::Password) = (refused, by) {
+            let _ = app_handle.emit(
+                "ssh-key-refused-notice",
+                serde_json::json!({ "host": host, "fingerprint": fingerprint, "via": if by == AuthBy::Agent { "agent" } else { "password" } }),
+            );
         }
         Ok(handle)
     }
@@ -983,9 +1092,7 @@ impl SshManager {
         );
 
         let (target_handle, jump_handles) =
-            tokio::time::timeout(timeout_duration, connect_future)
-                .await
-                .map_err(|_| SshError::ConnectionFailed("Connection via jump timed out".into()))??;
+            within_connect_limit(timeout_duration, connect_future).await?;
 
         tracing::info!(
             "SSH authenticated for {}@{}:{} (via jump)",
@@ -1217,9 +1324,7 @@ impl SshManager {
                 Self::handshake_via_jump(host, port, username, &auth, &jump_chain, app_handle).await
             }
         };
-        let (handle, jump_handles) = tokio::time::timeout(timeout, connect)
-            .await
-            .map_err(|_| SshError::ConnectionFailed("Connection timed out".into()))??;
+        let (handle, jump_handles) = within_connect_limit(timeout, connect).await?;
         Ok(HeadlessConnection { handle: Arc::new(tokio::sync::Mutex::new(handle)), jump_handles })
     }
 
@@ -1231,10 +1336,7 @@ impl SshManager {
         username: &str,
         auth: &AuthParams,
     ) -> Result<(), SshError> {
-        if !cascade_authenticate(handle, username, auth).await? {
-            return Err(SshError::AuthFailed);
-        }
-        Ok(())
+        cascade_authenticate(handle, username, auth).await?.into_result().map(|_| ())
     }
 
     pub fn send_data(&self, id: &str, data: &[u8]) -> Result<(), SshError> {
@@ -1570,6 +1672,48 @@ fn hostkey_prompts(
     HOSTKEY_PROMPTS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
+/// Run a connection attempt under `limit`, not counting time while a
+/// host-key prompt waits for the user. OpenSSH's ConnectTimeout bounds
+/// reaching the server, never the person reading a fingerprint; counted, it
+/// gave fifteen seconds to check one, then dropped the connection and left
+/// the dialog open to accept a server for a connection that was gone.
+pub(crate) async fn within_connect_limit<T>(
+    limit: std::time::Duration,
+    attempt: impl std::future::Future<Output = Result<T, SshError>>,
+) -> Result<T, SshError> {
+    let tick = std::time::Duration::from_millis(250);
+    let mut spent = std::time::Duration::ZERO;
+    tokio::pin!(attempt);
+    loop {
+        tokio::select! {
+            done = &mut attempt => return done,
+            _ = tokio::time::sleep(tick) => {
+                if hostkey_prompts().lock().unwrap().is_empty() {
+                    spent += tick;
+                }
+                if spent >= limit {
+                    return Err(SshError::ConnectionFailed("Connection timed out".into()));
+                }
+            }
+        }
+    }
+}
+
+/// A host-key question that is withdrawn when it is no longer being asked:
+/// answered, timed out, or its connection gone. The window is told, so no
+/// dialog stays up to accept a host for a connection that no longer exists.
+struct OpenPrompt {
+    id: String,
+    app: tauri::AppHandle,
+}
+
+impl Drop for OpenPrompt {
+    fn drop(&mut self) {
+        hostkey_prompts().lock().unwrap().remove(&self.id);
+        let _ = self.app.emit("ssh-hostkey-prompt-closed", &self.id);
+    }
+}
+
 /// Resolve a pending host-key prompt with the user's accept/reject decision.
 pub(crate) fn resolve_hostkey_prompt(prompt_id: &str, accept: bool) {
     let sender = hostkey_prompts().lock().unwrap().remove(prompt_id);
@@ -1633,6 +1777,9 @@ impl SshClientHandler {
         let prompt_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::oneshot::channel();
         hostkey_prompts().lock().unwrap().insert(prompt_id.clone(), tx);
+        // Withdrawn however this function ends, including the connection
+        // attempt being dropped while the question is still open.
+        let _open = OpenPrompt { id: prompt_id.clone(), app: app.clone() };
 
         let payload = HostKeyPrompt {
             prompt_id: prompt_id.clone(),
@@ -1644,17 +1791,11 @@ impl SshClientHandler {
             old_fingerprint,
         };
         if app.emit("ssh-hostkey-prompt", &payload).is_err() {
-            hostkey_prompts().lock().unwrap().remove(&prompt_id);
             return false;
         }
 
-        match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
-            Ok(Ok(accept)) => accept,
-            _ => {
-                hostkey_prompts().lock().unwrap().remove(&prompt_id);
-                false
-            }
-        }
+        // No answer is a no.
+        matches!(tokio::time::timeout(std::time::Duration::from_secs(120), rx).await, Ok(Ok(true)))
     }
 }
 
@@ -2216,5 +2357,36 @@ mod shell_tests {
     #[test]
     fn init_skipped_for_unknown_shell() {
         assert!(shell_init(Some("nu")).is_none());
+    }
+}
+
+#[cfg(test)]
+#[path = "client_live_tests.rs"]
+mod live_tests;
+
+#[cfg(test)]
+mod connect_limit_tests {
+    use super::*;
+    use std::time::Duration;
+
+    async fn slow(ms: u64) -> Result<&'static str, SshError> {
+        tokio::time::sleep(Duration::from_millis(ms)).await;
+        Ok("done")
+    }
+
+    /// Both cases in one test: the prompt registry is shared, so the two
+    /// must not run side by side.
+    #[tokio::test]
+    async fn the_limit_does_not_count_time_spent_on_a_host_key_question() {
+        // Nothing open: a slow server is given up on.
+        let out = within_connect_limit(Duration::from_millis(300), slow(900)).await;
+        assert!(matches!(out, Err(SshError::ConnectionFailed(m)) if m.contains("timed out")));
+
+        // A question open: the same wait is the person reading, and it goes on.
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        hostkey_prompts().lock().unwrap().insert("test-prompt".into(), tx);
+        let out = within_connect_limit(Duration::from_millis(300), slow(900)).await;
+        hostkey_prompts().lock().unwrap().remove("test-prompt");
+        assert_eq!(out.unwrap(), "done");
     }
 }

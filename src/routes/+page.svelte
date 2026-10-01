@@ -187,7 +187,9 @@
 						<div class="terminal-wrapper" class:active={tab.id === activeTab?.id}>
 							{#if tab.type === 'rdp' && tab.rdpConnectParams}
 								<RdpPanel id={tab.id} params={tab.rdpConnectParams} active={tab.id === activeTab?.id} />
-							{:else if tab.type !== 'rdp'}
+							{:else if tab.type === 'vnc' && tab.vncConnectParams}
+								<RdpPanel id={tab.id} params={tab.vncConnectParams} protocol="vnc" active={tab.id === activeTab?.id} />
+							{:else if tab.type !== 'rdp' && tab.type !== 'vnc'}
 								<Terminal
 									ptyId={tab.id}
 									type={tab.type}
@@ -205,11 +207,15 @@
 					<RemoteTerminal />
 				{/if}
 				</div>
-				<MonitoringBar
-					connectionId={activeTab?.connectionId}
-					sshUser={activeTab?.title?.split('@')[0]}
-					sessionId={activeTab?.type === 'ssh' ? activeTab?.connectionId : activeTab?.id}
-				/>
+				<!-- A remote desktop has no server stats to show: under one, the bar
+				     only said "Not connected" about a desktop that was. -->
+				{#if activeTab?.type !== 'rdp' && activeTab?.type !== 'vnc'}
+					<MonitoringBar
+						connectionId={activeTab?.connectionId}
+						sshUser={activeTab?.title?.split('@')[0]}
+						sessionId={activeTab?.type === 'ssh' ? activeTab?.connectionId : activeTab?.id}
+					/>
+				{/if}
 			{/if}
 		</div>
 

@@ -1,4 +1,5 @@
-# Vendored from crates.io libsql 0.9.30 with one change, in
+# Vendored from crates.io libsql 0.9.30 with two changes. Second: hyper is
+# built without "http2" (see [dependencies.hyper] below). First, in
 # src/local/connection.rs: disconnect() forgets the SQLite handle after closing
 # it. Upstream, LibsqlConnection's Drop and the inner Connection's Drop each
 # call disconnect() and both see themselves as the last owner, so every close
@@ -264,12 +265,14 @@ optional = true
 version = "0.2"
 optional = true
 
+# Reach: no "http2". Turso is reached over HTTP/1.1 (src/vault/turso_tls.rs
+# offers no ALPN), so h2 was compiled in and never run, and it carried
+# RUSTSEC-2026-0258 (unbounded empty DATA frames), fixed only in h2 0.4.
 [dependencies.hyper]
 version = "0.14"
 features = [
     "client",
     "http1",
-    "http2",
     "stream",
     "runtime",
 ]

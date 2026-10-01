@@ -6,6 +6,7 @@ pub mod monitoring;
 #[cfg(desktop)]
 pub mod pty;
 pub mod rdp;
+pub mod vnc;
 pub mod db;
 pub mod devops;
 pub mod dragout;
@@ -41,6 +42,7 @@ use ipc::credential_commands::*;
 use ipc::settings_commands::*;
 use ipc::mcp_commands::*;
 use ipc::rdp_commands::*;
+use ipc::vnc_commands::*;
 use ipc::monitoring_commands::*;
 #[cfg(desktop)]
 use ipc::pty_commands::*;
@@ -200,6 +202,14 @@ fn log_file() -> Option<std::fs::File> {
 /// Build and run the Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // A development build can be pointed at a data folder of its own, so
+    // testing never runs against the user's real vault. First, before the
+    // log file opens. Compiled out of release builds: what an installed
+    // Reach opens is never decided by an environment variable.
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var_os("REACH_DEV_DATA_DIR").filter(|d| !d.is_empty()) {
+        set_app_data_dir(PathBuf::from(dir));
+    }
     init_logging();
 
     // TLS for HTTPS (reqwest) and every other rustls user: ring, which the
@@ -286,6 +296,14 @@ pub fn run() {
             rdp_disconnect_all,
             rdp_clipboard_sync,
             rdp_window_fullscreen,
+            vnc_connect,
+            vnc_disconnect,
+            vnc_disconnect_all,
+            vnc_ack,
+            vnc_mouse,
+            vnc_key,
+            vnc_resize,
+            vnc_clipboard_sync,
             mcp_stop,
             mcp_status,
             mcp_restore,
@@ -617,6 +635,14 @@ pub fn run() {
             rdp_disconnect_all,
             rdp_clipboard_sync,
             rdp_window_fullscreen,
+            vnc_connect,
+            vnc_disconnect,
+            vnc_disconnect_all,
+            vnc_ack,
+            vnc_mouse,
+            vnc_key,
+            vnc_resize,
+            vnc_clipboard_sync,
             mcp_stop,
             mcp_status,
             mcp_restore,

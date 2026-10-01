@@ -436,7 +436,28 @@
 		}
 	}
 
+	/**
+	 * Open a saved VNC session in a desktop tab. A VNC server may ask for no
+	 * password at all, so a session without one connects as it is; one that
+	 * does ask says so on the panel.
+	 */
+	function openVnc(session: SessionConfig): void {
+		const tab = createTab('vnc', session.host, undefined, session.name, session.detected_os ?? null);
+		tab.vncConnectParams = {
+			id: tab.id,
+			host: session.host,
+			port: session.port,
+			password: session.auth_method.type === 'Password' ? (session.auth_method.password ?? '') : '',
+			viaSessionId: session.via_session_id ?? null,
+		};
+		addToast(t('session.connected_toast', { name: session.name }), 'success');
+	}
+
 	async function handleConnect(session: SessionConfig): Promise<void> {
+		if (sessionKind(session) === 'vnc') {
+			openVnc(session);
+			return;
+		}
 		// Check if credentials are stored in the session (from vault)
 		const storedPassword = session.auth_method.type === 'Password' ? session.auth_method.password : undefined;
 
@@ -552,6 +573,7 @@
 				shell: session.shell ?? undefined,
 				injectColors: getSettings().injectShellColors,
 				showLoginMessage: getSettings().showLoginMessage,
+				tryAgentKeys: authType === 'Key' && session.try_agent_keys === true,
 				jumpChain,
 				proxy: session.proxy ? {
 					proxy_type: session.proxy.proxy_type,

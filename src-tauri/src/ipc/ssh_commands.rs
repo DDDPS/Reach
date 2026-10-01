@@ -17,17 +17,25 @@ pub struct JumpHostConnectParams {
     pub key_id: Option<String>,
 }
 
+/// What a login may try, and nothing else. A key session offers its key, a
+/// password session its password, an agent session the agent's keys. The
+/// agent's keys are offered to a key session only when the user turned that
+/// on for it (`try_agent_keys`).
+///
+/// Every refused offer counts against the server: OpenSSH's MaxAuthTries
+/// (6) and PerSourcePenalties, fail2ban and firewalls block the address
+/// after a few, and every key offered tells the server who you are. Offering
+/// all the agent's keys behind a refused session key was guessing, and it
+/// also hid a session whose own key no longer worked (it then failed on a
+/// phone, which has no agent).
 pub(crate) fn build_auth(
     auth_method: &str,
     password: Option<String>,
     key_source: Option<KeySource>,
     key_passphrase: Option<String>,
+    try_agent_keys: bool,
 ) -> Result<AuthParams, String> {
-    // The frontend currently picks one primary method, but the backend
-    // cascades through key → agent → password regardless. Populating optional
-    // fields here lets a session that was saved with a key still fall back to
-    // an entered password (and vice versa) without any UI gymnastics.
-    let mut auth = AuthParams { allow_agent: true, ..Default::default() };
+    let mut auth = AuthParams { allow_agent: auth_method == "agent", ..Default::default() };
     match auth_method {
         "password" => {
             auth.password = Some(password.ok_or("Password required for password auth")?);
@@ -38,12 +46,9 @@ pub(crate) fn build_auth(
                     .ok_or("Key auth needs either a key file or an imported key")?,
                 passphrase: key_passphrase,
             });
-            // Allow callers to also pass a password as a fallback.
-            auth.password = password.filter(|p| !p.is_empty());
+            auth.allow_agent = try_agent_keys;
         }
-        "agent" => {
-            // Just use ssh-agent (allow_agent is already true).
-        }
+        "agent" => {}
         _ => return Err(format!("Unknown auth method: {}", auth_method)),
     }
     Ok(auth)
@@ -94,6 +99,7 @@ pub async fn ssh_connect(
     shell: Option<String>,
     inject_colors: Option<bool>,
     show_login_message: Option<bool>,
+    try_agent_keys: Option<bool>,
 ) -> Result<String, String> {
     // Default ON when the frontend doesn't specify (back-compat).
     let login = crate::ssh::client::LoginOptions {
@@ -118,7 +124,7 @@ pub async fn ssh_connect(
     let (key_source, stored_passphrase) =
         resolve_key_source(&state, key_id, key_path).await?;
     let key_passphrase = key_passphrase.filter(|p| !p.is_empty()).or(stored_passphrase);
-    let auth = build_auth(&auth_method, password, key_source, key_passphrase)?;
+    let auth = build_auth(&auth_method, password, key_source, key_passphrase, try_agent_keys.unwrap_or(false))?;
 
     // Establish the connection WITHOUT holding the global ssh_manager lock. The
     // handshake/auth/shell setup can take up to the connect timeout (longer if a
@@ -154,6 +160,7 @@ pub async fn ssh_connect(
                         j.password,
                         jsource,
                         j.key_passphrase.filter(|p| !p.is_empty()).or(jstored),
+                        false,
                     )?;
                     Ok(JumpHostParams {
                         host: j.host,
@@ -317,4 +324,33 @@ pub async fn ssh_detect_os(
 #[tauri::command]
 pub fn inspect_key_file(path: String) -> crate::ssh::keyfile::KeyFileInfo {
     crate::ssh::keyfile::classify_path(&path)
+}
+
+#[cfg(test)]
+mod auth_choice_tests {
+    use super::*;
+
+    fn key() -> Option<KeySource> {
+        Some(KeySource::Material("k".into()))
+    }
+
+    /// Each kind of session offers what it names and nothing else, as PuTTY
+    /// (userauth2-client.c filters Pageant down to the configured key) and
+    /// OpenSSH with IdentitiesOnly do. No other key, no password on the side.
+    #[test]
+    fn a_session_offers_only_what_it_names() {
+        let k = build_auth("key", Some("pw".into()), key(), None, false).unwrap();
+        assert!(k.key.is_some() && !k.allow_agent && k.password.is_none());
+
+        let p = build_auth("password", Some("pw".into()), None, None, true).unwrap();
+        assert!(p.password.is_some() && !p.allow_agent && p.key.is_none());
+
+        let a = build_auth("agent", None, None, None, false).unwrap();
+        assert!(a.allow_agent && a.key.is_none() && a.password.is_none());
+    }
+
+    #[test]
+    fn the_agent_backs_a_key_only_when_the_session_asks() {
+        assert!(build_auth("key", None, key(), None, true).unwrap().allow_agent);
+    }
 }

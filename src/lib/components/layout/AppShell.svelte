@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { rdpDisconnectAll } from '$lib/ipc/rdp';
+	import { vncDisconnectAll } from '$lib/ipc/vnc';
 	import type { Snippet } from 'svelte';
 	import { onMount, onDestroy } from 'svelte';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -15,9 +16,11 @@
 	import ActiveSessionsDialog from '$lib/components/shared/ActiveSessionsDialog.svelte';
 	import HostKeyDialog from '$lib/components/shared/HostKeyDialog.svelte';
 	import DuplicateVaultsDialog from '$lib/components/vault/DuplicateVaultsDialog.svelte';
+	import { addToast } from '$lib/state/toasts.svelte';
+	import { t } from '$lib/state/i18n.svelte';
 	import McpConfirmDialog from '$lib/components/shared/McpConfirmDialog.svelte';
 	import { getUpdaterState, relaunchNow, postponeRelaunch } from '$lib/state/updater.svelte';
-	import { getActiveTab, getTabs } from '$lib/state/tabs.svelte';
+	import { getActiveTab, getTabs, isDesktopTab } from '$lib/state/tabs.svelte';
 	import { getSettings } from '$lib/state/settings.svelte';
 	import { sshListConnections } from '$lib/ipc/ssh';
 	import AIPanel from '$lib/components/ai/AIPanel.svelte';
@@ -54,7 +57,7 @@
 
 	/** Count live SSH connections (backend truth; falls back to connected tabs), plus open desktops. */
 	async function countActiveConnections(): Promise<number> {
-		const desktops = getTabs().filter((tab) => tab.type === 'rdp').length;
+		const desktops = getTabs().filter(isDesktopTab).length;
 		try {
 			return (await sshListConnections()).length + desktops;
 		} catch {
@@ -67,7 +70,7 @@
 		// Desktops first, so each server gets a disconnect rather than a
 		// dropped socket, and no session thread outlives the window.
 		try {
-			await rdpDisconnectAll();
+			await Promise.all([rdpDisconnectAll(), vncDisconnectAll()]);
 		} catch {
 			// Nothing open, or the backend is already gone: leave anyway.
 		}
@@ -96,6 +99,17 @@
 
 	let unlistenClose: (() => void) | undefined;
 	let unlistenQuit: (() => void) | undefined;
+	// A login that got in with the SSH agent or a password after the server
+	// refused the session's own key. It works here, and fails on any device
+	// without that agent (a phone): said now, rather than found out there.
+	onMount(() => {
+		const unlisten = listen<{ host: string; fingerprint: string; via: 'agent' | 'password' }>('ssh-key-refused-notice', (e) => {
+			const { host, fingerprint, via } = e.payload;
+			addToast(t(via === 'agent' ? 'ssh.key_refused_agent' : 'ssh.key_refused_password', { host, fingerprint }), 'warning', 20000);
+		});
+		return () => void unlisten.then((stop) => stop());
+	});
+
 	onMount(async () => {
 		try {
 			// Window close (X / Alt+F4 / Cmd+Q). The frontend owns the decision
@@ -180,8 +194,8 @@
 		     to read or type into, so it is told there is no tab. -->
 		<AIPanel
 			connectionId={activeConnectionId}
-			activeTabId={activeTab?.type === 'rdp' ? undefined : activeTab?.id}
-			activeTabType={activeTab?.type === 'rdp' ? undefined : activeTab?.type}
+			activeTabId={isDesktopTab(activeTab) ? undefined : activeTab?.id}
+			activeTabType={activeTab?.type === 'rdp' || activeTab?.type === 'vnc' ? undefined : activeTab?.type}
 		/>
 	</div>
 

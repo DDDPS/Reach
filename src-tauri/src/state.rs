@@ -13,6 +13,7 @@ use crate::pty::manager::PtyManager;
 #[cfg(desktop)]
 use crate::serial::port::SerialManager;
 use crate::rdp::RdpManager;
+use crate::vnc::VncManager;
 use crate::ssh::client::SshManager;
 use crate::ansible::project::AnsibleProjectManager;
 use crate::tofu::project::TofuProjectManager;
@@ -38,6 +39,7 @@ pub enum SessionKind {
     #[default]
     Ssh,
     Rdp,
+    Vnc,
 }
 
 impl SessionKind {
@@ -65,6 +67,13 @@ pub struct SessionConfig {
     /// A local folder shown inside the remote desktop as a drive, RDP only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_path: Option<String>,
+    /// Key sessions only: offer the SSH agent's keys if this session's own key
+    /// is refused. Off unless the user turned it on; see `build_auth`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub try_agent_keys: Option<bool>,
+    /// VNC only: a saved SSH session to reach the server through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via_session_id: Option<String>,
     pub folder_id: Option<String>,
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,6 +215,7 @@ pub struct AppState {
     #[cfg(desktop)]
     pub serial_manager: Arc<tokio::sync::Mutex<SerialManager>>,
     pub rdp_manager: Arc<tokio::sync::Mutex<RdpManager>>,
+    pub vnc_manager: Arc<tokio::sync::Mutex<VncManager>>,
     pub vault_manager: Arc<tokio::sync::Mutex<VaultManager>>,
     pub plugin_manager: Arc<tokio::sync::Mutex<PluginManager>>,
     /// URL of the marketplace registry JSON file.
@@ -245,6 +255,7 @@ impl AppState {
             #[cfg(desktop)]
             serial_manager: Arc::new(tokio::sync::Mutex::new(SerialManager::new())),
             rdp_manager: Arc::new(tokio::sync::Mutex::new(RdpManager::new())),
+            vnc_manager: Arc::new(tokio::sync::Mutex::new(VncManager::new())),
             vault_manager: Arc::new(tokio::sync::Mutex::new(VaultManager::new(app_dir.clone()))),
             plugin_manager: Arc::new(tokio::sync::Mutex::new(PluginManager::new(app_dir.join("plugins")))),
             marketplace_index_url: Arc::new(RwLock::new(

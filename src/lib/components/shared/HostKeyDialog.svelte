@@ -12,12 +12,21 @@
 	let current = $derived(queue[0]);
 
 	let unlisten: UnlistenFn | undefined;
+	let unlistenClosed: UnlistenFn | undefined;
 	onMount(async () => {
 		unlisten = await listen<HostKeyPrompt>('ssh-hostkey-prompt', (e) => {
 			queue = [...queue, e.payload];
 		});
+		// The question was withdrawn: answered elsewhere, timed out, or its
+		// connection is gone. Its dialog must not stay up to be accepted.
+		unlistenClosed = await listen<string>('ssh-hostkey-prompt-closed', (e) => {
+			queue = queue.filter((p) => p.promptId !== e.payload);
+		});
 	});
-	onDestroy(() => unlisten?.());
+	onDestroy(() => {
+		unlisten?.();
+		unlistenClosed?.();
+	});
 
 	async function respond(accept: boolean): Promise<void> {
 		const p = current;

@@ -1040,6 +1040,15 @@ impl VaultManager {
 
     /// Reset vault - delete all local data.
     pub async fn reset(&mut self) -> Result<(), VaultError> {
+        // The identity's key goes with it: a reset that left the secret key
+        // in the OS keychain left the old identity openable. Read from the
+        // identity file too, since a locked vault has no user in memory.
+        for uuid in self.user_uuid.clone().into_iter().chain(self.stored_user_uuid().await) {
+            if let Err(e) = delete_key_from_keychain(&uuid) {
+                tracing::warn!("Reset could not remove the vault key from the OS keychain: {e}");
+            }
+        }
+
         // Close all vaults
         self.vaults.clear();
         self.vault_names.clear();
@@ -2043,6 +2052,12 @@ impl VaultManager {
                     .collect()
             })
             .collect()
+    }
+
+    /// The user the identity file on disk belongs to, if there is one.
+    async fn stored_user_uuid(&self) -> Option<String> {
+        let raw = tokio::fs::read_to_string(self.app_dir.join("vault_identity.json")).await.ok()?;
+        serde_json::from_str::<StoredIdentity>(&raw).ok().map(|s| s.user_uuid)
     }
 
     /// Delete a vault.
@@ -3193,6 +3208,10 @@ impl VaultManager {
         }
         tracing::info!("Secret key extracted from bundle (32 bytes)");
 
+        // The identity being replaced keeps its key in the OS keychain: a
+        // restore of the wrong backup must leave a way back to it. Only an
+        // explicit reset removes a key.
+
         // Step 3: Clear in-memory state
         self.vaults.clear();
         self.vault_names.clear();
@@ -3211,9 +3230,15 @@ impl VaultManager {
             tokio::fs::remove_file(&identity_path).await?;
         }
 
-        // Step 4: Store secret key in OS keychain (for auto_unlock on restart)
-        store_key_in_keychain(&bundle.identity.user_uuid, &secret_key_bytes)?;
-        tracing::info!("Secret key stored in OS keychain for user {}", bundle.identity.user_uuid);
+        // Step 4: Store secret key in OS keychain (for auto_unlock on restart).
+        // Only a convenience, as everywhere else the key is stored: without
+        // it Reach asks for the master password at the next start. A
+        // credential store that refuses (Windows answered error 8 to a
+        // background process) must not make a good backup unrestorable.
+        match store_key_in_keychain(&bundle.identity.user_uuid, &secret_key_bytes) {
+            Ok(()) => tracing::info!("Secret key stored in OS keychain for user {}", bundle.identity.user_uuid),
+            Err(e) => tracing::warn!("Backup restored without the OS keychain ({e}); the master password opens it"),
+        }
 
         // Step 5: Build internal_vault_ids from bundle
         let mut internal_vault_ids = HashMap::new();
@@ -3454,16 +3479,23 @@ pub(crate) fn keychain_entry_in(service: &str, user: &str) -> Result<keyring_cor
     static STORE: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
     STORE
         .get_or_init(|| {
-            #[cfg(target_os = "windows")]
+            // Tests never touch the real OS keychain: every test identity
+            // left its key in the Windows Credential Manager, until its
+            // storage was full (853 entries) and the user's own Reach could
+            // no longer store its key. keyring-core's sample store is made
+            // for exactly this: in memory, kept by service and user.
+            #[cfg(test)]
+            let store = keyring_core::sample::Store::new();
+            #[cfg(all(not(test), target_os = "windows"))]
             let store = windows_native_keyring_store::Store::new();
-            #[cfg(target_os = "macos")]
+            #[cfg(all(not(test), target_os = "macos"))]
             let store = apple_native_keyring_store::keychain::Store::new();
-            #[cfg(target_os = "linux")]
+            #[cfg(all(not(test), target_os = "linux"))]
             let store = linux_keyutils_keyring_store::Store::new_with_configuration(&HashMap::from([(
                 "prefix",
                 "keyring-rs:",
             )]));
-            #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+            #[cfg(all(not(test), not(any(target_os = "windows", target_os = "macos", target_os = "linux"))))]
             let store = keyring_core::mock::Store::new();
             store.map(|s| keyring_core::set_default_store(s)).map_err(|e| e.to_string())
         })
@@ -3618,3 +3650,47 @@ mod password_tests;
 #[cfg(test)]
 #[path = "manager_duplicate_tests.rs"]
 mod duplicate_tests;
+
+#[cfg(test)]
+#[path = "manager_backup_tests.rs"]
+mod backup_tests;
+
+#[cfg(test)]
+mod keychain_tests {
+    use super::*;
+
+    /// Tests run against an in-memory keychain that keeps what is written,
+    /// never the OS one (see keychain_entry_in).
+    #[test]
+    fn the_test_keychain_keeps_what_is_written() {
+        let entry = keychain_entry_in("reach-keychain-test", "user-a").unwrap();
+        entry.set_password("value").unwrap();
+        let again = keychain_entry_in("reach-keychain-test", "user-a").unwrap();
+        assert_eq!(again.get_password().unwrap(), "value");
+        again.delete_credential().unwrap();
+        assert!(keychain_entry_in("reach-keychain-test", "user-a").unwrap().get_password().is_err());
+    }
+
+    /// A reset removes the identity's key: it must not stay behind able to
+    /// open what the identity encrypted.
+    #[tokio::test]
+    async fn a_reset_takes_the_identity_key_with_it() {
+        let dir = std::env::temp_dir().join(format!("reach-reset-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut mgr = VaultManager::new(dir.clone());
+        let test_password = format!(
+            "reset-test-pass-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        mgr.init_identity(&test_password).await.unwrap();
+        let uuid = mgr.user_uuid.clone().unwrap();
+        assert!(get_key_from_keychain(&uuid).is_ok(), "the identity stored its key");
+        mgr.reset().await.unwrap();
+        assert!(get_key_from_keychain(&uuid).is_err(), "the key outlived the reset");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

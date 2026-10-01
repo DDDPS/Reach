@@ -1,10 +1,15 @@
-A fix for the session list.
+VNC, and logins that try only what you set.
 
-- Fixed: the session list could stay on "Loading sessions..." when a
-  shared vault had been added twice. Each session now shows once, and
-  Reach offers to merge the two entries back into one. All your
-  connections stay, and nothing changes for anyone else.
-- Accepting an invite to a vault you already have no longer adds it a
-  second time.
+- Fixed: on a Windows without the Visual C++ runtime, Reach did not
+  start at all. It now needs nothing but Windows.
+- New: VNC sessions, directly or through one of your SSH sessions, with
+  the same full screen and phone keys as remote desktop.
+- Sessions now try only their own key or password. If a session that
+  used to connect now says its key was refused, your SSH agent was
+  covering for it: add the session's public key to the server.
+- A refused key now tells you which key it was.
+- Fixed: importing ~/.ssh/config could hang.
+- Fixed: the vault merge message showed {name} instead of the name.
+- More time to check a new server's fingerprint.
 
 Full details: https://github.com/alexandrosnt/Reach/blob/main/CHANGELOG.md

@@ -100,12 +100,14 @@ pub fn inspect(private_key: &str) -> Result<KeyFacts, String> {
     let looks_encrypted = trimmed.contains("ENCRYPTED")
         || trimmed.contains("Proc-Type: 4,ENCRYPTED")
         || trimmed.contains("DEK-Info:");
-    if russh::keys::decode_secret_key(trimmed, None).is_ok() {
+    // Read the way a login reads it, so what is shown is the key that will
+    // be offered: algorithm, fingerprint and public half, from the private key.
+    if let Ok(pk) = crate::ssh::client::decode_key(trimmed, None) {
         return Ok(KeyFacts {
-            algo: None,
-            fingerprint: None,
+            algo: Some(pk.algorithm().as_str().to_string()),
+            fingerprint: Some(pk.fingerprint(Default::default()).to_string()),
             encrypted: false,
-            public_key: None,
+            public_key: pk.public_key().to_openssh().ok(),
         });
     }
     if looks_encrypted || trimmed.contains("PRIVATE KEY") {
@@ -151,11 +153,24 @@ pub fn describe(id: &str, name: &str, created_at: i64, material: &StoredKeyMater
             .as_deref()
             .map(|p| !p.is_empty())
             .unwrap_or(false),
-        public_key: material
-            .public_key
-            .clone()
-            .or_else(|| facts.as_ref().and_then(|f| f.public_key.clone())),
+        // The public half the private key itself gives, when it can be read:
+        // that is the key a login offers, so that is what belongs in a
+        // server's authorized_keys. A stored one (pasted at import, or the
+        // .pub that sat beside the file) is shown only when the private key
+        // cannot be read without its passphrase.
+        public_key: facts
+            .as_ref()
+            .and_then(|f| f.public_key.clone())
+            .or_else(|| material.public_key.clone()),
         created_at,
+    }
+}
+
+/// Whether two OpenSSH public keys are the same key, whatever their comments.
+pub fn same_public_key(a: &str, b: &str) -> bool {
+    match (ssh_key::PublicKey::from_openssh(a.trim()), ssh_key::PublicKey::from_openssh(b.trim())) {
+        (Ok(a), Ok(b)) => a.key_data() == b.key_data(),
+        _ => false,
     }
 }
 
@@ -263,5 +278,40 @@ mod tests {
         assert_eq!(back.private_key, material.private_key);
         assert_eq!(back.passphrase, material.passphrase);
         assert_eq!(back.public_key, material.public_key);
+    }
+
+    /// The public key a list shows is the private key's own, never a stored
+    /// one from somewhere else: a `.pub` that sat beside the wrong file made
+    /// people put a key in authorized_keys that Reach never logs in with.
+    #[test]
+    fn the_shown_public_key_is_the_private_keys_own() {
+        let other = inspect(ED25519_ENCRYPTED).unwrap().public_key.unwrap();
+        let own = inspect(ED25519).unwrap().public_key.unwrap();
+        assert!(!same_public_key(&own, &other));
+        let material = StoredKeyMaterial { private_key: ED25519.to_string(), passphrase: None, public_key: Some(other) };
+        let shown = describe("id", "laptop", 0, &material).public_key.unwrap();
+        assert!(same_public_key(&shown, &own), "showed {shown}");
+    }
+
+    #[test]
+    fn the_same_key_with_another_comment_is_the_same_key() {
+        let own = inspect(ED25519).unwrap().public_key.unwrap();
+        let body: Vec<&str> = own.split_whitespace().take(2).collect();
+        assert!(same_public_key(&own, &format!("{} {} someone@else", body[0], body[1])));
+        assert!(!same_public_key(&own, "not a key"));
+    }
+
+    /// Stored exactly as given, read forgivingly: a key with a byte order
+    /// mark, Windows line ends and trailing spaces still reads, and its
+    /// stored bytes stay what they were.
+    #[test]
+    fn a_messy_copy_of_a_key_reads_as_the_key() {
+        let messy = format!("\u{feff}{}", ED25519.replace('\n', "  \r\n"));
+        let facts = inspect(&messy).unwrap();
+        assert_eq!(facts.fingerprint, inspect(ED25519).unwrap().fingerprint);
+        verify_passphrase(&messy, None).expect("opens");
+        let material = StoredKeyMaterial { private_key: messy.clone(), passphrase: None, public_key: None };
+        let back: StoredKeyMaterial = serde_json::from_slice(&serde_json::to_vec(&material).unwrap()).unwrap();
+        assert_eq!(back.private_key, messy);
     }
 }
