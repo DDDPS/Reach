@@ -1704,5 +1704,7 @@
   "settings.login_message": "Mostra il messaggio di accesso",
   "settings.login_message_desc": "Mantieni a schermo il messaggio di benvenuto del server (MOTD, ultimo accesso, stato del sistema) dopo la connessione, come fanno gli altri client SSH.",
   "ssh.key_refused_agent": "Accesso a {{host}} con una chiave del tuo agente SSH: il server ha rifiutato la chiave di questa sessione ({{fingerprint}}). La sessione fallirà sui dispositivi senza quell'agente, come un telefono. Aggiungi la chiave pubblica della sessione all'authorized_keys del server o importa la chiave di cui il server si fida.",
-  "ssh.key_refused_password": "Accesso a {{host}} con password: il server ha rifiutato la chiave di questa sessione ({{fingerprint}}). Aggiungi la chiave pubblica della sessione all'authorized_keys del server o importa la chiave di cui il server si fida."
+  "ssh.key_refused_password": "Accesso a {{host}} con password: il server ha rifiutato la chiave di questa sessione ({{fingerprint}}). Aggiungi la chiave pubblica della sessione all'authorized_keys del server o importa la chiave di cui il server si fida.",
+  "session.try_agent_keys": "Prova anche le chiavi del mio agente SSH se questa chiave viene rifiutata",
+  "session.try_agent_keys_hint": "Disattivato per impostazione predefinita. Ogni chiave offerta conta come accesso fallito sul server, i server bloccano un indirizzo dopo pochi tentativi (fail2ban, MaxAuthTries) e ogni chiave dice al server chi sei. Senza questa opzione, una chiave rifiutata lo dice chiaramente."
 }

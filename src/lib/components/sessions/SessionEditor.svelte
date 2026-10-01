@@ -64,6 +64,8 @@
 	/** An imported key, used instead of keyPath. */
 	let keyId = $state('');
 	let keyPassphrase = $state('');
+	/** Key sessions: also offer the agent's keys if this key is refused. Off by default: see build_auth. */
+	let tryAgentKeys = $state(false);
 	let shell = $state('');
 	let tagsStr = $state('');
 	let folderIdStr = $state('');
@@ -98,6 +100,7 @@
 			keyPath = editSession.auth_method.path ?? '';
 			keyId = editSession.auth_method.key_id ?? '';
 			keyPassphrase = editSession.auth_method.passphrase ?? '';
+			tryAgentKeys = editSession.try_agent_keys === true;
 			shell = editSession.shell ?? '';
 			tagsStr = editSession.tags.join(', ');
 			folderIdStr = editSession.folder_id ?? '';
@@ -141,6 +144,7 @@
 			keyPath = '';
 			keyId = '';
 			keyPassphrase = '';
+			tryAgentKeys = false;
 			shell = '';
 			tagsStr = '';
 			folderIdStr = '';
@@ -227,6 +231,7 @@
 					detected_os: rdp ? os : (kind === sessionKind(editSession) ? editSession.detected_os : null),
 					share_path: rdp ? (sharePath.trim() || null) : null,
 					via_session_id: via,
+					try_agent_keys: !desktop && authType === 'Key' && tryAgentKeys ? true : null,
 				});
 			} else {
 				await sessionCreate({
@@ -246,6 +251,7 @@
 					detectedOs: rdp ? os : null,
 					sharePath: rdp ? sharePath : null,
 					viaSessionId: via,
+					tryAgentKeys: !desktop && authType === 'Key' && tryAgentKeys,
 				});
 			}
 			onsave?.();
@@ -412,6 +418,13 @@
 			{#if !keyId}
 				<Input label={t('session.passphrase_optional')} bind:value={keyPassphrase} type="password" placeholder="Stored encrypted in vault" disabled={saving} />
 			{/if}
+			<div class="shell-field">
+				<label class="jump-toggle">
+					<input type="checkbox" bind:checked={tryAgentKeys} disabled={saving} />
+					<span class="jump-toggle-text">{t('session.try_agent_keys')}</span>
+				</label>
+				<p class="shell-hint">{t('session.try_agent_keys_hint')}</p>
+			</div>
 		{/if}
 
 		<div class="shell-field">

@@ -26,9 +26,11 @@ async fn a_backup_restores_every_secret_byte_for_byte() {
     let source = tmp_dir("source");
     let mut mgr = VaultManager::new(source.clone());
     mgr.init_identity("backup-test-pass").await.unwrap();
-    let vault = mgr.create_vault(SSH_KEYS_VAULT, VaultType::Private, None, None).await.unwrap();
+    // The keys vault the app uses: the internal one made with the identity,
+    // found by name as ssh_key_import's ensure_vault finds it.
+    let vault_id = mgr.get_vault_id_by_name(SSH_KEYS_VAULT).expect("the identity makes the keys vault");
     for (name, bytes) in &texts {
-        mgr.create_secret_with_id(&vault.id, name, name, SecretCategory::SshKey, SecretBox::new(Box::new(bytes.clone())))
+        mgr.create_secret_with_id(&vault_id, name, name, SecretCategory::SshKey, SecretBox::new(Box::new(bytes.clone())))
             .await
             .unwrap();
     }

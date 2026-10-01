@@ -90,3 +90,18 @@ async fn live_agent_hides_a_refused_key() {
         println!("{name:>24}: {out}");
     }
 }
+
+/// A session whose key the server refuses makes exactly one attempt, with an
+/// agent holding the right key running: the agent is not offered behind it.
+/// Count the server's own `Failed publickey` lines for the proof.
+#[tokio::test]
+#[ignore = "needs an SSH server and an agent holding k_good"]
+async fn live_one_attempt_per_refused_key() {
+    let Some((host, port, user, dir)) = env() else { panic!("set REACH_SSH_TEST, REACH_SSH_USER, REACH_SSH_KEYS") };
+    let wrong = std::fs::read_to_string(dir.join("k_other")).unwrap();
+    let auth = crate::ipc::ssh_commands::build_auth("key", None, Some(KeySource::Material(wrong)), None, false).unwrap();
+    let config = Arc::new(russh::client::Config::default());
+    let mut handle = russh::client::connect(config, (host.as_str(), port), AnyHost).await.unwrap();
+    let outcome = cascade_authenticate(&mut handle, &user, &auth).await.unwrap();
+    println!("default session, wrong key, agent running: {:?}", outcome.into_result().map_err(|e| e.to_string()));
+}

@@ -1704,5 +1704,7 @@
   "settings.login_message": "Afficher le message de connexion",
   "settings.login_message_desc": "Garder à l’écran le message d’accueil du serveur (MOTD, dernière connexion, état du système) après la connexion, comme les autres clients SSH.",
   "ssh.key_refused_agent": "Connecté à {{host}} avec une clé de votre agent SSH : le serveur a refusé la clé de cette session ({{fingerprint}}). La session échouera sur les appareils sans cet agent, comme un téléphone. Ajoutez la clé publique de la session au authorized_keys du serveur, ou importez la clé à laquelle le serveur fait confiance.",
-  "ssh.key_refused_password": "Connecté à {{host}} avec un mot de passe : le serveur a refusé la clé de cette session ({{fingerprint}}). Ajoutez la clé publique de la session au authorized_keys du serveur, ou importez la clé à laquelle le serveur fait confiance."
+  "ssh.key_refused_password": "Connecté à {{host}} avec un mot de passe : le serveur a refusé la clé de cette session ({{fingerprint}}). Ajoutez la clé publique de la session au authorized_keys du serveur, ou importez la clé à laquelle le serveur fait confiance.",
+  "session.try_agent_keys": "Essayer aussi les clés de mon agent SSH si cette clé est refusée",
+  "session.try_agent_keys_hint": "Désactivé par défaut. Chaque clé proposée compte comme une connexion échouée sur le serveur, les serveurs bloquent une adresse après quelques-unes (fail2ban, MaxAuthTries), et chaque clé indique au serveur qui vous êtes. Sans cette option, une clé refusée le dit clairement."
 }

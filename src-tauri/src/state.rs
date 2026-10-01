@@ -67,6 +67,10 @@ pub struct SessionConfig {
     /// A local folder shown inside the remote desktop as a drive, RDP only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_path: Option<String>,
+    /// Key sessions only: offer the SSH agent's keys if this session's own key
+    /// is refused. Off unless the user turned it on; see `build_auth`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub try_agent_keys: Option<bool>,
     /// VNC only: a saved SSH session to reach the server through.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via_session_id: Option<String>,

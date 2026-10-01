@@ -1704,5 +1704,7 @@
   "settings.login_message": "Mostrar el mensaje de inicio de sesión",
   "settings.login_message_desc": "Mantener en pantalla el mensaje de bienvenida del servidor (MOTD, último inicio de sesión, estado del sistema) tras conectar, como otros clientes SSH.",
   "ssh.key_refused_agent": "Sesión iniciada en {{host}} con una clave de tu agente SSH: el servidor rechazó la clave de esta sesión ({{fingerprint}}). La sesión fallará en dispositivos sin ese agente, como un teléfono. Añade la clave pública de la sesión al authorized_keys del servidor o importa la clave en la que confía el servidor.",
-  "ssh.key_refused_password": "Sesión iniciada en {{host}} con contraseña: el servidor rechazó la clave de esta sesión ({{fingerprint}}). Añade la clave pública de la sesión al authorized_keys del servidor o importa la clave en la que confía el servidor."
+  "ssh.key_refused_password": "Sesión iniciada en {{host}} con contraseña: el servidor rechazó la clave de esta sesión ({{fingerprint}}). Añade la clave pública de la sesión al authorized_keys del servidor o importa la clave en la que confía el servidor.",
+  "session.try_agent_keys": "Probar también las claves de mi agente SSH si se rechaza esta clave",
+  "session.try_agent_keys_hint": "Desactivado por defecto. Cada clave ofrecida cuenta como un inicio de sesión fallido en el servidor, los servidores bloquean una dirección tras unos pocos (fail2ban, MaxAuthTries) y cada clave le dice al servidor quién eres. Sin esta opción, una clave rechazada lo indica con claridad."
 }

@@ -573,6 +573,7 @@
 				shell: session.shell ?? undefined,
 				injectColors: getSettings().injectShellColors,
 				showLoginMessage: getSettings().showLoginMessage,
+				tryAgentKeys: authType === 'Key' && session.try_agent_keys === true,
 				jumpChain,
 				proxy: session.proxy ? {
 					proxy_type: session.proxy.proxy_type,

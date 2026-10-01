@@ -338,16 +338,14 @@ impl AuthOutcome {
     }
 }
 
-/// RSA signature hashes to offer, best first. When the server has said what
-/// it accepts (server-sig-algs, RFC 8308), that one. When it has not said
-/// within russh's wait, SHA-512, SHA-256, then SHA-1, as russh's own docs
-/// advise: signing with SHA-1 alone, as before, is refused by OpenSSH 8.8 and
-/// later, and a server that is slow to send its list is not one that wants it.
+/// The RSA signature hash to offer: the one the server said it accepts
+/// (server-sig-algs, RFC 8308), or SHA-1 when it said nothing, which is what
+/// OpenSSH does (`key_sig_algorithm` in sshconnect2.c). One offer per key,
+/// never a guess at others: each refusal counts against the server's
+/// MaxAuthTries and its brute-force protection. Every server new enough to
+/// refuse SHA-1 (OpenSSH 8.8+) sends its list, as all have since 7.2.
 fn rsa_hashes(known: Option<Option<russh::keys::HashAlg>>) -> Vec<Option<russh::keys::HashAlg>> {
-    match known {
-        Some(alg) => vec![alg],
-        None => vec![Some(russh::keys::HashAlg::Sha512), Some(russh::keys::HashAlg::Sha256), None],
-    }
+    vec![known.flatten()]
 }
 
 async fn cascade_authenticate<H: russh::client::Handler>(
@@ -820,15 +818,11 @@ pub fn decode_key(
 
 impl AuthParams {
     pub fn from_password(password: String) -> Self {
-        Self { password: Some(password), allow_agent: true, ..Default::default() }
+        Self { password: Some(password), ..Default::default() }
     }
 
     pub fn from_key(path: String, passphrase: Option<String>) -> Self {
-        Self {
-            key: Some(KeyAuth { source: KeySource::Path(path), passphrase }),
-            allow_agent: true,
-            ..Default::default()
-        }
+        Self { key: Some(KeyAuth { source: KeySource::Path(path), passphrase }), ..Default::default() }
     }
 
     pub fn from_agent() -> Self {

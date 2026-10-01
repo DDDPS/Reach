@@ -42,6 +42,8 @@ export interface SessionConfig {
   share_path?: string | null;
   /** VNC only: a saved SSH session to reach the server through. */
   via_session_id?: string | null;
+  /** Key sessions: also offer the SSH agent's keys if this key is refused. Off by default. */
+  try_agent_keys?: boolean | null;
 }
 
 export type SessionKind = 'ssh' | 'rdp' | 'vnc';
@@ -91,6 +93,7 @@ export async function sessionCreate(params: {
   detectedOs?: string | null;
   sharePath?: string | null;
   viaSessionId?: string | null;
+  tryAgentKeys?: boolean | null;
 }): Promise<SessionConfig> {
   return invoke<SessionConfig>('session_create', {
     name: params.name,
@@ -109,6 +112,7 @@ export async function sessionCreate(params: {
     detectedOs: params.detectedOs ?? null,
     sharePath: params.sharePath?.trim() ? params.sharePath.trim() : null,
     viaSessionId: params.viaSessionId || null,
+    tryAgentKeys: params.tryAgentKeys || null,
   });
 }
 

@@ -1704,5 +1704,7 @@
   "settings.login_message": "Anmeldenachricht anzeigen",
   "settings.login_message_desc": "Die Begrüßungsnachricht des Servers (MOTD, letzte Anmeldung, Systemstatus) nach dem Verbinden anzeigen, wie andere SSH-Clients.",
   "ssh.key_refused_agent": "Bei {{host}} mit einem Schlüssel aus Ihrem SSH-Agent angemeldet: Der Server hat den Schlüssel dieser Sitzung abgelehnt ({{fingerprint}}). Auf Geräten ohne diesen Agent, etwa einem Telefon, schlägt die Sitzung fehl. Tragen Sie den öffentlichen Schlüssel der Sitzung in authorized_keys auf dem Server ein oder importieren Sie den Schlüssel, dem der Server vertraut.",
-  "ssh.key_refused_password": "Bei {{host}} mit Passwort angemeldet: Der Server hat den Schlüssel dieser Sitzung abgelehnt ({{fingerprint}}). Tragen Sie den öffentlichen Schlüssel der Sitzung in authorized_keys auf dem Server ein oder importieren Sie den Schlüssel, dem der Server vertraut."
+  "ssh.key_refused_password": "Bei {{host}} mit Passwort angemeldet: Der Server hat den Schlüssel dieser Sitzung abgelehnt ({{fingerprint}}). Tragen Sie den öffentlichen Schlüssel der Sitzung in authorized_keys auf dem Server ein oder importieren Sie den Schlüssel, dem der Server vertraut.",
+  "session.try_agent_keys": "Auch die Schlüssel meines SSH-Agents versuchen, wenn dieser Schlüssel abgelehnt wird",
+  "session.try_agent_keys_hint": "Standardmäßig aus. Jeder angebotene Schlüssel zählt auf dem Server als fehlgeschlagene Anmeldung, Server sperren eine Adresse nach wenigen davon (fail2ban, MaxAuthTries), und jeder Schlüssel verrät dem Server, wer Sie sind. Ohne diese Option meldet ein abgelehnter Schlüssel das klar."
 }

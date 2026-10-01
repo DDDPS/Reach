@@ -158,6 +158,7 @@ pub async fn session_create(
     detected_os: Option<String>,
     share_path: Option<String>,
     via_session_id: Option<String>,
+    try_agent_keys: Option<bool>,
 ) -> Result<SessionConfig, String> {
     let mut manager = state.vault_manager.lock().await;
     let kind = kind.unwrap_or_default();
@@ -192,6 +193,7 @@ pub async fn session_create(
         domain: domain.filter(|d| !d.trim().is_empty()),
         share_path: share_path.filter(|d| !d.trim().is_empty()),
         via_session_id: via_session_id.filter(|s| !s.is_empty()),
+        try_agent_keys: try_agent_keys.filter(|t| *t),
         folder_id,
         tags,
         // RDP cannot say what the machine is (xrdp claims to be Windows), so
