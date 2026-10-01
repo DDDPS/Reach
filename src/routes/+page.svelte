@@ -207,11 +207,15 @@
 					<RemoteTerminal />
 				{/if}
 				</div>
-				<MonitoringBar
-					connectionId={activeTab?.connectionId}
-					sshUser={activeTab?.title?.split('@')[0]}
-					sessionId={activeTab?.type === 'ssh' ? activeTab?.connectionId : activeTab?.id}
-				/>
+				<!-- A remote desktop has no server stats to show: under one, the bar
+				     only said "Not connected" about a desktop that was. -->
+				{#if activeTab?.type !== 'rdp' && activeTab?.type !== 'vnc'}
+					<MonitoringBar
+						connectionId={activeTab?.connectionId}
+						sshUser={activeTab?.title?.split('@')[0]}
+						sessionId={activeTab?.type === 'ssh' ? activeTab?.connectionId : activeTab?.id}
+					/>
+				{/if}
 			{/if}
 		</div>
 
