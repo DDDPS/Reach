@@ -461,6 +461,36 @@ pub(crate) struct StoredVaultRef {
     pub(crate) sync_token: Option<String>,
 }
 
+/// Whether two sync URLs name the same database. The same Turso database
+/// can be written `libsql://` or `https://`, and with or without a trailing
+/// slash. A vault with no URL is local and is never the same as another.
+pub(crate) fn same_database(a: Option<&str>, b: Option<&str>) -> bool {
+    fn norm(url: &str) -> String {
+        let url = url.trim().trim_end_matches('/').to_ascii_lowercase();
+        for scheme in ["libsql://", "https://", "wss://", "http://", "ws://"] {
+            if let Some(rest) = url.strip_prefix(scheme) {
+                return rest.to_string();
+            }
+        }
+        url
+    }
+    match (a, b) {
+        (Some(a), Some(b)) if !a.trim().is_empty() => norm(a) == norm(b),
+        _ => false,
+    }
+}
+
+/// The ids of entries that repeat an earlier entry's database, in order.
+pub(crate) fn duplicate_vault_ids(vaults: &[StoredVaultRef]) -> Vec<String> {
+    let mut extra = Vec::new();
+    for (i, v) in vaults.iter().enumerate() {
+        if vaults[..i].iter().any(|earlier| same_database(earlier.sync_url.as_deref(), v.sync_url.as_deref())) {
+            extra.push(v.id.clone());
+        }
+    }
+    extra
+}
+
 /// Stored identity (persisted to disk).
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StoredIdentity {
@@ -1428,6 +1458,7 @@ impl VaultManager {
 
     /// Reopen user-created vaults (shared, private) after unlock.
     async fn reopen_user_vaults(&mut self) -> Result<(), VaultError> {
+        self.forget_duplicate_vaults().await;
         let vaults_to_open = self.user_vaults.clone();
 
         for vault_ref in vaults_to_open {
@@ -1971,6 +2002,20 @@ impl VaultManager {
         }
         self.vaults.remove(vault_id);
         Ok(())
+    }
+
+    /// Joined twice, a shared vault was two entries over one database: every
+    /// session in it was listed twice, which stopped the session list from
+    /// showing at all (issue #77). The first entry stays; the others are
+    /// removed from this device only. The database is not touched, and it is
+    /// all still there through the entry that stays.
+    async fn forget_duplicate_vaults(&mut self) {
+        for id in duplicate_vault_ids(&self.user_vaults) {
+            tracing::warn!("Vault {id} is a second entry for a vault already joined; removing the extra entry");
+            if let Err(e) = self.delete_vault(&id).await {
+                tracing::warn!("Could not remove the extra vault entry {id}: {e}");
+            }
+        }
     }
 
     /// Delete a vault.
@@ -2529,6 +2574,32 @@ impl VaultManager {
         sync_url: &str,
         token: &str,
     ) -> Result<VaultInfo, VaultError> {
+        // An invite to a vault already joined here is the same vault, not a
+        // second one: two entries over one database list everything twice.
+        // The newer token is kept, in case the old one was rotated.
+        if let Some(existing) = self.user_vaults.iter_mut().find(|v| same_database(v.sync_url.as_deref(), Some(sync_url))) {
+            tracing::info!("Invite is for vault {} ({}), which is already joined", existing.name, existing.id);
+            let id = existing.id.clone();
+            if existing.sync_token.as_deref() != Some(token) {
+                existing.sync_token = Some(token.to_string());
+                // The open connection still has the old token; reopen with the new one.
+                self.close_vault(&id).await?;
+                if let Err(e) = self.save_identity_current().await {
+                    tracing::warn!("Failed to persist the new invite token: {}", e);
+                }
+            }
+            if !self.vaults.contains_key(&id) {
+                self.open_vault(&id, Some(sync_url), Some(token)).await?;
+                self.unlock_vault(&id).await?;
+            }
+            return self
+                .list_vaults()
+                .await?
+                .into_iter()
+                .find(|v| v.id == id)
+                .ok_or(VaultError::NotFound(id));
+        }
+
         // Generate new vault ID for local tracking
         let vault_id = uuid::Uuid::new_v4().to_string();
 
@@ -3516,3 +3587,7 @@ mod connection_tests;
 #[cfg(test)]
 #[path = "manager_password_tests.rs"]
 mod password_tests;
+
+#[cfg(test)]
+#[path = "manager_duplicate_tests.rs"]
+mod duplicate_tests;
