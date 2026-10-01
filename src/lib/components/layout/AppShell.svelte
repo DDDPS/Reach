@@ -16,6 +16,8 @@
 	import ActiveSessionsDialog from '$lib/components/shared/ActiveSessionsDialog.svelte';
 	import HostKeyDialog from '$lib/components/shared/HostKeyDialog.svelte';
 	import DuplicateVaultsDialog from '$lib/components/vault/DuplicateVaultsDialog.svelte';
+	import { addToast } from '$lib/state/toasts.svelte';
+	import { t } from '$lib/state/i18n.svelte';
 	import McpConfirmDialog from '$lib/components/shared/McpConfirmDialog.svelte';
 	import { getUpdaterState, relaunchNow, postponeRelaunch } from '$lib/state/updater.svelte';
 	import { getActiveTab, getTabs, isDesktopTab } from '$lib/state/tabs.svelte';
@@ -97,6 +99,17 @@
 
 	let unlistenClose: (() => void) | undefined;
 	let unlistenQuit: (() => void) | undefined;
+	// A login that got in with the SSH agent or a password after the server
+	// refused the session's own key. It works here, and fails on any device
+	// without that agent (a phone): said now, rather than found out there.
+	onMount(() => {
+		const unlisten = listen<{ host: string; fingerprint: string; via: 'agent' | 'password' }>('ssh-key-refused-notice', (e) => {
+			const { host, fingerprint, via } = e.payload;
+			addToast(t(via === 'agent' ? 'ssh.key_refused_agent' : 'ssh.key_refused_password', { host, fingerprint }), 'warning', 20000);
+		});
+		return () => void unlisten.then((stop) => stop());
+	});
+
 	onMount(async () => {
 		try {
 			// Window close (X / Alt+F4 / Cmd+Q). The frontend owns the decision

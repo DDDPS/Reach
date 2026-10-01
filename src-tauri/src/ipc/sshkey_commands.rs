@@ -78,6 +78,7 @@ pub async fn ssh_key_import(
         return Err("Give the key a name so you can recognise it later.".into());
     }
 
+    let pasted_public = public_key.as_deref().is_some_and(|p| !p.trim().is_empty());
     // A file wins when both are given: the user picked it most recently.
     let (private_key, public_key) = match path
         .map(|p| p.trim().to_string())
@@ -100,7 +101,9 @@ pub async fn ssh_key_import(
         ),
     };
 
-    let private_key = private_key.trim().to_string();
+    // Stored exactly as given: the vault, every synced device and every
+    // backup hold the same bytes the user imported. Reading is what is
+    // forgiving (see client::normalize_key_text), never storing.
     let facts = keystore::inspect(&private_key)?;
     let passphrase = passphrase.filter(|p| !p.is_empty());
 
@@ -120,14 +123,26 @@ pub async fn ssh_key_import(
     }
     let vault_id = ensure_vault(&mut manager).await?;
 
+    // A public key given alongside must be this key's. One that is not is
+    // what a server would be told to trust while Reach logs in with another,
+    // and every device is refused (Windows hid it behind its ssh-agent).
+    let public_key = public_key.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+    let public_key = match (public_key, facts.public_key.as_deref()) {
+        (Some(given), Some(derived)) if !keystore::same_public_key(&given, derived) => {
+            if pasted_public {
+                return Err("That public key does not belong to this private key. Leave it empty: Reach works out the right one from the private key.".into());
+            }
+            tracing::warn!("Ignoring the .pub file beside the key: it belongs to a different key");
+            None
+        }
+        (given, _) => given,
+    };
+
     let id = Uuid::new_v4().to_string();
     let material = StoredKeyMaterial {
         private_key,
         passphrase,
-        public_key: public_key
-            .map(|p| p.trim().to_string())
-            .filter(|p| !p.is_empty())
-            .or(facts.public_key),
+        public_key: public_key.or(facts.public_key),
     };
     let bytes = serde_json::to_vec(&material).map_err(|e| e.to_string())?;
     manager

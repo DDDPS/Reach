@@ -245,15 +245,20 @@ fn describe_key_load_error(
     raw_path: Option<&str>,
     label: &str,
     had_passphrase: bool,
+    encrypted: Option<bool>,
     err: &impl std::fmt::Display,
 ) -> String {
     use crate::ssh::keyfile::{classify_path, KeyFileKind};
 
-    // An imported key has no file to classify; the only thing that can be
-    // wrong with one is the passphrase.
+    // An imported key has no file to classify. It was read once already, at
+    // import, so a key that will not load now is either locked or damaged;
+    // calling every failure "passphrase-protected" sent people looking for a
+    // passphrase their key never had.
     let Some(raw_path) = raw_path else {
         return if had_passphrase {
             format!("Could not open {} — wrong passphrase? ({})", label, err)
+        } else if encrypted == Some(false) || encrypted.is_none() {
+            format!("Could not read {}: it is damaged or not a private key Reach understands. Import it again from the original key file. ({})", label, err)
         } else {
             format!("{} {} ({})", NEEDS_PASSPHRASE, label, err)
         };
@@ -288,6 +293,8 @@ fn describe_key_load_error(
         KeyFileKind::PrivateKey => {
             if had_passphrase {
                 format!("Could not load private key '{}' — wrong passphrase? ({})", label, err)
+            } else if encrypted == Some(false) {
+                format!("Could not read the private key '{}': the file is damaged. ({})", label, err)
             } else {
                 format!("{} '{}' ({})", NEEDS_PASSPHRASE, label, err)
             }
@@ -305,11 +312,50 @@ fn describe_key_load_error(
 /// Returns Err only on hard transport-level errors; all "auth was tried but
 /// rejected" outcomes resolve to Ok(false) so the caller can decide what to
 /// do (e.g. surface a password fallback prompt to the user).
-async fn cascade_authenticate(
-    handle: &mut russh::client::Handle<SshClientHandler>,
+/// How a login got in, and the fingerprint of the session's own key if the
+/// server refused it on the way.
+#[derive(Debug, Default)]
+struct AuthOutcome {
+    by: Option<AuthBy>,
+    refused_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthBy {
+    Key,
+    Agent,
+    Password,
+}
+
+impl AuthOutcome {
+    /// Ok when something got in; otherwise the error that says what to fix.
+    fn into_result(self) -> Result<AuthBy, SshError> {
+        match (self.by, self.refused_key) {
+            (Some(by), _) => Ok(by),
+            (None, Some(fingerprint)) => Err(SshError::KeyRefused(fingerprint)),
+            (None, None) => Err(SshError::AuthFailed),
+        }
+    }
+}
+
+/// RSA signature hashes to offer, best first. When the server has said what
+/// it accepts (server-sig-algs, RFC 8308), that one. When it has not said
+/// within russh's wait, SHA-512, SHA-256, then SHA-1, as russh's own docs
+/// advise: signing with SHA-1 alone, as before, is refused by OpenSSH 8.8 and
+/// later, and a server that is slow to send its list is not one that wants it.
+fn rsa_hashes(known: Option<Option<russh::keys::HashAlg>>) -> Vec<Option<russh::keys::HashAlg>> {
+    match known {
+        Some(alg) => vec![alg],
+        None => vec![Some(russh::keys::HashAlg::Sha512), Some(russh::keys::HashAlg::Sha256), None],
+    }
+}
+
+async fn cascade_authenticate<H: russh::client::Handler>(
+    handle: &mut russh::client::Handle<H>,
     username: &str,
     auth: &AuthParams,
-) -> Result<bool, SshError> {
+) -> Result<AuthOutcome, SshError> {
+    let mut outcome = AuthOutcome::default();
     // 1. Configured private key — a file on this machine, or material the
     //    user imported into the vault.
     if let Some(key_auth) = &auth.key {
@@ -327,6 +373,7 @@ async fn cascade_authenticate(
                         Some(path),
                         &key_auth.label(),
                         key_auth.passphrase.is_some(),
+                        None,
                         &e,
                     ))
                 })?
@@ -345,38 +392,53 @@ async fn cascade_authenticate(
                 },
                 &key_auth.label(),
                 key_auth.passphrase.is_some(),
+                key_is_encrypted(&material),
                 &e,
             ))
         })?;
+        let fingerprint = key.public_key().fingerprint(russh::keys::HashAlg::Sha256).to_string();
         tracing::info!(
             "SSH key loaded successfully, attempting publickey auth as '{}'",
             username
         );
-        // An RSA key signs with whichever SHA-2 the server says it accepts;
-        // left unset it would sign with SHA-1, which current servers refuse.
-        let hash_alg = if key.algorithm().is_rsa() {
-            handle.best_supported_rsa_hash().await.ok().flatten().flatten()
+        // An RSA key signs with a hash the server accepts; see rsa_hashes.
+        let hashes = if key.algorithm().is_rsa() {
+            rsa_hashes(handle.best_supported_rsa_hash().await.ok().flatten())
         } else {
-            None
+            vec![None]
         };
-        let accepted = handle
-            .authenticate_publickey(username, PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg))
-            .await
-            .map_err(|e| {
-                tracing::error!("SSH publickey auth error: {}", e);
-                SshError::ConnectionFailed(format!("Auth error: {}", e))
-            })?
-            .success();
-        tracing::info!("SSH publickey auth result: {}", accepted);
-        if accepted {
-            return Ok(true);
+        let key = Arc::new(key);
+        for hash_alg in hashes {
+            let accepted = handle
+                .authenticate_publickey(username, PrivateKeyWithHashAlg::new(Arc::clone(&key), hash_alg))
+                .await
+                .map_err(|e| {
+                    tracing::error!("SSH publickey auth error: {}", e);
+                    SshError::ConnectionFailed(format!("Auth error: {}", e))
+                })?
+                .success();
+            tracing::info!("SSH publickey auth result for {fingerprint} ({hash_alg:?}): {accepted}");
+            if accepted {
+                outcome.by = Some(AuthBy::Key);
+                return Ok(outcome);
+            }
         }
+        tracing::warn!("SSH: the server refused this session's key {fingerprint}");
+        outcome.refused_key = Some(fingerprint);
     }
 
     // 2. ssh-agent identities (auto-detected: OpenSSH agent / Pageant / SSH_AUTH_SOCK).
     if auth.allow_agent {
         match try_agent_auth(handle, username.to_string()).await {
-            Ok(true) => return Ok(true),
+            Ok(true) => {
+                if let Some(refused) = &outcome.refused_key {
+                    tracing::warn!(
+                        "SSH: logged in with a key from the SSH agent; this session's own key {refused} was refused, so it will not work where there is no agent (a phone, another computer)"
+                    );
+                }
+                outcome.by = Some(AuthBy::Agent);
+                return Ok(outcome);
+            }
             Ok(false) => tracing::info!("SSH agent: no identity accepted"),
             Err(e) => tracing::info!("SSH agent fallback skipped: {}", e),
         }
@@ -399,19 +461,20 @@ async fn cascade_authenticate(
             .success();
         tracing::info!("SSH password auth result: {}", accepted);
         if accepted {
-            return Ok(true);
+            outcome.by = Some(AuthBy::Password);
+            return Ok(outcome);
         }
     }
 
-    Ok(false)
+    Ok(outcome)
 }
 
 /// Try every identity from the local SSH agent. Returns Ok(true) on the first
 /// identity accepted by the server, Ok(false) if none are accepted, or Err if
 /// the agent is unreachable or holds no keys. Cross-platform: uses OpenSSH's
 /// Windows named pipe / Pageant on Windows; SSH_AUTH_SOCK on Unix.
-async fn try_agent_auth(
-    handle: &mut russh::client::Handle<SshClientHandler>,
+async fn try_agent_auth<H: russh::client::Handler>(
+    handle: &mut russh::client::Handle<H>,
     username: String,
 ) -> Result<bool, String> {
     #[cfg(unix)]
@@ -458,8 +521,8 @@ fn pageant_is_running() -> bool {
     unsafe { FindWindowW(w!("Pageant"), w!("Pageant")).is_ok() }
 }
 
-async fn try_agent_auth_inner<S>(
-    handle: &mut russh::client::Handle<SshClientHandler>,
+async fn try_agent_auth_inner<S, H: russh::client::Handler>(
+    handle: &mut russh::client::Handle<H>,
     username: String,
     mut agent: russh::keys::agent::client::AgentClient<S>,
 ) -> Result<bool, String>
@@ -517,6 +580,12 @@ pub enum SshError {
     ConnectionFailed(String),
     #[error("Authentication rejected — server did not accept the public key (not in authorized_keys?) or password is wrong")]
     AuthFailed,
+    /// The session's own key was offered and refused, and nothing else got
+    /// in. Named by fingerprint so it can be compared with the server's
+    /// `authorized_keys` (`ssh-keygen -lf`). Worded to start like
+    /// `AuthFailed`: the connect dialog offers a password on "rejected".
+    #[error("Authentication rejected — the server refused this session's key ({0}). Its public key must be in ~/.ssh/authorized_keys on the server; check with ssh-keygen -lf, or import the key the server already trusts")]
+    KeyRefused(String),
     #[error("Channel error: {0}")]
     ChannelError(String),
     #[error("Connection not found: {0}")]
@@ -698,11 +767,50 @@ impl KeyAuth {
 /// (issue #46). A passphrase that the key does not want is not an error the
 /// user should ever have to understand: try it, then try without it, and keep
 /// the first error if neither works.
+/// Key text as it should have been. A key copied between machines picks up a
+/// byte order mark (Notepad, PowerShell), Windows line ends, trailing spaces
+/// or blank lines; russh wants the `-----BEGIN` line exactly and skips any
+/// body line with a stray character, which then reads as a damaged key. None
+/// of that is part of the key, so it goes. Every format Reach reads (OpenSSH,
+/// PEM, PuTTY's .ppk) is line-based with no meaningful trailing space.
+pub fn normalize_key_text(material: &str) -> String {
+    let text = material.strip_prefix('\u{feff}').unwrap_or(material);
+    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+    let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(lines.len());
+    let end = lines.iter().rposition(|l| !l.trim().is_empty()).map_or(start, |i| i + 1);
+    let mut out = lines[start..end].iter().map(|l| l.trim_start()).collect::<Vec<_>>().join("\n");
+    out.push('\n');
+    out
+}
+
+/// Whether key text is passphrase-protected, when that can be told without
+/// the passphrase: an OpenSSH key says so in its header, a PEM key in its
+/// `Proc-Type`/`ENCRYPTED` label, a .ppk in its `Encryption:` line. `None`
+/// when the text is none of those.
+pub fn key_is_encrypted(material: &str) -> Option<bool> {
+    let text = normalize_key_text(material);
+    if let Ok(key) = russh::keys::ssh_key::PrivateKey::from_openssh(&text) {
+        return Some(key.is_encrypted());
+    }
+    if text.starts_with("PuTTY-User-Key-File-") {
+        return text
+            .lines()
+            .find_map(|l| l.strip_prefix("Encryption:"))
+            .map(|v| v.trim() != "none");
+    }
+    if text.starts_with("-----BEGIN ") {
+        return Some(text.contains("ENCRYPTED"));
+    }
+    None
+}
+
 pub fn decode_key(
     material: &str,
     passphrase: Option<&str>,
 ) -> Result<russh::keys::PrivateKey, russh::keys::Error> {
     let pass = passphrase.filter(|p| !p.is_empty());
+    let normalized = normalize_key_text(material);
+    let material = normalized.as_str();
     match russh::keys::decode_secret_key(material, pass) {
         Ok(key) => Ok(key),
         Err(e) if pass.is_some() => russh::keys::decode_secret_key(material, None).map_err(|_| e),
@@ -865,8 +973,17 @@ impl SshManager {
 
         // Authenticate using a cascading strategy: configured key → agent → password.
         // The first method the server accepts wins. Mirrors OpenSSH's progressive auth.
-        if !cascade_authenticate(&mut handle, username, auth).await? {
-            return Err(SshError::AuthFailed);
+        let outcome = cascade_authenticate(&mut handle, username, auth).await?;
+        let refused = outcome.refused_key.clone();
+        let by = outcome.into_result()?;
+        // Logged in, but not with the session's key: the agent or a password
+        // covered for a key the server refuses. Said out loud, because on a
+        // device without that agent the same session fails (a phone has none).
+        if let (Some(fingerprint), AuthBy::Agent | AuthBy::Password) = (refused, by) {
+            let _ = app_handle.emit(
+                "ssh-key-refused-notice",
+                serde_json::json!({ "host": host, "fingerprint": fingerprint, "via": if by == AuthBy::Agent { "agent" } else { "password" } }),
+            );
         }
         Ok(handle)
     }
@@ -1231,10 +1348,7 @@ impl SshManager {
         username: &str,
         auth: &AuthParams,
     ) -> Result<(), SshError> {
-        if !cascade_authenticate(handle, username, auth).await? {
-            return Err(SshError::AuthFailed);
-        }
-        Ok(())
+        cascade_authenticate(handle, username, auth).await?.into_result().map(|_| ())
     }
 
     pub fn send_data(&self, id: &str, data: &[u8]) -> Result<(), SshError> {
@@ -2218,3 +2332,7 @@ mod shell_tests {
         assert!(shell_init(Some("nu")).is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "client_live_tests.rs"]
+mod live_tests;

@@ -3211,9 +3211,15 @@ impl VaultManager {
             tokio::fs::remove_file(&identity_path).await?;
         }
 
-        // Step 4: Store secret key in OS keychain (for auto_unlock on restart)
-        store_key_in_keychain(&bundle.identity.user_uuid, &secret_key_bytes)?;
-        tracing::info!("Secret key stored in OS keychain for user {}", bundle.identity.user_uuid);
+        // Step 4: Store secret key in OS keychain (for auto_unlock on restart).
+        // Only a convenience, as everywhere else the key is stored: without
+        // it Reach asks for the master password at the next start. A
+        // credential store that refuses (Windows answered error 8 to a
+        // background process) must not make a good backup unrestorable.
+        match store_key_in_keychain(&bundle.identity.user_uuid, &secret_key_bytes) {
+            Ok(()) => tracing::info!("Secret key stored in OS keychain for user {}", bundle.identity.user_uuid),
+            Err(e) => tracing::warn!("Backup restored without the OS keychain ({e}); the master password opens it"),
+        }
 
         // Step 5: Build internal_vault_ids from bundle
         let mut internal_vault_ids = HashMap::new();
@@ -3618,3 +3624,7 @@ mod password_tests;
 #[cfg(test)]
 #[path = "manager_duplicate_tests.rs"]
 mod duplicate_tests;
+
+#[cfg(test)]
+#[path = "manager_backup_tests.rs"]
+mod backup_tests;
