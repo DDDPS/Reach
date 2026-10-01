@@ -1,5 +1,7 @@
 VNC, and logins that try only what you set.
 
+- Fixed: on a Windows without the Visual C++ runtime, Reach did not
+  start at all. It now needs nothing but Windows.
 - New: VNC sessions, directly or through one of your SSH sessions, with
   the same full screen and phone keys as remote desktop.
 - Sessions now try only their own key or password. If a session that
