@@ -192,7 +192,7 @@ mod tests {
             },
             member: None,
             secrets: vec![CachedSecret {
-                id: "s1".into(),
+                id: "secret-7f3a9c".into(),
                 name: "Production Xostme V2".into(),
                 category: "session".into(),
                 nonce: vec![2; 24],
@@ -214,7 +214,9 @@ mod tests {
     fn the_file_does_not_show_names_or_categories() {
         let key = CacheKey::derive(&[9; 32], "v1").unwrap();
         let sealed = key.seal(&snapshot()).unwrap();
-        for plain in ["Production Xostme V2", "DevOps Team", "session", "s1"] {
+        // Each long enough that random ciphertext cannot contain it by
+        // chance: a two-byte id did, about once in a few hundred runs.
+        for plain in ["Production Xostme V2", "DevOps Team", "session", "secret-7f3a9c"] {
             assert!(
                 !sealed.windows(plain.len()).any(|w| w == plain.as_bytes()),
                 "{plain:?} is readable in the cache file"
