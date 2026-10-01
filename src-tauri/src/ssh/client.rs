@@ -921,9 +921,7 @@ impl SshManager {
             Ok((handle, channel))
         };
 
-        let (handle, channel) = tokio::time::timeout(timeout_duration, connect_future)
-            .await
-            .map_err(|_| SshError::ConnectionFailed("Connection timed out".into()))??;
+        let (handle, channel) = within_connect_limit(timeout_duration, connect_future).await?;
 
         let info = ConnectionInfo {
             id: id.to_string(),
@@ -1094,9 +1092,7 @@ impl SshManager {
         );
 
         let (target_handle, jump_handles) =
-            tokio::time::timeout(timeout_duration, connect_future)
-                .await
-                .map_err(|_| SshError::ConnectionFailed("Connection via jump timed out".into()))??;
+            within_connect_limit(timeout_duration, connect_future).await?;
 
         tracing::info!(
             "SSH authenticated for {}@{}:{} (via jump)",
@@ -1328,9 +1324,7 @@ impl SshManager {
                 Self::handshake_via_jump(host, port, username, &auth, &jump_chain, app_handle).await
             }
         };
-        let (handle, jump_handles) = tokio::time::timeout(timeout, connect)
-            .await
-            .map_err(|_| SshError::ConnectionFailed("Connection timed out".into()))??;
+        let (handle, jump_handles) = within_connect_limit(timeout, connect).await?;
         Ok(HeadlessConnection { handle: Arc::new(tokio::sync::Mutex::new(handle)), jump_handles })
     }
 
@@ -1678,6 +1672,48 @@ fn hostkey_prompts(
     HOSTKEY_PROMPTS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
+/// Run a connection attempt under `limit`, not counting time while a
+/// host-key prompt waits for the user. OpenSSH's ConnectTimeout bounds
+/// reaching the server, never the person reading a fingerprint; counted, it
+/// gave fifteen seconds to check one, then dropped the connection and left
+/// the dialog open to accept a server for a connection that was gone.
+pub(crate) async fn within_connect_limit<T>(
+    limit: std::time::Duration,
+    attempt: impl std::future::Future<Output = Result<T, SshError>>,
+) -> Result<T, SshError> {
+    let tick = std::time::Duration::from_millis(250);
+    let mut spent = std::time::Duration::ZERO;
+    tokio::pin!(attempt);
+    loop {
+        tokio::select! {
+            done = &mut attempt => return done,
+            _ = tokio::time::sleep(tick) => {
+                if hostkey_prompts().lock().unwrap().is_empty() {
+                    spent += tick;
+                }
+                if spent >= limit {
+                    return Err(SshError::ConnectionFailed("Connection timed out".into()));
+                }
+            }
+        }
+    }
+}
+
+/// A host-key question that is withdrawn when it is no longer being asked:
+/// answered, timed out, or its connection gone. The window is told, so no
+/// dialog stays up to accept a host for a connection that no longer exists.
+struct OpenPrompt {
+    id: String,
+    app: tauri::AppHandle,
+}
+
+impl Drop for OpenPrompt {
+    fn drop(&mut self) {
+        hostkey_prompts().lock().unwrap().remove(&self.id);
+        let _ = self.app.emit("ssh-hostkey-prompt-closed", &self.id);
+    }
+}
+
 /// Resolve a pending host-key prompt with the user's accept/reject decision.
 pub(crate) fn resolve_hostkey_prompt(prompt_id: &str, accept: bool) {
     let sender = hostkey_prompts().lock().unwrap().remove(prompt_id);
@@ -1741,6 +1777,9 @@ impl SshClientHandler {
         let prompt_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::oneshot::channel();
         hostkey_prompts().lock().unwrap().insert(prompt_id.clone(), tx);
+        // Withdrawn however this function ends, including the connection
+        // attempt being dropped while the question is still open.
+        let _open = OpenPrompt { id: prompt_id.clone(), app: app.clone() };
 
         let payload = HostKeyPrompt {
             prompt_id: prompt_id.clone(),
@@ -1752,17 +1791,11 @@ impl SshClientHandler {
             old_fingerprint,
         };
         if app.emit("ssh-hostkey-prompt", &payload).is_err() {
-            hostkey_prompts().lock().unwrap().remove(&prompt_id);
             return false;
         }
 
-        match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
-            Ok(Ok(accept)) => accept,
-            _ => {
-                hostkey_prompts().lock().unwrap().remove(&prompt_id);
-                false
-            }
-        }
+        // No answer is a no.
+        matches!(tokio::time::timeout(std::time::Duration::from_secs(120), rx).await, Ok(Ok(true)))
     }
 }
 
@@ -2330,3 +2363,30 @@ mod shell_tests {
 #[cfg(test)]
 #[path = "client_live_tests.rs"]
 mod live_tests;
+
+#[cfg(test)]
+mod connect_limit_tests {
+    use super::*;
+    use std::time::Duration;
+
+    async fn slow(ms: u64) -> Result<&'static str, SshError> {
+        tokio::time::sleep(Duration::from_millis(ms)).await;
+        Ok("done")
+    }
+
+    /// Both cases in one test: the prompt registry is shared, so the two
+    /// must not run side by side.
+    #[tokio::test]
+    async fn the_limit_does_not_count_time_spent_on_a_host_key_question() {
+        // Nothing open: a slow server is given up on.
+        let out = within_connect_limit(Duration::from_millis(300), slow(900)).await;
+        assert!(matches!(out, Err(SshError::ConnectionFailed(m)) if m.contains("timed out")));
+
+        // A question open: the same wait is the person reading, and it goes on.
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        hostkey_prompts().lock().unwrap().insert("test-prompt".into(), tx);
+        let out = within_connect_limit(Duration::from_millis(300), slow(900)).await;
+        hostkey_prompts().lock().unwrap().remove("test-prompt");
+        assert_eq!(out.unwrap(), "done");
+    }
+}
