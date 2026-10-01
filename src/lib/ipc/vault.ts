@@ -188,6 +188,11 @@ export async function listVaults(): Promise<VaultInfo[]> {
 	return invoke<VaultInfo[]>('vault_list');
 }
 
+/** Shared vaults joined more than once, grouped; see DuplicateVaultsDialog. */
+export async function vaultDuplicates(): Promise<VaultInfo[][]> {
+	return invoke<VaultInfo[][]>('vault_duplicates');
+}
+
 export async function unlockVault(vaultId: string): Promise<void> {
 	return invoke('vault_unlock_vault', { vault_id: vaultId });
 }

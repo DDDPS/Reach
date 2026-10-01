@@ -480,15 +480,24 @@ pub(crate) fn same_database(a: Option<&str>, b: Option<&str>) -> bool {
     }
 }
 
-/// The ids of entries that repeat an earlier entry's database, in order.
-pub(crate) fn duplicate_vault_ids(vaults: &[StoredVaultRef]) -> Vec<String> {
-    let mut extra = Vec::new();
+/// Entries that share a database, grouped, in the order they were stored.
+/// Only groups of two or more.
+pub(crate) fn duplicate_groups(vaults: &[StoredVaultRef]) -> Vec<Vec<String>> {
+    let mut groups: Vec<Vec<String>> = Vec::new();
     for (i, v) in vaults.iter().enumerate() {
-        if vaults[..i].iter().any(|earlier| same_database(earlier.sync_url.as_deref(), v.sync_url.as_deref())) {
-            extra.push(v.id.clone());
+        if vaults[..i].iter().any(|o| same_database(o.sync_url.as_deref(), v.sync_url.as_deref())) {
+            continue; // already in the group of the first one
+        }
+        let group: Vec<String> = vaults[i..]
+            .iter()
+            .filter(|o| same_database(o.sync_url.as_deref(), v.sync_url.as_deref()))
+            .map(|o| o.id.clone())
+            .collect();
+        if group.len() > 1 {
+            groups.push(group);
         }
     }
-    extra
+    groups
 }
 
 /// Stored identity (persisted to disk).
@@ -1458,7 +1467,6 @@ impl VaultManager {
 
     /// Reopen user-created vaults (shared, private) after unlock.
     async fn reopen_user_vaults(&mut self) -> Result<(), VaultError> {
-        self.forget_duplicate_vaults().await;
         let vaults_to_open = self.user_vaults.clone();
 
         for vault_ref in vaults_to_open {
@@ -2004,18 +2012,37 @@ impl VaultManager {
         Ok(())
     }
 
-    /// Joined twice, a shared vault was two entries over one database: every
-    /// session in it was listed twice, which stopped the session list from
-    /// showing at all (issue #77). The first entry stays; the others are
-    /// removed from this device only. The database is not touched, and it is
-    /// all still there through the entry that stays.
-    async fn forget_duplicate_vaults(&mut self) {
-        for id in duplicate_vault_ids(&self.user_vaults) {
-            tracing::warn!("Vault {id} is a second entry for a vault already joined; removing the extra entry");
-            if let Err(e) = self.delete_vault(&id).await {
-                tracing::warn!("Could not remove the extra vault entry {id}: {e}");
-            }
-        }
+    /// Shared vaults that are here more than once: entries over the same
+    /// database, joined twice (issue #77). Each group lists every entry, in
+    /// the order they were joined, as the vault panel shows them; an entry
+    /// that did not connect is marked unreachable. Nothing is removed here:
+    /// the user picks which entry stays, since the two may hold different
+    /// tokens and only one may still work.
+    pub async fn duplicate_vaults(&self) -> Vec<Vec<VaultInfo>> {
+        let listed = self.list_vaults().await.unwrap_or_default();
+        duplicate_groups(&self.user_vaults)
+            .into_iter()
+            .map(|group| {
+                group
+                    .into_iter()
+                    .map(|id| {
+                        listed.iter().find(|v| v.id == id).cloned().unwrap_or_else(|| {
+                            let stored = self.user_vaults.iter().find(|v| v.id == id);
+                            VaultInfo {
+                                name: stored.map(|v| v.name.clone()).unwrap_or_default(),
+                                vault_type: stored.map(|v| v.vault_type.clone()).unwrap_or_default(),
+                                id,
+                                member_count: None,
+                                secret_count: 0,
+                                last_sync: None,
+                                unreachable: true,
+                                sync_error: Some("did not connect".into()),
+                            }
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     /// Delete a vault.

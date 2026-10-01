@@ -533,6 +533,14 @@ pub async fn vault_list(state: State<'_, AppState>) -> Result<Vec<VaultInfo>, St
     manager.list_vaults().await.map_err(|e| e.to_string())
 }
 
+/// Shared vaults joined more than once, grouped, for the user to choose
+/// which entry of each to keep. Removing the others is `vault_delete`, which
+/// only forgets the entry on this device.
+#[tauri::command]
+pub async fn vault_duplicates(state: State<'_, AppState>) -> Result<Vec<Vec<VaultInfo>>, String> {
+    Ok(state.vault_manager.lock().await.duplicate_vaults().await)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 #[tracing::instrument(skip(state))]
 pub async fn vault_unlock_vault(

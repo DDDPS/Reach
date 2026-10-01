@@ -128,6 +128,14 @@
 		action();
 	}
 
+	// Something outside the list changed what it holds: a vault joined twice
+	// was merged back into one.
+	$effect(() => {
+		const reload = () => void loadSessions();
+		window.addEventListener('reach:sessions-changed', reload);
+		return () => window.removeEventListener('reach:sessions-changed', reload);
+	});
+
 	onMount(() => {
 		registerSessionActions({
 			newSession: () => handleNewSession(),

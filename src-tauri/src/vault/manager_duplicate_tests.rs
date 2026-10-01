@@ -20,13 +20,20 @@ fn the_same_database_written_differently_is_the_same() {
 }
 
 #[test]
-fn a_vault_joined_twice_keeps_its_first_entry() {
+fn entries_over_one_database_are_grouped() {
     let vaults = [
         vault("first", Some("libsql://team-x.turso.io")),
         vault("local-a", None),
         vault("local-b", None),
         vault("other", Some("libsql://team-y.turso.io")),
         vault("second", Some("https://team-x.turso.io")),
+        vault("third", Some("libsql://team-x.turso.io/")),
     ];
-    assert_eq!(duplicate_vault_ids(&vaults), ["second"]);
+    assert_eq!(duplicate_groups(&vaults), [vec!["first", "second", "third"]]);
+}
+
+#[test]
+fn no_duplicates_no_groups() {
+    let vaults = [vault("a", Some("libsql://team-x.turso.io")), vault("b", None), vault("c", None)];
+    assert!(duplicate_groups(&vaults).is_empty());
 }
