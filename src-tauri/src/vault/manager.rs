@@ -3469,7 +3469,9 @@ fn decrypt_with_password(kek: &Kek, ciphertext: &[u8], nonce: &[u8]) -> Result<V
 /// still found: `{user}.{service}` in the Windows Credential Manager, service
 /// and account in the macOS login keychain, `keyring-rs:{user}@{service}` in
 /// the Linux kernel keyring. Android has none of these: see `android_keychain`.
-#[cfg(not(target_os = "android"))]
+// In tests every platform, Android too, keeps keys in the in-memory store of
+// keychain_entry_in: there is no app around to reach the Android Keystore.
+#[cfg(any(not(target_os = "android"), test))]
 fn keychain_entry(user_uuid: &str) -> Result<keyring_core::Entry, VaultError> {
     keychain_entry_in("reach-vault", user_uuid)
 }
@@ -3511,7 +3513,7 @@ pub(crate) fn keychain_entry_in(service: &str, user: &str) -> Result<keyring_cor
 /// never leaves it, seals the vault key, and the sealed copy lives in Reach's
 /// private app folder. Like a desktop keychain it asks for no user check;
 /// that is the fingerprint's job.
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(test)))]
 mod android_keychain {
     use super::{VaultError, BASE64};
     use base64::Engine;
@@ -3587,11 +3589,11 @@ mod android_keychain {
 
 /// Store key in OS keychain.
 fn store_key_in_keychain(user_uuid: &str, key: &[u8]) -> Result<(), VaultError> {
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", not(test)))]
     {
         android_keychain::store(user_uuid, key)
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(any(not(target_os = "android"), test))]
     {
         let entry = keychain_entry(user_uuid)?;
         entry
@@ -3603,11 +3605,11 @@ fn store_key_in_keychain(user_uuid: &str, key: &[u8]) -> Result<(), VaultError> 
 
 /// Remove the key from the OS keychain; a key already gone is fine.
 fn delete_key_from_keychain(user_uuid: &str) -> Result<(), VaultError> {
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", not(test)))]
     {
         android_keychain::delete(user_uuid)
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(any(not(target_os = "android"), test))]
     match keychain_entry(user_uuid)?.delete_credential() {
         Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
         Err(e) => Err(VaultError::KeychainError(e.to_string())),
@@ -3615,13 +3617,13 @@ fn delete_key_from_keychain(user_uuid: &str) -> Result<(), VaultError> {
 }
 
 /// Get key from OS keychain.
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(test)))]
 fn get_key_from_keychain(user_uuid: &str) -> Result<Vec<u8>, VaultError> {
     android_keychain::get(user_uuid)
 }
 
 /// Get key from OS keychain.
-#[cfg(not(target_os = "android"))]
+#[cfg(any(not(target_os = "android"), test))]
 fn get_key_from_keychain(user_uuid: &str) -> Result<Vec<u8>, VaultError> {
     let entry = keychain_entry(user_uuid)?;
     let password = entry.get_password().map_err(|e| match e {

@@ -8,7 +8,13 @@
 	import { __APP_VERSION__ } from '$lib/version';
 	import { toggleAIPanel, getAIChatState } from '$lib/state/ai-chat.svelte';
 	import { t } from '$lib/state/i18n.svelte';
-	import { isMobile } from '$lib/platform';
+	import { isMac, isMobile } from '$lib/platform';
+
+	/** On a Mac the window keeps the system's own traffic lights, drawn over
+	 *  this bar (tauri.macos.conf.json): they are what a Mac user reaches for,
+	 *  and full screen, minimise and zoom behave exactly as in every Mac app.
+	 *  Reach's own buttons are for Windows and Linux. */
+	const macWindow = isMac() && !isMobile();
 
 	let aiSettings = $derived(getAISettings());
 	let aiConfigured = $derived(aiSettings.enabled && !!aiSettings.apiKey && !!aiSettings.selectedModel);
@@ -39,7 +45,7 @@
 	}
 </script>
 
-<header class="titlebar" data-tauri-drag-region>
+<header class="titlebar" class:mac={macWindow} data-tauri-drag-region>
 	<div class="titlebar-left" data-tauri-drag-region>
 		<img src="/app-icon.png" alt="" class="app-icon" draggable="false" />
 		<span class="app-name">Reach</span>
@@ -70,7 +76,7 @@
 		{/if}
 	</div>
 
-	{#if !isMobile()}
+	{#if !isMobile() && !macWindow}
 	<div class="titlebar-right">
 		<button class="window-btn" onclick={minimize} aria-label={t('titlebar.minimize')}>
 			<svg width="10" height="10" viewBox="0 0 10 10" fill="none">
@@ -107,6 +113,11 @@
 		border-bottom: 1px solid var(--color-border);
 		user-select: none;
 		-webkit-app-region: drag;
+	}
+
+	/* Room for the traffic lights, which sit over the bar's left end. */
+	.titlebar.mac {
+		padding-left: 78px;
 	}
 
 	.titlebar-left {
