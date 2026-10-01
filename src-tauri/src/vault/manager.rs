@@ -461,6 +461,45 @@ pub(crate) struct StoredVaultRef {
     pub(crate) sync_token: Option<String>,
 }
 
+/// Whether two sync URLs name the same database. The same Turso database
+/// can be written `libsql://` or `https://`, and with or without a trailing
+/// slash. A vault with no URL is local and is never the same as another.
+pub(crate) fn same_database(a: Option<&str>, b: Option<&str>) -> bool {
+    fn norm(url: &str) -> String {
+        let url = url.trim().trim_end_matches('/').to_ascii_lowercase();
+        for scheme in ["libsql://", "https://", "wss://", "http://", "ws://"] {
+            if let Some(rest) = url.strip_prefix(scheme) {
+                return rest.to_string();
+            }
+        }
+        url
+    }
+    match (a, b) {
+        (Some(a), Some(b)) if !a.trim().is_empty() => norm(a) == norm(b),
+        _ => false,
+    }
+}
+
+/// Entries that share a database, grouped, in the order they were stored.
+/// Only groups of two or more.
+pub(crate) fn duplicate_groups(vaults: &[StoredVaultRef]) -> Vec<Vec<String>> {
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    for (i, v) in vaults.iter().enumerate() {
+        if vaults[..i].iter().any(|o| same_database(o.sync_url.as_deref(), v.sync_url.as_deref())) {
+            continue; // already in the group of the first one
+        }
+        let group: Vec<String> = vaults[i..]
+            .iter()
+            .filter(|o| same_database(o.sync_url.as_deref(), v.sync_url.as_deref()))
+            .map(|o| o.id.clone())
+            .collect();
+        if group.len() > 1 {
+            groups.push(group);
+        }
+    }
+    groups
+}
+
 /// Stored identity (persisted to disk).
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StoredIdentity {
@@ -1973,6 +2012,39 @@ impl VaultManager {
         Ok(())
     }
 
+    /// Shared vaults that are here more than once: entries over the same
+    /// database, joined twice (issue #77). Each group lists every entry, in
+    /// the order they were joined, as the vault panel shows them; an entry
+    /// that did not connect is marked unreachable. Nothing is removed here:
+    /// the user picks which entry stays, since the two may hold different
+    /// tokens and only one may still work.
+    pub async fn duplicate_vaults(&self) -> Vec<Vec<VaultInfo>> {
+        let listed = self.list_vaults().await.unwrap_or_default();
+        duplicate_groups(&self.user_vaults)
+            .into_iter()
+            .map(|group| {
+                group
+                    .into_iter()
+                    .map(|id| {
+                        listed.iter().find(|v| v.id == id).cloned().unwrap_or_else(|| {
+                            let stored = self.user_vaults.iter().find(|v| v.id == id);
+                            VaultInfo {
+                                name: stored.map(|v| v.name.clone()).unwrap_or_default(),
+                                vault_type: stored.map(|v| v.vault_type.clone()).unwrap_or_default(),
+                                id,
+                                member_count: None,
+                                secret_count: 0,
+                                last_sync: None,
+                                unreachable: true,
+                                sync_error: Some("did not connect".into()),
+                            }
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
     /// Delete a vault.
     pub async fn delete_vault(&mut self, vault_id: &str) -> Result<(), VaultError> {
         self.close_vault(vault_id).await?;
@@ -2529,6 +2601,32 @@ impl VaultManager {
         sync_url: &str,
         token: &str,
     ) -> Result<VaultInfo, VaultError> {
+        // An invite to a vault already joined here is the same vault, not a
+        // second one: two entries over one database list everything twice.
+        // The newer token is kept, in case the old one was rotated.
+        if let Some(existing) = self.user_vaults.iter_mut().find(|v| same_database(v.sync_url.as_deref(), Some(sync_url))) {
+            tracing::info!("Invite is for vault {} ({}), which is already joined", existing.name, existing.id);
+            let id = existing.id.clone();
+            if existing.sync_token.as_deref() != Some(token) {
+                existing.sync_token = Some(token.to_string());
+                // The open connection still has the old token; reopen with the new one.
+                self.close_vault(&id).await?;
+                if let Err(e) = self.save_identity_current().await {
+                    tracing::warn!("Failed to persist the new invite token: {}", e);
+                }
+            }
+            if !self.vaults.contains_key(&id) {
+                self.open_vault(&id, Some(sync_url), Some(token)).await?;
+                self.unlock_vault(&id).await?;
+            }
+            return self
+                .list_vaults()
+                .await?
+                .into_iter()
+                .find(|v| v.id == id)
+                .ok_or(VaultError::NotFound(id));
+        }
+
         // Generate new vault ID for local tracking
         let vault_id = uuid::Uuid::new_v4().to_string();
 
@@ -3516,3 +3614,7 @@ mod connection_tests;
 #[cfg(test)]
 #[path = "manager_password_tests.rs"]
 mod password_tests;
+
+#[cfg(test)]
+#[path = "manager_duplicate_tests.rs"]
+mod duplicate_tests;

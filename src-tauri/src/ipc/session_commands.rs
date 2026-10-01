@@ -78,7 +78,30 @@ pub async fn session_list(state: State<'_, AppState>) -> Result<Vec<SessionConfi
         }
     }
 
-    Ok(sessions)
+    Ok(unique_sessions(sessions))
+}
+
+/// One entry per session id, the first one found.
+///
+/// The same session can be in two vaults: a shared vault joined twice is two
+/// vaults over one database. The list keys its rows by id, and a duplicate
+/// key is an error that stopped the whole list from rendering (it sat on
+/// "loading" for good). Both copies are the same session, so one is shown.
+fn unique_sessions(sessions: Vec<SessionConfig>) -> Vec<SessionConfig> {
+    let mut seen = std::collections::HashMap::<String, Option<String>>::new();
+    let mut unique = Vec::with_capacity(sessions.len());
+    for session in sessions {
+        if let Some(first) = seen.get(&session.id) {
+            tracing::warn!(
+                "session_list: session {} is in vault {:?} and again in {:?}; listing it once",
+                session.id, first, session.vault_id
+            );
+            continue;
+        }
+        seen.insert(session.id.clone(), session.vault_id.clone());
+        unique.push(session);
+    }
+    unique
 }
 
 /// Get a specific session by ID. O(1) lookup.
@@ -488,4 +511,25 @@ pub async fn session_share(
         .share_item(&vault_id, &session_id, &recipient_uuid, &pk_array, expires_in_hours)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod unique_tests {
+    use super::*;
+
+    fn session(id: &str, vault: &str) -> SessionConfig {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": id, "host": "h", "port": 22, "username": "u",
+            "auth_method": { "type": "Agent" }, "folder_id": null, "tags": [],
+            "vault_id": vault,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_session_in_two_vaults_is_listed_once() {
+        let listed = unique_sessions(vec![session("a", "v1"), session("b", "v1"), session("a", "v2")]);
+        let ids: Vec<_> = listed.iter().map(|s| (s.id.as_str(), s.vault_id.as_deref())).collect();
+        assert_eq!(ids, [("a", Some("v1")), ("b", Some("v1"))]);
+    }
 }
