@@ -44,7 +44,11 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libudev-dev libasound2-dev
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        # A fixed Rust, not "stable": a new stable deprecates or lints
+        # something, and with warnings as errors the build breaks overnight
+        # with no change of ours (1.99 renamed fetch_update). Rust is moved
+        # forward on purpose, here and in release.yml together.
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'x86_64-apple-darwin' || '' }}
           components: clippy
@@ -103,7 +107,11 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        # A fixed Rust, not "stable": a new stable deprecates or lints
+        # something, and with warnings as errors the build breaks overnight
+        # with no change of ours (1.99 renamed fetch_update). Rust is moved
+        # forward on purpose, here and in release.yml together.
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: x86_64-linux-android
 
@@ -191,7 +199,11 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        # A fixed Rust, not "stable": a new stable deprecates or lints
+        # something, and with warnings as errors the build breaks overnight
+        # with no change of ours (1.99 renamed fetch_update). Rust is moved
+        # forward on purpose, here and in release.yml together.
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi
 

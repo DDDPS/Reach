@@ -217,7 +217,7 @@ impl Flow {
     pub fn ack(&self) {
         let _ = self
             .in_flight
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1));
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1));
         self.notify.notify_one();
     }
 }
