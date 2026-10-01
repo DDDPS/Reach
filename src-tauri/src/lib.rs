@@ -1318,3 +1318,18 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running Reach application");
 }
+
+#[cfg(test)]
+mod metainfo_tests {
+    /// The Linux metadata (software centres, the AppImage catalog) lists the
+    /// version being built, so a release cannot ship with a stale history.
+    #[test]
+    fn metainfo_lists_this_version() {
+        let xml = include_str!("../linux/com.reach.desktop.metainfo.xml");
+        let release = format!("<release version=\"{}\"", env!("CARGO_PKG_VERSION"));
+        assert!(
+            xml.contains(&release),
+            "linux/com.reach.desktop.metainfo.xml has no {release} entry: add this version to <releases>"
+        );
+    }
+}

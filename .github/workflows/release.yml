@@ -160,6 +160,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           NO_STRIP: true
           APPIMAGE_EXTRACT_AND_RUN: 1
+          # AppImage update information (AppImageSpec, gh-releases-zsync):
+          # linuxdeploy's AppImage plugin embeds it and writes the .zsync file,
+          # so AppImageUpdate, AppImageLauncher and Gear Lever can update Reach
+          # as well as its own updater. Read only by the Linux build.
+          LDAI_UPDATE_INFORMATION: gh-releases-zsync|alexandrosnt|Reach|latest|Reach_*_amd64.AppImage.zsync
         with:
           # Into the release made above, never a new one.
           releaseId: ${{ needs.create-release.outputs.id }}
@@ -167,6 +172,24 @@ jobs:
           releaseBody: ${{ steps.notes.outputs.body }}
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+
+      # The .zsync that the update information above points to belongs next to
+      # the AppImage in the release; tauri-action uploads only the bundles.
+      - name: Upload the AppImage .zsync
+        if: matrix.platform == 'ubuntu-22.04'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.create-release.outputs.id }}
+        run: |
+          set -euo pipefail
+          found=0
+          for f in src-tauri/target/release/bundle/appimage/*.AppImage.zsync; do
+            [ -f "$f" ] || continue
+            found=1
+            url="https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$(basename "$f")"
+            gh api --method POST -H "Content-Type: application/octet-stream" "$url" --input "$f" --jq .name
+          done
+          [ "$found" -eq 1 ] || { echo "::error::No .zsync was made: the AppImage has no update information."; exit 1; }
 
       # A bundle that ships without a sealed signature is the defect from
       # issue #47, and it is invisible until someone runs codesign on an
