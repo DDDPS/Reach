@@ -54,7 +54,7 @@ secrecy = { version = "0.10", features = ["serde"] }
 # Local files, and the remote connection to Turso. libsql's own TLS (hyper-
 # rustls 0.25, with rustls-webpki 0.102 and its advisories) is left out;
 # src/vault/turso_tls.rs connects instead, over the four crates below.
-libsql = { version = "0.9", default-features = false, features = ["core", "remote", "replication"] }
+libsql = { version = "0.9", default-features = false, features = ["core", "remote"] }
 hyper-014 = { package = "hyper", version = "0.14", features = ["client", "http1", "tcp"] }
 tower-04 = { package = "tower", version = "0.4" }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
