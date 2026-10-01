@@ -187,7 +187,9 @@
 						<div class="terminal-wrapper" class:active={tab.id === activeTab?.id}>
 							{#if tab.type === 'rdp' && tab.rdpConnectParams}
 								<RdpPanel id={tab.id} params={tab.rdpConnectParams} active={tab.id === activeTab?.id} />
-							{:else if tab.type !== 'rdp'}
+							{:else if tab.type === 'vnc' && tab.vncConnectParams}
+								<RdpPanel id={tab.id} params={tab.vncConnectParams} protocol="vnc" active={tab.id === activeTab?.id} />
+							{:else if tab.type !== 'rdp' && tab.type !== 'vnc'}
 								<Terminal
 									ptyId={tab.id}
 									type={tab.type}

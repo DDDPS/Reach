@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { rdpDisconnectAll } from '$lib/ipc/rdp';
+	import { vncDisconnectAll } from '$lib/ipc/vnc';
 	import type { Snippet } from 'svelte';
 	import { onMount, onDestroy } from 'svelte';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -17,7 +18,7 @@
 	import DuplicateVaultsDialog from '$lib/components/vault/DuplicateVaultsDialog.svelte';
 	import McpConfirmDialog from '$lib/components/shared/McpConfirmDialog.svelte';
 	import { getUpdaterState, relaunchNow, postponeRelaunch } from '$lib/state/updater.svelte';
-	import { getActiveTab, getTabs } from '$lib/state/tabs.svelte';
+	import { getActiveTab, getTabs, isDesktopTab } from '$lib/state/tabs.svelte';
 	import { getSettings } from '$lib/state/settings.svelte';
 	import { sshListConnections } from '$lib/ipc/ssh';
 	import AIPanel from '$lib/components/ai/AIPanel.svelte';
@@ -54,7 +55,7 @@
 
 	/** Count live SSH connections (backend truth; falls back to connected tabs), plus open desktops. */
 	async function countActiveConnections(): Promise<number> {
-		const desktops = getTabs().filter((tab) => tab.type === 'rdp').length;
+		const desktops = getTabs().filter(isDesktopTab).length;
 		try {
 			return (await sshListConnections()).length + desktops;
 		} catch {
@@ -67,7 +68,7 @@
 		// Desktops first, so each server gets a disconnect rather than a
 		// dropped socket, and no session thread outlives the window.
 		try {
-			await rdpDisconnectAll();
+			await Promise.all([rdpDisconnectAll(), vncDisconnectAll()]);
 		} catch {
 			// Nothing open, or the backend is already gone: leave anyway.
 		}
@@ -180,8 +181,8 @@
 		     to read or type into, so it is told there is no tab. -->
 		<AIPanel
 			connectionId={activeConnectionId}
-			activeTabId={activeTab?.type === 'rdp' ? undefined : activeTab?.id}
-			activeTabType={activeTab?.type === 'rdp' ? undefined : activeTab?.type}
+			activeTabId={isDesktopTab(activeTab) ? undefined : activeTab?.id}
+			activeTabType={activeTab?.type === 'rdp' || activeTab?.type === 'vnc' ? undefined : activeTab?.type}
 		/>
 	</div>
 

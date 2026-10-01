@@ -1,7 +1,13 @@
 import type { SshConnectParams } from '$lib/ipc/ssh';
 import { rdpDisconnect, type RdpConnectParams } from '$lib/ipc/rdp';
+import { vncDisconnect, type VncConnectParams } from '$lib/ipc/vnc';
 
-export type TabType = 'local' | 'ssh' | 'rdp';
+export type TabType = 'local' | 'ssh' | 'rdp' | 'vnc';
+
+/** A tab that shows a remote desktop rather than a terminal. */
+export function isDesktopTab(tab: Pick<Tab, 'type'> | undefined): boolean {
+	return tab?.type === 'rdp' || tab?.type === 'vnc';
+}
 
 export interface Tab {
 	id: string;
@@ -17,6 +23,8 @@ export interface Tab {
 	sshConnectParams?: SshConnectParams;
 	/** What an RDP tab connects to; the panel connects itself once it knows its size. */
 	rdpConnectParams?: RdpConnectParams;
+	/** What a VNC tab connects to. */
+	vncConnectParams?: VncConnectParams;
 }
 
 let tabs = $state<Tab[]>([]);
@@ -41,7 +49,7 @@ export function createTab(type: TabType, title?: string, connectionId?: string, 
 
 	const tab: Tab = {
 		id,
-		title: title ?? (type === 'local' ? 'Local' : type === 'rdp' ? 'RDP' : 'SSH'),
+		title: title ?? (type === 'local' ? 'Local' : type === 'rdp' ? 'RDP' : type === 'vnc' ? 'VNC' : 'SSH'),
 		type,
 		connectionId,
 		active: true,
@@ -61,6 +69,8 @@ export function closeTab(id: string): void {
 	// tab going is what ends it.
 	if (tabs[index].type === 'rdp') {
 		void rdpDisconnect(id).catch(() => {});
+	} else if (tabs[index].type === 'vnc') {
+		void vncDisconnect(id).catch(() => {});
 	}
 
 	const wasActive = tabs[index].active;

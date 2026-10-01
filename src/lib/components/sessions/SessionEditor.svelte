@@ -3,7 +3,7 @@
 	import Button from '$lib/components/shared/Button.svelte';
 	import KeyPicker from './KeyPicker.svelte';
 	import Input from '$lib/components/shared/Input.svelte';
-	import { sessionCreate, sessionUpdate, sessionKind, type SessionConfig, type SessionKind, type AuthMethod, type JumpHostConfig, type Folder } from '$lib/ipc/sessions';
+	import { sessionCreate, sessionList, sessionUpdate, sessionKind, type SessionConfig, type SessionKind, type AuthMethod, type JumpHostConfig, type Folder } from '$lib/ipc/sessions';
 	import { t } from '$lib/state/i18n.svelte';
 	import { open as openDialog } from '@tauri-apps/plugin-dialog';
 
@@ -22,24 +22,39 @@
 	 * a password and a logon domain and nothing else, because keys, agents,
 	 * jump hosts, proxies and login shells are all SSH ideas. Switching moves
 	 * the port between the two defaults only if it still is one.
+	 *
+	 * VNC has less still: a password and no user name. What it has instead
+	 * is the way in: VNC is not encrypted, so it can go through an SSH
+	 * session saved here.
 	 */
 	let kind = $state<SessionKind>('ssh');
 	let domain = $state('');
 	/** RDP only: the protocol cannot say what the machine is (xrdp claims to be Windows), so the user does. */
 	let os = $state<'windows' | 'linux'>('windows');
 	let sharePath = $state('');
+	/** VNC only: the saved SSH session to go through, or '' for direct. */
+	let viaSessionId = $state('');
+	let sshSessions = $state<SessionConfig[]>([]);
+
+	$effect(() => {
+		if (open && kind === 'vnc') {
+			sessionList()
+				.then((all) => (sshSessions = all.filter((s) => sessionKind(s) === 'ssh')))
+				.catch(() => (sshSessions = []));
+		}
+	});
 
 	let name = $state('');
 	let host = $state('');
 	let portStr = $state('22');
 	let username = $state('root');
 
-	const DEFAULT_PORT: Record<SessionKind, string> = { ssh: '22', rdp: '3389' };
+	const DEFAULT_PORT: Record<SessionKind, string> = { ssh: '22', rdp: '3389', vnc: '5900' };
 
 	function setKind(next: SessionKind): void {
 		if (next === kind) return;
 		if (portStr === DEFAULT_PORT[kind] || portStr.trim() === '') portStr = DEFAULT_PORT[next];
-		if (next === 'rdp' && username === 'root') username = '';
+		if (next !== 'ssh' && username === 'root') username = '';
 		if (next === 'ssh' && username === '') username = 'root';
 		kind = next;
 	}
@@ -64,7 +79,7 @@
 	let error = $state<string | undefined>();
 
 	let isEditing = $derived(!!editSession);
-	let canSave = $derived(name.trim().length > 0 && host.trim().length > 0 && username.trim().length > 0 && !saving);
+	let canSave = $derived(name.trim().length > 0 && host.trim().length > 0 && (kind === 'vnc' || username.trim().length > 0) && !saving);
 
 	// Populate fields when editing, reset when creating
 	$effect(() => {
@@ -73,6 +88,7 @@
 			domain = editSession.domain ?? '';
 			os = editSession.detected_os === 'linux' ? 'linux' : 'windows';
 			sharePath = editSession.share_path ?? '';
+			viaSessionId = editSession.via_session_id ?? '';
 			name = editSession.name;
 			host = editSession.host;
 			portStr = String(editSession.port);
@@ -115,6 +131,7 @@
 			domain = '';
 			os = 'windows';
 			sharePath = '';
+			viaSessionId = '';
 			name = '';
 			host = '';
 			portStr = '22';
@@ -146,9 +163,13 @@
 
 		const port = parseInt(portStr, 10) || parseInt(DEFAULT_PORT[kind], 10);
 		const rdp = kind === 'rdp';
-		// RDP is a password logon; the toggle below is SSH-only and its value
-		// is ignored here rather than trusted.
-		const authMethod: AuthMethod = rdp || authType === 'Password'
+		const vnc = kind === 'vnc';
+		/** Jump hosts, proxies and login shells are SSH's alone. */
+		const desktop = rdp || vnc;
+		const via = vnc ? viaSessionId || null : null;
+		// RDP and VNC are password logons; the toggle below is SSH-only and
+		// its value is ignored here rather than trusted.
+		const authMethod: AuthMethod = desktop || authType === 'Password'
 			? { type: 'Password', password: password || undefined }
 			: authType === 'Key'
 				? {
@@ -162,7 +183,7 @@
 				: { type: 'Agent' };
 		const tags = tagsStr.split(',').map(t => t.trim()).filter(Boolean);
 
-		const jumpChain: JumpHostConfig[] | undefined = !rdp && jumpEnabled && jumpHops.length > 0
+		const jumpChain: JumpHostConfig[] | undefined = !desktop && jumpEnabled && jumpHops.length > 0
 			? jumpHops.map(h => {
 				const hopAuth: AuthMethod = h.authType === 'Password'
 					? { type: 'Password', password: h.password || undefined }
@@ -178,7 +199,7 @@
 			})
 			: undefined;
 
-		const proxyConfig = !rdp && proxyEnabled ? {
+		const proxyConfig = !desktop && proxyEnabled ? {
 			proxy_type: proxyType,
 			host: proxyHost.trim(),
 			port: parseInt(proxyPort, 10) || 9050,
@@ -193,36 +214,38 @@
 					name: name.trim(),
 					host: host.trim(),
 					port,
-					username: username.trim(),
+					username: vnc ? '' : username.trim(),
 					auth_method: authMethod,
 					folder_id: folderIdStr || null,
 					tags,
-					jump_chain: rdp ? null : (jumpChain ?? editSession.jump_chain ?? null),
+					jump_chain: desktop ? null : (jumpChain ?? editSession.jump_chain ?? null),
 					proxy: proxyConfig,
-					shell: rdp ? null : (shell.trim() || null),
+					shell: desktop ? null : (shell.trim() || null),
 					kind,
 					domain: rdp ? (domain.trim() || null) : null,
 					// A session that changed protocol changed machine type too.
 					detected_os: rdp ? os : (kind === sessionKind(editSession) ? editSession.detected_os : null),
 					share_path: rdp ? (sharePath.trim() || null) : null,
+					via_session_id: via,
 				});
 			} else {
 				await sessionCreate({
 					name: name.trim(),
 					host: host.trim(),
 					port,
-					username: username.trim(),
+					username: vnc ? '' : username.trim(),
 					authMethod: authMethod,
 					folderId: folderIdStr || null,
 					tags,
 					vaultId,
 					jumpChain: jumpChain ?? null,
 					proxy: proxyConfig,
-					shell: rdp ? null : (shell.trim() || null),
+					shell: desktop ? null : (shell.trim() || null),
 					kind,
 					domain: rdp ? domain : null,
 					detectedOs: rdp ? os : null,
 					sharePath: rdp ? sharePath : null,
+					viaSessionId: via,
 				});
 			}
 			onsave?.();
@@ -288,6 +311,9 @@
 				<button type="button" class="auth-btn" class:active={kind === 'rdp'} disabled={saving} onclick={() => setKind('rdp')}>
 					{t('session.protocol_rdp')}
 				</button>
+				<button type="button" class="auth-btn" class:active={kind === 'vnc'} disabled={saving} onclick={() => setKind('vnc')}>
+					{t('session.protocol_vnc')}
+				</button>
 			</div>
 		</div>
 
@@ -302,7 +328,9 @@
 			</div>
 		</div>
 
-		<Input label={t('session.username')} bind:value={username} placeholder={kind === 'rdp' ? 'Administrator' : 'root'} disabled={saving} />
+		{#if kind !== 'vnc'}
+			<Input label={t('session.username')} bind:value={username} placeholder={kind === 'rdp' ? 'Administrator' : 'root'} disabled={saving} />
+		{/if}
 
 		{#if kind === 'rdp'}
 			<div class="shell-field">
@@ -327,6 +355,21 @@
 					</Button>
 				</div>
 				<p class="shell-hint">{t('session.rdp_share_hint')}</p>
+			</div>
+		{:else if kind === 'vnc'}
+			<div class="shell-field">
+				<Input label={t('session.password_optional')} bind:value={password} type="password" placeholder="Stored encrypted in vault" disabled={saving} />
+				<p class="shell-hint">{t('session.vnc_password_hint')}</p>
+			</div>
+			<div class="shell-field">
+				<label class="via-label" for="vnc-via">{t('session.vnc_via')}</label>
+				<select id="vnc-via" class="via-select" bind:value={viaSessionId} disabled={saving}>
+					<option value="">{t('session.vnc_via_none')}</option>
+					{#each sshSessions as s (s.id)}
+						<option value={s.id}>{s.name} ({s.username}@{s.host})</option>
+					{/each}
+				</select>
+				<p class="shell-hint">{t('session.vnc_via_hint')}</p>
 			</div>
 		{:else}
 		<div class="auth-section">
@@ -744,6 +787,31 @@
 		font-size: 0.625rem;
 		color: var(--color-text-secondary);
 		opacity: 0.7;
+	}
+
+	.via-label {
+		display: block;
+		margin-bottom: 4px;
+		font-size: 0.75rem;
+		color: var(--color-text-secondary);
+	}
+
+	/* Dressed as the text fields around it. */
+	.via-select {
+		width: 100%;
+		padding: 12px;
+		font-family: var(--font-sans);
+		font-size: 0.875rem;
+		color: var(--color-text-primary);
+		background-color: var(--color-bg-elevated);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-btn);
+		outline: none;
+		box-sizing: border-box;
+	}
+
+	.via-select:focus {
+		border-color: var(--color-accent);
 	}
 
 	.jump-section {

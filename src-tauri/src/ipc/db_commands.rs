@@ -113,7 +113,19 @@ async fn auth_for(state: &State<'_, AppState>, method: &AuthMethod) -> Result<Au
 async fn forward_for(app: &tauri::AppHandle, state: &State<'_, AppState>, conn: &DbConnection) -> Result<Option<Forward>, String> {
     let host = if conn.host.trim().is_empty() { "127.0.0.1".to_string() } else { conn.host.trim().to_string() };
     let port = if conn.port == 0 { conn.engine.default_port() } else { conn.port };
-    match &conn.route {
+    forward_route(app, state, &conn.route, host, port).await
+}
+
+/// The SSH leg to `host:port` for a route, if it has one: a loopback port
+/// that reaches it through the SSH server. Shared with VNC sessions.
+pub(crate) async fn forward_route(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    route: &Route,
+    host: String,
+    port: u16,
+) -> Result<Option<Forward>, String> {
+    match route {
         Route::Direct => Ok(None),
         Route::Live { connection_id } => {
             let handle = state
