@@ -15,6 +15,17 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request makes the older run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # No debug info in CI builds: nobody attaches a debugger here, and it is
+  # most of the size of target/. Smaller targets link faster and keep the
+  # caches inside GitHub's 10 GB, where they are not evicted.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
 jobs:
   test:
     strategy:
@@ -42,6 +53,10 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          # Only main saves. A pull request restores main's cache anyway, and
+          # one saving its own pushed main's out of the 10 GB GitHub keeps:
+          # the next run then built everything cold, 18 minutes for Android.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -96,6 +111,10 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          # Only main saves. A pull request restores main's cache anyway, and
+          # one saving its own pushed main's out of the 10 GB GitHub keeps:
+          # the next run then built everything cold, 18 minutes for Android.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -180,6 +199,10 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          # Only main saves. A pull request restores main's cache anyway, and
+          # one saving its own pushed main's out of the 10 GB GitHub keeps:
+          # the next run then built everything cold, 18 minutes for Android.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7

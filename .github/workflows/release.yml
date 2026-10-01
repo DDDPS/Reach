@@ -77,6 +77,9 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          # A cache saved under a tag can only be restored by that same tag,
+          # so it is never used again; saving it only evicts main's caches.
+          save-if: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -263,6 +266,9 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          # A cache saved under a tag can only be restored by that same tag,
+          # so it is never used again; saving it only evicts main's caches.
+          save-if: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
