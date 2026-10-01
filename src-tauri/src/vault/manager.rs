@@ -3678,7 +3678,15 @@ mod keychain_tests {
         let dir = std::env::temp_dir().join(format!("reach-reset-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut mgr = VaultManager::new(dir.clone());
-        mgr.init_identity("reset-test-pass").await.unwrap();
+        let test_password = format!(
+            "reset-test-pass-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        mgr.init_identity(&test_password).await.unwrap();
         let uuid = mgr.user_uuid.clone().unwrap();
         assert!(get_key_from_keychain(&uuid).is_ok(), "the identity stored its key");
         mgr.reset().await.unwrap();
