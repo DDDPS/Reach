@@ -45,25 +45,39 @@ pub fn parse_ssh_config() -> Result<Option<SshConfig>, String> {
         return Ok(None);
     }
 
-    let file = std::fs::File::open(&path)
-        .map_err(|e| format!("Failed to open SSH config: {}", e))?;
-    let mut reader = BufReader::new(file);
+    let bytes = std::fs::read(&path).map_err(|e| format!("Failed to open SSH config: {}", e))?;
+    parse_config_text(&bytes).map(Some)
+}
 
-    let config = SshConfig::default()
-        .parse(&mut reader, ParseRule::ALLOW_UNKNOWN_FIELDS)
-        .map_err(|e| format!("Failed to parse SSH config: {}", e))?;
-
-    Ok(Some(config))
+/// Parse config file contents. Windows tools often start a UTF-8 file with
+/// a byte order mark (PowerShell 5's `Out-File` and `>` do); left in, it
+/// glues itself to the first keyword, which then is not `Host`, and the
+/// first host vanished without a word.
+fn parse_config_text(bytes: &[u8]) -> Result<SshConfig, String> {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    SshConfig::default()
+        .parse(&mut BufReader::new(bytes), ParseRule::ALLOW_UNKNOWN_FIELDS)
+        .map_err(|e| format!("Failed to parse SSH config: {}", e))
 }
 
 /// List all named (non-wildcard) hosts in the SSH config.
+///
+/// A name can head several `Host` blocks; to OpenSSH that is one host whose
+/// settings come from every block that matches, the first value of each
+/// winning, which is what `query` returns. So it is listed once. Listed twice,
+/// it broke the import dialog: its list is keyed by name, and a repeated key
+/// is an error that left the dialog loading for good.
 pub fn list_hosts(config: &SshConfig) -> Vec<SshHostEntry> {
     let mut entries = Vec::new();
+    let mut seen = std::collections::HashSet::new();
 
     for host in config.get_hosts() {
         for clause in &host.pattern {
             // Skip wildcard patterns and negated patterns
             if clause.negated || clause.pattern.contains('*') || clause.pattern.contains('?') {
+                continue;
+            }
+            if !seen.insert(clause.pattern.clone()) {
                 continue;
             }
 
@@ -249,4 +263,54 @@ fn whoami() -> Option<String> {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(text: &str) -> Vec<String> {
+        list_hosts(&parse_config_text(text.as_bytes()).unwrap()).into_iter().map(|h| h.name).collect()
+    }
+
+    #[test]
+    fn a_host_in_several_blocks_is_listed_once_with_all_its_settings() {
+        let text = "Host web db\n  User admin\n\nHost web\n  HostName 10.0.0.1\n  Port 2222\n";
+        assert_eq!(names(text), ["web", "db"]);
+        let web = list_hosts(&parse_config_text(text.as_bytes()).unwrap()).into_iter().find(|h| h.name == "web").unwrap();
+        assert_eq!((web.hostname.as_str(), web.port, web.user.as_str()), ("10.0.0.1", 2222, "admin"));
+    }
+
+    #[test]
+    fn the_first_value_wins_as_in_openssh() {
+        let text = "Host web\n  Port 2222\n\nHost web\n  Port 3333\n";
+        let hosts = list_hosts(&parse_config_text(text.as_bytes()).unwrap());
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].port, 2222);
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_hide_the_first_host() {
+        assert_eq!(names("\u{feff}Host web\r\n  HostName 10.0.0.1\r\n\r\nHost db\r\n"), ["web", "db"]);
+    }
+
+    #[test]
+    fn wildcards_and_negations_are_not_hosts() {
+        assert_eq!(names("Host *\n  User x\nHost web !db *.lan\n"), ["web"]);
+    }
+
+    #[test]
+    fn windows_paths_and_quoted_spaces_survive() {
+        let text = r#"Host web
+  IdentityFile "C:\Users\John Doe\.ssh\id_rsa"
+"#;
+        let hosts = list_hosts(&parse_config_text(text.as_bytes()).unwrap());
+        assert_eq!(hosts[0].identity_files, [r"C:\Users\John Doe\.ssh\id_rsa"]);
+    }
+
+    #[test]
+    fn a_jump_loop_ends() {
+        let hosts = list_hosts(&parse_config_text(b"Host a\n  ProxyJump b\nHost b\n  ProxyJump a\n").unwrap());
+        assert_eq!(hosts.len(), 2);
+    }
 }
