@@ -44,6 +44,27 @@ export interface SessionConfig {
   via_session_id?: string | null;
   /** Key sessions: also offer the SSH agent's keys if this key is refused. Off by default. */
   try_agent_keys?: boolean | null;
+  /** ssh_config settings: imported files, lines set in Reach, approvals. */
+  ssh_options?: SshOptions | null;
+}
+
+/** A config file as it was read at import. */
+export interface SshConfigFile {
+  path: string;
+  text: string;
+  role: 'user' | 'system' | 'included';
+}
+
+/** A session's ssh_config settings (see src-tauri/src/ssh/sshconf). */
+export interface SshOptions {
+  /** What the session was imported from; resolved again at every connect. */
+  imported?: { alias: string; files: SshConfigFile[]; at: number } | null;
+  /** Lines set in Reach ("MACs +hmac-sha1"); they win over the files. */
+  lines?: string[];
+  /** Local commands the user allowed for this session, exactly as written. */
+  approved_commands?: string[];
+  /** Weakening settings the user has seen and kept ("Keyword value"). */
+  accepted_weakenings?: string[];
 }
 
 export type SessionKind = 'ssh' | 'rdp' | 'vnc';
@@ -94,6 +115,7 @@ export async function sessionCreate(params: {
   sharePath?: string | null;
   viaSessionId?: string | null;
   tryAgentKeys?: boolean | null;
+  sshOptions?: SshOptions | null;
 }): Promise<SessionConfig> {
   return invoke<SessionConfig>('session_create', {
     name: params.name,
@@ -113,6 +135,7 @@ export async function sessionCreate(params: {
     sharePath: params.sharePath?.trim() ? params.sharePath.trim() : null,
     viaSessionId: params.viaSessionId || null,
     tryAgentKeys: params.tryAgentKeys || null,
+    sshOptions: params.sshOptions ?? null,
   });
 }
 

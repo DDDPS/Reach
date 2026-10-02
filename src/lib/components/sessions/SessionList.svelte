@@ -593,6 +593,7 @@
 				sessionLog: sessionLogConfig(),
 				showLoginMessage: getSettings().showLoginMessage,
 				tryAgentKeys: authType === 'Key' && session.try_agent_keys === true,
+				sshOptions: session.ssh_options ?? null,
 				jumpChain,
 				proxy: session.proxy ? {
 					proxy_type: session.proxy.proxy_type,

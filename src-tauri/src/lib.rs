@@ -375,9 +375,9 @@ pub fn run() {
             ssh_detect_os,
             inspect_key_file,
             // SSH Config commands
-            sshconfig_list_hosts,
-            sshconfig_resolve_host,
+            sshconfig_scan,
             sshconfig_exists,
+            ssh_options_report,
             ssh_key_import,
             ssh_key_list,
             ssh_key_update,
@@ -757,9 +757,9 @@ pub fn run() {
             ssh_detect_os,
             inspect_key_file,
             // SSH Config commands
-            sshconfig_list_hosts,
-            sshconfig_resolve_host,
+            sshconfig_scan,
             sshconfig_exists,
+            ssh_options_report,
             ssh_key_import,
             ssh_key_list,
             ssh_key_update,

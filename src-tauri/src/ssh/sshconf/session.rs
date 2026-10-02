@@ -119,9 +119,18 @@ impl Env for StoredEnv<'_> {
     }
 }
 
+/// A session's settings, resolved.
+pub struct SessionResolution {
+    pub resolved: Resolved,
+    /// Expansion errors ssh would stop on.
+    pub errors: Vec<String>,
+    /// `Match exec` commands that wanted to run but are not approved.
+    pub exec_pending: Vec<String>,
+}
+
 /// Resolve a session's settings for connecting. `host`, `port` and `user`
 /// are the session's own fields; like ssh's command line they win.
-pub fn resolve_session(opts: &SshOptions, host: &str, port: u16, user: &str) -> (Resolved, Vec<String>) {
+pub fn resolve_session(opts: &SshOptions, host: &str, port: u16, user: &str) -> SessionResolution {
     let sys = SystemEnv::new(ExecPolicy::Approved(opts.approved_commands.clone()));
     let empty = Vec::new();
     let files = opts.imported.as_ref().map_or(&empty, |i| &i.files);
@@ -145,7 +154,8 @@ pub fn resolve_session(opts: &SshOptions, host: &str, port: u16, user: &str) -> 
         .collect();
     let mut r = resolve(&sources, &Query { host: alias, command: None, overrides }, &env);
     let errors = r.finish(&env);
-    (r, errors)
+    let exec_pending = sys.refused.borrow().clone();
+    SessionResolution { resolved: r, errors, exec_pending }
 }
 
 /// The plan for one hop of a session: the session's settings for its own
@@ -156,7 +166,7 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
     let base = russh::client::Config::default();
     let Some(opts) = opts.filter(|o| !o.is_empty()) else {
         let empty = Resolved::empty(host);
-        return super::apply::Plan::new(&empty, base);
+        return super::apply::Plan::new(&empty, base, &[]);
     };
     let scoped;
     let opts = if jump {
@@ -165,11 +175,14 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
     } else {
         opts
     };
-    let (r, errors) = resolve_session(opts, host, port, user);
+    let SessionResolution { resolved: r, errors, exec_pending } = resolve_session(opts, host, port, user);
+    for c in &exec_pending {
+        tracing::warn!("ssh_config for {host}: Match exec \"{c}\" is not approved; taken as not matching");
+    }
     for e in &errors {
         tracing::warn!("ssh_config for {host}: {e}");
     }
-    let plan = super::apply::Plan::new(&r, base);
+    let plan = super::apply::Plan::new(&r, base, &opts.accepted_weakenings);
     for w in &plan.weakenings {
         tracing::warn!("ssh_config for {host}: {} {} weakens the connection: {}", w.keyword, w.value, w.reason);
     }

@@ -55,6 +55,9 @@ pub struct Weakening {
     pub value: String,
     /// Why it is weaker, for the warning.
     pub reason: String,
+    /// The user approved it (or wrote it in Reach); otherwise it is held
+    /// back until they do.
+    pub accepted: bool,
 }
 
 /// What the plan did with a keyword it was given.
@@ -76,6 +79,13 @@ pub struct Plan {
     pub weakenings: Vec<Weakening>,
     /// Per keyword set in the config: what became of it.
     pub uses: Vec<(Kw, Use)>,
+    /// Weakenings the user approved ("Keyword value").
+    pub accepted: Vec<String>,
+}
+
+/// How an approved weakening is stored: "Keyword value".
+pub fn weakening_key(kw: Kw, value: &str) -> String {
+    format!("{} {}", kw.name(), value)
 }
 
 /// The algorithms Reach's engine speaks, by OpenSSH name.
@@ -194,61 +204,66 @@ pub fn assemble(spec: &str, default: &[&str], all: &[&str]) -> (Vec<String>, Vec
 
 impl Plan {
     /// Build the plan for a resolved host. `base` is Reach's own russh
-    /// configuration, which the config adjusts.
-    pub fn new(r: &Resolved, base: russh::client::Config) -> Plan {
-        let mut p = Plan { config: base, socket: SocketPlan::default(), weakenings: vec![], uses: vec![] };
+    /// configuration, which the config adjusts. `accepted` lists the
+    /// weakenings the user approved ("Keyword value"); lines set in Reach
+    /// itself count as approved.
+    pub fn new(r: &Resolved, base: russh::client::Config, accepted: &[String]) -> Plan {
+        let mut p = Plan { config: base, socket: SocketPlan::default(), weakenings: vec![], uses: vec![], accepted: accepted.to_vec() };
         let o = &r.options;
         p.algorithms(o);
         p.transport(o);
         p
     }
 
-    fn weak(&mut self, kw: Kw, value: &str, reason: &str) {
-        self.weakenings.push(Weakening { keyword: kw.name().into(), value: value.into(), reason: reason.into() });
+    /// Whether a weakening value of `kw` may apply: approved by the user, or
+    /// written in Reach's own editor (the command line of a session).
+    pub fn approved(&self, o: &Options, kw: Kw, value: &str) -> bool {
+        o.get(kw).is_some_and(|s| s.at.file == "command line") || self.accepted.iter().any(|a| *a == weakening_key(kw, value))
+    }
+
+    fn weak(&mut self, kw: Kw, value: &str, reason: &str, accepted: bool) {
+        self.weakenings.push(Weakening { keyword: kw.name().into(), value: value.into(), reason: reason.into(), accepted });
+    }
+
+    /// An algorithm list: assembled as OpenSSH does against Reach's
+    /// defaults, weak additions kept only once approved, names the engine
+    /// lacks reported.
+    fn pick<T: Clone>(&mut self, o: &Options, kw: Kw, table: &[(&str, T)], default: &[&str]) -> Option<Vec<T>> {
+        let spec = o.first(kw)?.to_string();
+        let all: Vec<&str> = table.iter().map(|(n, _)| *n).collect();
+        let (mut names, missing) = assemble(&spec, default, &all);
+        let mut held = Vec::new();
+        for n in names.clone().iter().filter(|n| !default.contains(&n.as_str())) {
+            if let Some(why) = weak_algorithm(n) {
+                let ok = self.approved(o, kw, n);
+                self.weak(kw, n, why, ok);
+                if !ok {
+                    names.retain(|x| x != n);
+                    held.push(n.clone());
+                }
+            }
+        }
+        let mut notes = Vec::new();
+        if !held.is_empty() {
+            notes.push(format!("waiting for your approval: {}", held.join(", ")));
+        }
+        if !missing.is_empty() {
+            notes.push(format!("not available: {}", missing.join(", ")));
+        }
+        if names.is_empty() {
+            self.uses.push((kw, Use::NotUsed(if notes.is_empty() { format!("none of {spec} is available") } else { notes.join("; ") })));
+            return None;
+        }
+        self.uses.push((kw, if notes.is_empty() { Use::Used } else { Use::Partly(notes.join("; ")) }));
+        Some(names.iter().filter_map(|n| table.iter().find(|(t, _)| t == n).map(|(_, v)| v.clone())).collect())
     }
 
     fn algorithms(&mut self, o: &Options) {
-        macro_rules! list {
-            ($kw:expr, $table:expr, $field:ident, $default:expr) => {{
-                if let Some(spec) = o.first($kw) {
-                    let table = $table;
-                    let all: Vec<&str> = table.iter().map(|(n, _)| *n).collect();
-                    let default: Vec<&str> = $default;
-                    let (names, missing) = assemble(spec, &default, &all);
-                    let added: Vec<String> = names.iter().filter(|n| !default.contains(&n.as_str())).cloned().collect();
-                    for n in &added {
-                        if let Some(why) = weak_algorithm(n) {
-                            self.weak($kw, n, why);
-                        }
-                    }
-                    if names.is_empty() {
-                        self.uses.push(($kw, Use::NotUsed(format!("none of {spec} is available"))));
-                    } else {
-                        self.config.preferred.$field = Cow::Owned(
-                            names.iter().filter_map(|n| table.iter().find(|(t, _)| t == n).map(|(_, v)| v.clone())).collect(),
-                        );
-                        self.uses.push(($kw, if missing.is_empty() { Use::Used } else { Use::Partly(format!("not available: {}", missing.join(", "))) }));
-                    }
-                }
-            }};
-        }
-        let names_of = |want: &[russh::kex::Name]| -> Vec<&'static str> {
-            supported::kex().into_iter().filter(|(_, n)| want.contains(n)).map(|(s, _)| s).collect()
-        };
-        let default_kex = {
-            let cur = self.config.preferred.kex.to_vec();
-            let mut v: Vec<&str> = Vec::new();
-            for k in &cur {
-                if let Some(s) = names_of(std::slice::from_ref(k)).first() {
-                    v.push(s);
-                }
-            }
-            v
-        };
-        list!(Kw::KexAlgorithms, supported::kex(), kex, default_kex.clone());
-        // Keep the extension markers russh needs (ext-info, strict kex).
-        if o.first(Kw::KexAlgorithms).is_some() {
-            let mut kex = self.config.preferred.kex.to_vec();
+        let kex_table = supported::kex();
+        let cur = self.config.preferred.kex.to_vec();
+        let default: Vec<&str> = kex_table.iter().filter(|(_, n)| cur.contains(n)).map(|(s, _)| *s).collect();
+        if let Some(mut kex) = self.pick(o, Kw::KexAlgorithms, &kex_table, &default) {
+            // The extension markers russh needs (ext-info, strict kex).
             for marker in [russh::kex::EXTENSION_SUPPORT_AS_CLIENT, russh::kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT] {
                 if !kex.contains(&marker) {
                     kex.push(marker);
@@ -256,14 +271,19 @@ impl Plan {
             }
             self.config.preferred.kex = Cow::Owned(kex);
         }
-        let cur_ciphers = self.config.preferred.cipher.to_vec();
-        let default_ciphers: Vec<&str> = supported::ciphers().into_iter().filter(|(_, n)| cur_ciphers.contains(n)).map(|(s, _)| s).collect();
-        list!(Kw::Ciphers, supported::ciphers(), cipher, default_ciphers.clone());
-        let cur_macs = self.config.preferred.mac.to_vec();
-        let default_macs: Vec<&str> = supported::macs().into_iter().filter(|(_, n)| cur_macs.contains(n)).map(|(s, _)| s).collect();
-        list!(Kw::MACs, supported::macs(), mac, default_macs.clone());
-
-        if let Some(spec) = o.first(Kw::HostKeyAlgorithms) {
+        let table = supported::ciphers();
+        let cur = self.config.preferred.cipher.to_vec();
+        let default: Vec<&str> = table.iter().filter(|(_, n)| cur.contains(n)).map(|(s, _)| *s).collect();
+        if let Some(v) = self.pick(o, Kw::Ciphers, &table, &default) {
+            self.config.preferred.cipher = Cow::Owned(v);
+        }
+        let table = supported::macs();
+        let cur = self.config.preferred.mac.to_vec();
+        let default: Vec<&str> = table.iter().filter(|(_, n)| cur.contains(n)).map(|(s, _)| *s).collect();
+        if let Some(v) = self.pick(o, Kw::MACs, &table, &default) {
+            self.config.preferred.mac = Cow::Owned(v);
+        }
+        {
             use russh::keys::{Algorithm, EcdsaCurve, HashAlg};
             let table: Vec<(&str, Algorithm)> = vec![
                 ("ssh-ed25519", Algorithm::Ed25519),
@@ -274,20 +294,10 @@ impl Plan {
                 ("rsa-sha2-256", Algorithm::Rsa { hash: Some(HashAlg::Sha256) }),
                 ("ssh-rsa", Algorithm::Rsa { hash: None }),
             ];
-            let all: Vec<&str> = table.iter().map(|(n, _)| *n).collect();
             let cur = self.config.preferred.key.to_vec();
             let default: Vec<&str> = table.iter().filter(|(_, a)| cur.contains(a)).map(|(n, _)| *n).collect();
-            let (names, missing) = assemble(spec, &default, &all);
-            for n in names.iter().filter(|n| !default.contains(&n.as_str())) {
-                if let Some(why) = weak_algorithm(n) {
-                    self.weak(Kw::HostKeyAlgorithms, n, why);
-                }
-            }
-            if names.is_empty() {
-                self.uses.push((Kw::HostKeyAlgorithms, Use::NotUsed(format!("none of {spec} is available"))));
-            } else {
-                self.config.preferred.key = Cow::Owned(names.iter().filter_map(|n| table.iter().find(|(t, _)| t == n).map(|(_, a)| a.clone())).collect());
-                self.uses.push((Kw::HostKeyAlgorithms, if missing.is_empty() { Use::Used } else { Use::Partly(format!("not available: {}", missing.join(", "))) }));
+            if let Some(v) = self.pick(o, Kw::HostKeyAlgorithms, &table, &default) {
+                self.config.preferred.key = Cow::Owned(v);
             }
         }
         if let Some(c) = o.first(Kw::Compression) {
@@ -435,10 +445,17 @@ mod tests {
         let src = super::super::resolve::Source { path: "c".into(), text: Some(text.into()), user: true };
         let env = super::super::env::SystemEnv::new(super::super::env::ExecPolicy::Never);
         let r = super::super::resolve::resolve(&[src], &super::super::resolve::Query { host: "centreon".into(), ..Default::default() }, &env);
-        let p = Plan::new(&r, russh::client::Config::default());
+        // From a file, not yet approved: held back, and said so.
+        let p = Plan::new(&r, russh::client::Config::default(), &[]);
+        assert!(!p.config.preferred.mac.contains(&russh::mac::HMAC_SHA1));
+        assert!(matches!(&p.uses[0].1, Use::Partly(m) if m.contains("approval")));
+        assert!(!p.weakenings[0].accepted);
+        // Approved: offered after Reach's own, with the warning kept.
+        let p = Plan::new(&r, russh::client::Config::default(), &["MACs hmac-sha1".into()]);
         assert!(p.config.preferred.mac.contains(&russh::mac::HMAC_SHA1));
         assert_eq!(p.config.preferred.mac.first(), Some(&russh::mac::HMAC_SHA512_ETM));
         assert_eq!(p.weakenings.len(), 1);
+        assert!(p.weakenings[0].accepted);
         assert_eq!(p.uses, [(Kw::MACs, Use::Used)]);
     }
 
@@ -447,7 +464,7 @@ mod tests {
         let mut o = Options::default();
         o.single.insert(Kw::MACs, super::super::resolve::Setting { args: vec!["+hmac-md5".into()], at: super::super::resolve::At { file: "f".into(), line: 1 } });
         let r = Resolved { original_host: "h".into(), host: "h".into(), options: o, notes: vec![], refused: None, final_pass: false };
-        let p = Plan::new(&r, russh::client::Config::default());
+        let p = Plan::new(&r, russh::client::Config::default(), &[]);
         assert!(matches!(&p.uses[0].1, Use::Partly(m) if m.contains("hmac-md5")));
     }
 
@@ -456,7 +473,7 @@ mod tests {
         let mut o = Options::default();
         o.single.insert(Kw::RekeyLimit, super::super::resolve::Setting { args: vec!["4G".into(), "1h".into()], at: super::super::resolve::At { file: "f".into(), line: 1 } });
         let r = Resolved { original_host: "h".into(), host: "h".into(), options: o, notes: vec![], refused: None, final_pass: false };
-        let p = Plan::new(&r, russh::client::Config::default());
+        let p = Plan::new(&r, russh::client::Config::default(), &[]);
         assert_eq!(p.config.limits.rekey_write_limit, 1 << 30);
         assert_eq!(p.config.limits.rekey_time_limit, Duration::from_secs(3600));
     }

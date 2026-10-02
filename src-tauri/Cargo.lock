@@ -6888,7 +6888,6 @@ dependencies = [
  "socket2 0.6.5",
  "sqlx",
  "ssh-key 0.6.7",
- "ssh2-config",
  "tar",
  "tauri",
  "tauri-build",
@@ -8470,20 +8469,6 @@ dependencies = [
  "ssh-cipher 0.3.0",
  "ssh-encoding 0.3.0",
  "zeroize",
-]
-
-[[package]]
-name = "ssh2-config"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b817975ac67aeb9583619989b802d6072bccc402ffc00744038c704e7246bb7"
-dependencies = [
- "bitflags 2.13.2",
- "dirs 7.0.0",
- "glob",
- "log",
- "thiserror 2.0.21",
- "wildmatch",
 ]
 
 [[package]]
@@ -10400,12 +10385,6 @@ name = "widestring"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
-
-[[package]]
-name = "wildmatch"
-version = "2.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29333c3ea1ba8b17211763463ff24ee84e41c78224c16b001cd907e663a38c68"
 
 [[package]]
 name = "winapi"

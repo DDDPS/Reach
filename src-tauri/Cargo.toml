@@ -37,7 +37,6 @@ russh = { version = "0.63", default-features = false, features = ["ring", "rsa",
 # about itself (algorithm, fingerprint, whether it is encrypted) without
 # needing the passphrase.
 ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption"] }
-ssh2-config = "0.8"
 
 # Encryption
 # zeroize: wipe the hashing blocks and the keys ciphers hold when they drop.
