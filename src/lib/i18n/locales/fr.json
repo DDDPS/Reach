@@ -930,7 +930,7 @@
   "nav.ansible": "Ansible",
   "nav.tofu": "OpenTofu",
   "settings.devops": "DevOps",
-  "devops.intro": "Outils pour automatiser et provisionner l’infrastructure. Activez ceux que vous utilisez ; un outil désactivé quitte la barre d’onglets et ne fait rien, et ses projets sont conservés jusqu’à ce que vous le réactiviez.",
+  "devops.intro": "Outils pour exploiter et gérer l’infrastructure : automatisation, infrastructure as code, bases de données, conteneurs et Kubernetes. Activez ceux que vous utilisez ; un outil désactivé quitte la barre d’onglets et ne fait rien, et ce qu’il a enregistré est conservé jusqu’à ce que vous le réactiviez.",
   "devops.ansible_desc": "Playbooks, inventaire, rôles et vault.",
   "devops.tofu_desc": "Planifier et appliquer l’infrastructure en tant que code.",
   "devops.busy": "Une exécution est en cours. Désactivez-le une fois terminée.",
@@ -2136,5 +2136,6 @@
   "k8s.yaml_edit_hint": "Enregistré seulement si personne ne l'a modifié depuis son ouverture.",
   "k8s.yaml_editor": "YAML de {{name}}, en cours de modification",
   "k8s.yaml_of": "YAML de {{name}}",
-  "k8s.yaml_saved": "{{name}} enregistré"
+  "k8s.yaml_saved": "{{name}} enregistré",
+  "devops.containers_k8s_notice": "Nouveau dans Reach : conteneurs (Docker, Podman, Compose) et Kubernetes avec Helm, via vos sessions SSH. Activez-les dans Paramètres → DevOps."
 }

@@ -930,7 +930,7 @@
   "nav.ansible": "Ansible",
   "nav.tofu": "OpenTofu",
   "settings.devops": "DevOps",
-  "devops.intro": "Werkzeuge zum Automatisieren und Bereitstellen von Infrastruktur. Schalte die ein, die du nutzt; ein ausgeschaltetes Werkzeug verschwindet aus der Tab-Leiste und tut nichts, seine Projekte bleiben erhalten, bis du es wieder einschaltest.",
+  "devops.intro": "Werkzeuge zum Betreiben und Verwalten von Infrastruktur: Automatisierung, Infrastructure as Code, Datenbanken, Container und Kubernetes. Schalte die ein, die du nutzt; ein ausgeschaltetes Werkzeug verschwindet aus der Tab-Leiste und tut nichts, und was es gespeichert hat, bleibt erhalten, bis du es wieder einschaltest.",
   "devops.ansible_desc": "Playbooks, Inventar, Rollen und Vault.",
   "devops.tofu_desc": "Infrastruktur als Code planen und anwenden.",
   "devops.busy": "Ein Lauf ist aktiv. Schalte es aus, sobald er fertig ist.",
@@ -2136,5 +2136,6 @@
   "k8s.yaml_edit_hint": "Wird nur gespeichert, wenn niemand es seit dem Öffnen geändert hat.",
   "k8s.yaml_editor": "YAML von {{name}}, in Bearbeitung",
   "k8s.yaml_of": "YAML von {{name}}",
-  "k8s.yaml_saved": "{{name}} gespeichert"
+  "k8s.yaml_saved": "{{name}} gespeichert",
+  "devops.containers_k8s_notice": "Neu in Reach: Container (Docker, Podman, Compose) und Kubernetes mit Helm, über deine SSH-Sitzungen. Schalte sie unter Einstellungen → DevOps ein."
 }

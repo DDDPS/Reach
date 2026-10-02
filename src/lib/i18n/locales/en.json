@@ -930,7 +930,7 @@
   "nav.ansible": "Ansible",
   "nav.tofu": "OpenTofu",
   "settings.devops": "DevOps",
-  "devops.intro": "Tools for automating and provisioning infrastructure. Turn on the ones you use; a tool that is off leaves the tab bar and does nothing, and its projects are kept for when you turn it back on.",
+  "devops.intro": "Tools for running and managing infrastructure: automation, infrastructure as code, databases, containers and Kubernetes. Turn on the ones you use; a tool that is off leaves the tab bar and does nothing, and what it saved is kept for when you turn it back on.",
   "devops.ansible_desc": "Playbooks, inventory, roles and vault.",
   "devops.tofu_desc": "Plan and apply infrastructure as code.",
   "devops.busy": "A run is in progress. Turn it off once it finishes.",
@@ -2136,5 +2136,6 @@
   "k8s.yaml_edit_hint": "Saved only if nobody changed it since you opened it.",
   "k8s.yaml_editor": "YAML of {{name}}, editing",
   "k8s.yaml_of": "YAML of {{name}}",
-  "k8s.yaml_saved": "{{name}} saved"
+  "k8s.yaml_saved": "{{name}} saved",
+  "devops.containers_k8s_notice": "New in Reach: Containers (Docker, Podman, Compose) and Kubernetes with Helm, through your SSH sessions. Switch them on in Settings → DevOps."
 }

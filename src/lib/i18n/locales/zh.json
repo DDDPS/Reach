@@ -930,7 +930,7 @@
   "nav.ansible": "Ansible",
   "nav.tofu": "OpenTofu",
   "settings.devops": "DevOps",
-  "devops.intro": "用于自动化和配置基础设施的工具。开启你需要的工具；关闭的工具会从标签栏中移除且不会运行，其项目会保留，重新开启后即可继续使用。",
+  "devops.intro": "用于运行和管理基础设施的工具：自动化、基础设施即代码、数据库、容器和 Kubernetes。开启你需要的工具；关闭的工具会从标签栏中移除且不会运行，它保存的内容会保留，重新开启后即可继续使用。",
   "devops.ansible_desc": "Playbook、清单、角色和 Vault。",
   "devops.tofu_desc": "以代码方式规划和应用基础设施。",
   "devops.busy": "正在运行中。请在完成后再关闭。",
@@ -2136,5 +2136,6 @@
   "k8s.yaml_edit_hint": "仅当你打开后没有其他人修改过时才会保存。",
   "k8s.yaml_editor": "{{name}} 的 YAML（编辑中）",
   "k8s.yaml_of": "{{name}} 的 YAML",
-  "k8s.yaml_saved": "已保存 {{name}}"
+  "k8s.yaml_saved": "已保存 {{name}}",
+  "devops.containers_k8s_notice": "Reach 新功能：容器（Docker、Podman、Compose）和带 Helm 的 Kubernetes，通过你的 SSH 会话使用。在 设置 → DevOps 中开启。"
 }

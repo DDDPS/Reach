@@ -930,7 +930,7 @@
   "nav.ansible": "Ansible",
   "nav.tofu": "OpenTofu",
   "settings.devops": "DevOps",
-  "devops.intro": "Herramientas para automatizar y aprovisionar infraestructura. Activa las que uses; una herramienta desactivada sale de la barra de pestañas y no hace nada, y sus proyectos se conservan hasta que la vuelvas a activar.",
+  "devops.intro": "Herramientas para operar y gestionar infraestructura: automatización, infraestructura como código, bases de datos, contenedores y Kubernetes. Activa las que uses; una herramienta desactivada sale de la barra de pestañas y no hace nada, y lo que guardó se conserva hasta que la vuelvas a activar.",
   "devops.ansible_desc": "Playbooks, inventario, roles y vault.",
   "devops.tofu_desc": "Planifica y aplica infraestructura como código.",
   "devops.busy": "Hay una ejecución en curso. Desactívala cuando termine.",
@@ -2136,5 +2136,6 @@
   "k8s.yaml_edit_hint": "Solo se guarda si nadie lo cambió desde que lo abriste.",
   "k8s.yaml_editor": "YAML de {{name}}, en edición",
   "k8s.yaml_of": "YAML de {{name}}",
-  "k8s.yaml_saved": "{{name}} guardado"
+  "k8s.yaml_saved": "{{name}} guardado",
+  "devops.containers_k8s_notice": "Novedad en Reach: contenedores (Docker, Podman, Compose) y Kubernetes con Helm, a través de tus sesiones SSH. Actívalos en Ajustes → DevOps."
 }
