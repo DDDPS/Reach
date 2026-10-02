@@ -155,9 +155,11 @@ pub(crate) async fn ssh_for_route(
             let auth = auth_for(state, &s.auth_method, s.try_agent_keys.unwrap_or(false)).await?;
             let mut jumps = Vec::new();
             for j in s.jump_chain.clone().unwrap_or_default() {
-                jumps.push(JumpHostParams { auth: auth_for(state, &j.auth_method, false).await?, host: j.host, port: j.port, username: j.username });
+                let opts = crate::ssh::sshconf::session::plan_for(s.ssh_options.as_ref(), &j.host, j.port, &j.username, true).into();
+                jumps.push(JumpHostParams { auth: auth_for(state, &j.auth_method, false).await?, host: j.host, port: j.port, username: j.username, opts });
             }
-            let ssh = SshManager::open_headless(&s.host, s.port, &s.username, auth, jumps, s.proxy.clone(), app.clone())
+            let opts = crate::ssh::sshconf::session::plan_for(s.ssh_options.as_ref(), &s.host, s.port, &s.username, false).into();
+            let ssh = SshManager::open_headless(&s.host, s.port, &s.username, auth, jumps, s.proxy.clone(), app.clone(), opts)
                 .await
                 .map_err(|e| format!("SSH to {}: {e}", s.name))?;
             Ok(Some((ssh.handle.clone(), Some(ssh))))

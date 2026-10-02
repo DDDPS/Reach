@@ -144,6 +144,11 @@ pub struct Resolved {
 }
 
 impl Resolved {
+    /// Nothing configured: Reach's own defaults.
+    pub fn empty(host: &str) -> Resolved {
+        Resolved { original_host: host.into(), host: host.into(), options: Options::default(), notes: vec![], refused: None, final_pass: false }
+    }
+
     /// True when OpenSSH would refuse to use these files at all.
     pub fn has_errors(&self) -> bool {
         self.notes.iter().any(|n| matches!(n.status, Status::Error(_)))

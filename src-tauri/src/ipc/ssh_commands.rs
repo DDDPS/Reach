@@ -101,6 +101,7 @@ pub async fn ssh_connect(
     show_login_message: Option<bool>,
     session_log: Option<crate::ssh::session_log::SessionLogConfig>,
     try_agent_keys: Option<bool>,
+    ssh_options: Option<crate::ssh::sshconf::session::SshOptions>,
 ) -> Result<String, String> {
     // Nothing is typed into the user's shell unless the caller asks for it
     // (Settings → Appearance): a caller that does not say gets no setup. The
@@ -135,10 +136,13 @@ pub async fn ssh_connect(
     // host hangs); holding the lock across it would block ssh_send / ssh_resize /
     // ssh_disconnect on every other live connection. We lock only afterwards,
     // briefly, to register the finished connection (a single HashMap insert).
+    // ssh_config settings for the target: resolved here, before connecting.
+    let target_opts: crate::ssh::client::HopOptions =
+        crate::ssh::sshconf::session::plan_for(ssh_options.as_ref(), &host, port, &username, false).into();
     let conn = if let Some(chain) = jump_chain {
         if chain.is_empty() {
             // No jump hosts, connect directly
-            SshManager::connect(&id, &host, port, &username, auth, cols, rows, app.clone(), proxy, shell, login)
+            SshManager::connect(&id, &host, port, &username, auth, cols, rows, app.clone(), proxy, shell, login, target_opts)
                 .await
                 .map_err(|e| e.to_string())?
         } else {
@@ -166,11 +170,13 @@ pub async fn ssh_connect(
                         j.key_passphrase.filter(|p| !p.is_empty()).or(jstored),
                         false,
                     )?;
+                    let opts = crate::ssh::sshconf::session::plan_for(ssh_options.as_ref(), &j.host, j.port, &j.username, true).into();
                     Ok(JumpHostParams {
                         host: j.host,
                         port: j.port,
                         username: j.username,
                         auth: jauth,
+                        opts,
                     })
                 })
                 .collect();
@@ -187,12 +193,13 @@ pub async fn ssh_connect(
                 app.clone(),
                 shell,
                 login,
+                target_opts,
             )
             .await
             .map_err(|e| e.to_string())?
         }
     } else {
-        SshManager::connect(&id, &host, port, &username, auth, cols, rows, app.clone(), proxy, shell, login)
+        SshManager::connect(&id, &host, port, &username, auth, cols, rows, app.clone(), proxy, shell, login, target_opts)
             .await
             .map_err(|e| e.to_string())?
     };

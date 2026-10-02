@@ -32,7 +32,7 @@ uuid = { version = "1", features = ["v4"] }
 # SSH
 # ring, the crypto the rest of the app installs for rustls (see run() in
 # lib.rs). rsa keeps RSA keys working.
-russh = { version = "0.63", default-features = false, features = ["ring", "rsa"] }
+russh = { version = "0.63", default-features = false, features = ["ring", "rsa", "des", "flate2"] }
 # Used to read what a key says
 # about itself (algorithm, fingerprint, whether it is encrypted) without
 # needing the passphrase.
@@ -70,6 +70,8 @@ glob = "0.3"
 gethostname = "1"
 whoami = "2"
 if-addrs = "0.15"
+# The socket options ssh_config sets (IPQoS, TCPKeepAlive, binding).
+socket2 = { version = "0.6", features = ["all"] }
 # Keychain/credential storage
 # NOTE: Not available on Android - needs tauri-plugin-biometric for Android Keystore
 # The OS credential store holds the key for auto-unlock. keyring-core plus one

@@ -159,6 +159,7 @@ pub async fn session_create(
     share_path: Option<String>,
     via_session_id: Option<String>,
     try_agent_keys: Option<bool>,
+    ssh_options: Option<crate::ssh::sshconf::session::SshOptions>,
 ) -> Result<SessionConfig, String> {
     let mut manager = state.vault_manager.lock().await;
     let kind = kind.unwrap_or_default();
@@ -210,6 +211,7 @@ pub async fn session_create(
         jump_chain,
         proxy,
         shell,
+        ssh_options: ssh_options.filter(|o| !o.is_empty()),
     };
 
     let json = serde_json::to_string(&session).map_err(|e| e.to_string())?;

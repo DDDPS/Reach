@@ -878,6 +878,41 @@ pub struct JumpHostParams {
     pub port: u16,
     pub username: String,
     pub auth: AuthParams,
+    pub opts: HopOptions,
+}
+
+/// What ssh_config makes of one hop (see `crate::ssh::sshconf`): the SSH
+/// engine's settings and how its socket is opened. The default is Reach's
+/// own behaviour.
+#[derive(Debug, Clone)]
+pub struct HopOptions {
+    pub config: Arc<russh::client::Config>,
+    pub socket: crate::ssh::sshconf::apply::SocketPlan,
+}
+
+impl Default for HopOptions {
+    fn default() -> Self {
+        Self { config: Arc::new(russh::client::Config::default()), socket: Default::default() }
+    }
+}
+
+impl From<crate::ssh::sshconf::apply::Plan> for HopOptions {
+    fn from(p: crate::ssh::sshconf::apply::Plan) -> Self {
+        Self { config: Arc::new(p.config), socket: p.socket }
+    }
+}
+
+impl HopOptions {
+    /// The whole connect, handshake and login within `base`, stretched to
+    /// leave room for every ConnectionAttempts try of ConnectTimeout.
+    fn connect_limit(&self, base: std::time::Duration) -> std::time::Duration {
+        let per_try = self.socket.connect_timeout.unwrap_or(base) + std::time::Duration::from_secs(1);
+        let attempts = self.socket.attempts.max(1);
+        if attempts == 1 && self.socket.connect_timeout.is_none_or(|t| t <= base) {
+            return base;
+        }
+        base + per_try * attempts
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -944,12 +979,13 @@ impl SshManager {
         proxy: Option<ProxyConfig>,
         shell: Option<String>,
         login: LoginOptions,
+        opts: HopOptions,
     ) -> Result<ActiveConnection, SshError> {
         tracing::info!("SSH connecting to {}@{}:{}", username, host, port);
 
-        let timeout_duration = std::time::Duration::from_secs(15);
+        let timeout_duration = opts.connect_limit(std::time::Duration::from_secs(15));
         let connect_future = async {
-            let handle = Self::handshake_direct(host, port, username, &auth, proxy.as_ref(), app_handle.clone()).await?;
+            let handle = Self::handshake_direct(host, port, username, &auth, proxy.as_ref(), app_handle.clone(), &opts, true).await?;
             tracing::info!("SSH authenticated for {}@{}:{}", username, host, port);
 
             let channel = handle.channel_open_session().await
@@ -977,6 +1013,7 @@ impl SshManager {
     /// Connect and authenticate, directly or through a proxy. Opens no channel:
     /// the terminal asks for a shell on top, a database tunnel only for
     /// direct-tcpip channels.
+    #[expect(clippy::too_many_arguments, reason = "one hop's settings, passed through as they are")]
     async fn handshake_direct(
         host: &str,
         port: u16,
@@ -984,8 +1021,10 @@ impl SshManager {
         auth: &AuthParams,
         proxy: Option<&ProxyConfig>,
         app_handle: tauri::AppHandle,
+        opts: &HopOptions,
+        interactive: bool,
     ) -> Result<russh::client::Handle<SshClientHandler>, SshError> {
-        let config = Arc::new(russh::client::Config::default());
+        let config = opts.config.clone();
         let handler = SshClientHandler::new(host, port, Some(app_handle.clone()));
 
         let mut handle = if let Some(proxy) = proxy {
@@ -995,13 +1034,13 @@ impl SshManager {
                 .await
                 .map_err(|e| SshError::ConnectionFailed(format!("Proxy SSH handshake failed: {}", e)))?
         } else {
-            russh::client::connect(config, (host, port), handler)
+            // "No route to host" on a Mac usually means the local network
+            // permission, not the route (issue #47).
+            let describe = |e: russh::Error| SshError::ConnectionFailed(crate::ssh::netdiag::describe_connect_error(host, &e));
+            let stream = crate::ssh::sshconf::net::connect(host, port, &opts.socket, interactive)
                 .await
-                // "No route to host" on a Mac usually means the local
-                // network permission, not the route (issue #47).
-                .map_err(|e| SshError::ConnectionFailed(
-                    crate::ssh::netdiag::describe_connect_error(host, &e),
-                ))?
+                .map_err(|e| describe(russh::Error::IO(e)))?;
+            russh::client::connect_stream(config, stream, handler).await.map_err(describe)?
         };
 
         // Authenticate using a cascading strategy: configured key → agent → password.
@@ -1116,13 +1155,15 @@ impl SshManager {
         app_handle: tauri::AppHandle,
         shell: Option<String>,
         login: LoginOptions,
+        opts: HopOptions,
     ) -> Result<ActiveConnection, SshError> {
         tracing::info!(
             "SSH connecting to {}@{}:{} via {} jump host(s)",
             target_username, target_host, target_port, jump_chain.len()
         );
 
-        let timeout_duration = std::time::Duration::from_secs(30);
+        let base = std::time::Duration::from_secs(30);
+        let timeout_duration = jump_chain.first().map_or(base, |j| j.opts.connect_limit(base));
         let connect_future = Self::handshake_via_jump(
             target_host,
             target_port,
@@ -1130,6 +1171,7 @@ impl SshManager {
             &target_auth,
             &jump_chain,
             app_handle.clone(),
+            &opts,
         );
 
         let (target_handle, jump_handles) =
@@ -1172,26 +1214,22 @@ impl SshManager {
         target_auth: &AuthParams,
         jump_chain: &[JumpHostParams],
         app_handle: tauri::AppHandle,
+        target_opts: &HopOptions,
     ) -> Result<(russh::client::Handle<SshClientHandler>, Vec<SharedHandle>), SshError> {
         let mut jump_handles: Vec<SharedHandle> = Vec::new();
 
         // Step 1: Connect to the first jump host directly
         let first_jump = &jump_chain[0];
-        let config = Arc::new(russh::client::Config::default());
+        let config = first_jump.opts.config.clone();
         let handler = SshClientHandler::new(first_jump.host.as_str(), first_jump.port, Some(app_handle.clone()));
 
-        let mut current_handle = russh::client::connect(
-            config,
-            (first_jump.host.as_str(), first_jump.port),
-            handler,
-        )
-        .await
-        .map_err(|e| {
-            SshError::ConnectionFailed(format!(
-                "Jump host {} connection failed: {}",
-                first_jump.host, e
-            ))
-        })?;
+        let failed = |e: String| SshError::ConnectionFailed(format!("Jump host {} connection failed: {}", first_jump.host, e));
+        let stream = crate::ssh::sshconf::net::connect(&first_jump.host, first_jump.port, &first_jump.opts.socket, false)
+            .await
+            .map_err(|e| failed(e.to_string()))?;
+        let mut current_handle = russh::client::connect_stream(config, stream, handler)
+            .await
+            .map_err(|e| failed(e.to_string()))?;
 
         // Authenticate on first jump host
         Self::authenticate_handle(&mut current_handle, &first_jump.username, &first_jump.auth)
@@ -1228,7 +1266,7 @@ impl SshManager {
                 };
 
                 let stream = channel.into_stream();
-                let config = Arc::new(russh::client::Config::default());
+                let config = next_jump.opts.config.clone();
                 let handler = SshClientHandler::new(next_jump.host.as_str(), next_jump.port, Some(app_handle.clone()));
 
                 let mut next_handle =
@@ -1275,7 +1313,7 @@ impl SshManager {
             };
 
             let stream = channel.into_stream();
-            let config = Arc::new(russh::client::Config::default());
+            let config = target_opts.config.clone();
             let handler = SshClientHandler::new(target_host, target_port, Some(app_handle.clone()));
 
             let mut target_handle =
@@ -1320,7 +1358,7 @@ impl SshManager {
             };
 
             let stream = channel.into_stream();
-            let config = Arc::new(russh::client::Config::default());
+            let config = target_opts.config.clone();
             let handler = SshClientHandler::new(target_host, target_port, Some(app_handle.clone()));
 
             let mut target_handle =
@@ -1355,14 +1393,16 @@ impl SshManager {
         jump_chain: Vec<JumpHostParams>,
         proxy: Option<ProxyConfig>,
         app_handle: tauri::AppHandle,
+        opts: HopOptions,
     ) -> Result<HeadlessConnection, SshError> {
-        let timeout = std::time::Duration::from_secs(if jump_chain.is_empty() { 15 } else { 30 });
+        let base = std::time::Duration::from_secs(if jump_chain.is_empty() { 15 } else { 30 });
+        let timeout = jump_chain.first().map_or(&opts, |j| &j.opts).connect_limit(base);
         let connect = async {
             if jump_chain.is_empty() {
-                let handle = Self::handshake_direct(host, port, username, &auth, proxy.as_ref(), app_handle).await?;
+                let handle = Self::handshake_direct(host, port, username, &auth, proxy.as_ref(), app_handle, &opts, false).await?;
                 Ok::<_, SshError>((handle, Vec::new()))
             } else {
-                Self::handshake_via_jump(host, port, username, &auth, &jump_chain, app_handle).await
+                Self::handshake_via_jump(host, port, username, &auth, &jump_chain, app_handle, &opts).await
             }
         };
         let (handle, jump_handles) = within_connect_limit(timeout, connect).await?;

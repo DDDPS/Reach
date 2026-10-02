@@ -105,3 +105,34 @@ async fn live_one_attempt_per_refused_key() {
     let outcome = cascade_authenticate(&mut handle, &user, &auth).await.unwrap();
     println!("default session, wrong key, agent running: {:?}", outcome.into_result().map_err(|e| e.to_string()));
 }
+
+/// A server that only offers old MACs (and no AEAD cipher), as in the
+/// Discord report: fails with Reach's defaults, logs in once the session
+/// says `MACs +hmac-sha1`. Run with `REACH_SSH_LEGACY=host:port`, plus
+/// REACH_SSH_USER and REACH_SSH_KEYS as above.
+#[tokio::test]
+#[ignore = "needs an SSH server offering only legacy MACs"]
+async fn live_legacy_macs() {
+    let addr = std::env::var("REACH_SSH_LEGACY").expect("REACH_SSH_LEGACY");
+    let (host, port) = addr.rsplit_once(':').unwrap();
+    let port: u16 = port.parse().unwrap();
+    let user = std::env::var("REACH_SSH_USER").unwrap();
+    let key = std::fs::read_to_string(std::path::Path::new(&std::env::var("REACH_SSH_KEYS").unwrap()).join("k_good")).unwrap();
+
+    async fn attempt(host: &str, port: u16, user: &str, key: &str, opts: Option<&crate::ssh::sshconf::session::SshOptions>) -> Result<(), String> {
+        let plan = crate::ssh::sshconf::session::plan_for(opts, host, port, user, false);
+        let stream = crate::ssh::sshconf::net::connect(host, port, &plan.socket, true).await.map_err(|e| e.to_string())?;
+        let mut handle = russh::client::connect_stream(Arc::new(plan.config), stream, AnyHost).await.map_err(|e| e.to_string())?;
+        let auth = AuthParams { key: Some(KeyAuth { source: KeySource::Material(key.to_string()), passphrase: None }), password: None, allow_agent: false };
+        cascade_authenticate(&mut handle, user, &auth).await.map_err(|e| e.to_string())?.into_result().map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    let before = attempt(host, port, &user, &key, None).await;
+    println!("Reach's defaults: {before:?}");
+    assert!(before.as_ref().is_err_and(|e| e.to_lowercase().contains("mac")), "{before:?}");
+
+    let opts = crate::ssh::sshconf::session::SshOptions { lines: vec!["MACs +hmac-sha1".into()], ..Default::default() };
+    let after = attempt(host, port, &user, &key, Some(&opts)).await;
+    println!("With MACs +hmac-sha1: {after:?}");
+    assert!(after.is_ok(), "{after:?}");
+}

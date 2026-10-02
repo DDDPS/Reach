@@ -91,6 +91,10 @@ pub struct SessionConfig {
     /// (e.g. "fish" or "fish -l"). Also drives shell-aware color init.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
+    /// ssh_config settings: the files it was imported from, lines set in
+    /// Reach, and the commands and weakenings the user allowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_options: Option<crate::ssh::sshconf::session::SshOptions>,
 }
 
 /// Proxy configuration for SSH connections (Tor, SOCKS5, HTTP CONNECT).
