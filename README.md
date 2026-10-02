@@ -103,6 +103,8 @@ Reach is a [Tauri v2](https://v2.tauri.app) app with a Rust backend and Svelte 5
 
 Head to the [download page](https://reachssh.com/download/), which always points at the current release: Windows (`.exe`, `.msi`), macOS (`.dmg`, Apple silicon and Intel), Linux (`.AppImage`, `.deb`, `.rpm`) and Android (`.apk`). Every build is on the [Releases page](https://github.com/alexandrosnt/Reach/releases) too, and Reach updates itself once installed.
 
+On Android, [add Reach to Obtainium](https://apps.obtainium.imranr.dev/redirect.html?r=obtainium://add/https://github.com/alexandrosnt/Reach) and it installs new releases straight from GitHub as they come out.
+
 ## Building from source
 
 You'll need [Rust](https://rustup.rs), [Node.js 22+](https://nodejs.org), and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
