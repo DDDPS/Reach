@@ -900,7 +900,7 @@ use crate::vault::export::BackupPreview;
 /// path. On Android the picker hands back a `content://` link, which is not a
 /// path the app may open: it is read and written through the ContentResolver,
 /// in Reach's Android plugin.
-mod picked_file {
+pub(crate) mod picked_file {
     use tauri::AppHandle;
 
     #[cfg(target_os = "android")]

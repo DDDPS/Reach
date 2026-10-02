@@ -86,6 +86,26 @@ pub async fn devops_set_enabled(state: tauri::State<'_, crate::state::AppState>,
     Ok(())
 }
 
+/// Save text the user asked to download (a log, say). The native Save
+/// dialog is opened here, so where the file goes is the user's choice in the
+/// system's own dialog, never a path the page names. Returns false when the
+/// user cancels.
+#[tauri::command]
+pub async fn devops_save_text(app: tauri::AppHandle, default_name: String, content: String) -> Result<bool, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let name: String = default_name
+        .chars()
+        .map(|c| if "<>:\"/\\|?*".contains(c) || c.is_control() { '_' } else { c })
+        .collect();
+    app.dialog().file().set_file_name(name).add_filter("Text", &["log", "txt"]).save_file(move |picked| {
+        let _ = tx.send(picked);
+    });
+    let Some(picked) = rx.await.map_err(|e| e.to_string())? else { return Ok(false) };
+    crate::ipc::vault_commands::picked_file::write(&app, &picked.to_string(), content.as_bytes()).await?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

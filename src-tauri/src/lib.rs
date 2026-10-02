@@ -622,6 +622,7 @@ pub fn run() {
             share_reset_ice_servers,
             share_load,
             devops::devops_set_enabled,
+            devops::devops_save_text,
             // Databases
             db_list_connections,
             db_save_connection,
@@ -993,6 +994,7 @@ pub fn run() {
             share_reset_ice_servers,
             share_load,
             devops::devops_set_enabled,
+            devops::devops_save_text,
             // Databases
             db_list_connections,
             db_save_connection,
