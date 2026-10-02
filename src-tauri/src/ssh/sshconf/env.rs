@@ -31,11 +31,22 @@ impl SystemEnv {
 
     /// The user's config file: ~/.ssh/config.
     pub fn user_config() -> Option<PathBuf> {
+        // A development build can be pointed at a config of its own, as at
+        // a data folder of its own (REACH_DEV_DATA_DIR), so testing never
+        // reads the user's real hosts. Compiled out of release builds.
+        #[cfg(debug_assertions)]
+        if let Some(p) = std::env::var_os("REACH_DEV_SSH_CONFIG").filter(|p| !p.is_empty()) {
+            return Some(PathBuf::from(p));
+        }
         dirs::home_dir().map(|h| h.join(".ssh").join("config"))
     }
 
     /// The system-wide file ssh reads after the user's.
     pub fn system_config() -> PathBuf {
+        #[cfg(debug_assertions)]
+        if let Some(p) = std::env::var_os("REACH_DEV_SSH_SYSTEM_CONFIG").filter(|p| !p.is_empty()) {
+            return PathBuf::from(p);
+        }
         PathBuf::from(system_dir()).join("ssh_config")
     }
 }

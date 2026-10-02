@@ -3,7 +3,8 @@
 	import Button from '$lib/components/shared/Button.svelte';
 	import KeyPicker from './KeyPicker.svelte';
 	import Input from '$lib/components/shared/Input.svelte';
-	import { sessionCreate, sessionList, sessionUpdate, sessionKind, type SessionConfig, type SessionKind, type AuthMethod, type JumpHostConfig, type Folder } from '$lib/ipc/sessions';
+	import { sessionCreate, sessionList, sessionUpdate, sessionKind, type SessionConfig, type SessionKind, type AuthMethod, type JumpHostConfig, type Folder, type SshOptions } from '$lib/ipc/sessions';
+	import SshOptionsSection from './SshOptionsSection.svelte';
 	import { t } from '$lib/state/i18n.svelte';
 	import { open as openDialog } from '@tauri-apps/plugin-dialog';
 
@@ -77,6 +78,9 @@
 	let proxyPort = $state('9050');
 	let proxyUsername = $state('');
 	let proxyPassword = $state('');
+	/** ssh_config settings: imported files, lines set here, approvals. */
+	let sshOptions = $state<SshOptions>({});
+	let sshSection = $state<ReturnType<typeof SshOptionsSection> | undefined>();
 	let saving = $state(false);
 	let error = $state<string | undefined>();
 
@@ -102,6 +106,7 @@
 			keyPassphrase = editSession.auth_method.passphrase ?? '';
 			tryAgentKeys = editSession.try_agent_keys === true;
 			shell = editSession.shell ?? '';
+			sshOptions = editSession.ssh_options ?? {};
 			tagsStr = editSession.tags.join(', ');
 			folderIdStr = editSession.folder_id ?? '';
 			if (editSession.jump_chain && editSession.jump_chain.length > 0) {
@@ -146,6 +151,7 @@
 			keyPassphrase = '';
 			tryAgentKeys = false;
 			shell = '';
+			sshOptions = {};
 			tagsStr = '';
 			folderIdStr = '';
 			jumpEnabled = false;
@@ -203,6 +209,13 @@
 			})
 			: undefined;
 
+		// The weakenings in force are stored with the session, those written
+		// here included, so the session list can flag a weaker session.
+		const accepted = [...new Set([...(sshOptions.accepted_weakenings ?? []), ...(sshSection?.acceptedNow() ?? [])])];
+		const finalOptions: SshOptions = { ...sshOptions, accepted_weakenings: accepted };
+		const hasOptions = !desktop && (!!finalOptions.imported || (finalOptions.lines ?? []).length > 0);
+		const sshOptionsToSave = hasOptions ? finalOptions : null;
+
 		const proxyConfig = !desktop && proxyEnabled ? {
 			proxy_type: proxyType,
 			host: proxyHost.trim(),
@@ -232,6 +245,7 @@
 					share_path: rdp ? (sharePath.trim() || null) : null,
 					via_session_id: via,
 					try_agent_keys: !desktop && authType === 'Key' && tryAgentKeys ? true : null,
+					ssh_options: sshOptionsToSave,
 				});
 			} else {
 				await sessionCreate({
@@ -252,6 +266,7 @@
 					sharePath: rdp ? sharePath : null,
 					viaSessionId: via,
 					tryAgentKeys: !desktop && authType === 'Key' && tryAgentKeys,
+					sshOptions: sshOptionsToSave,
 				});
 			}
 			onsave?.();
@@ -537,6 +552,17 @@
 				</div>
 			{/if}
 		</div>
+
+		{#key editSession?.id ?? 'new'}
+			<SshOptionsSection
+				bind:this={sshSection}
+				bind:options={sshOptions}
+				{host}
+				port={parseInt(portStr, 10) || 22}
+				{username}
+				disabled={saving}
+			/>
+		{/key}
 		{/if}
 
 		<Input label={t('session.tags')} bind:value={tagsStr} placeholder={kind === 'rdp' ? 'office, windows' : 'production, web, linux'} disabled={saving} />
