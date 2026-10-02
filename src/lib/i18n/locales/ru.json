@@ -2137,5 +2137,7 @@
   "k8s.yaml_editor": "YAML {{name}}, редактирование",
   "k8s.yaml_of": "YAML {{name}}",
   "k8s.yaml_saved": "{{name}} сохранён",
-  "devops.containers_k8s_notice": "Новое в Reach: контейнеры (Docker, Podman, Compose) и Kubernetes с Helm через ваши SSH-сеансы. Включите их в Настройки → DevOps."
+  "devops.containers_k8s_notice": "Новое в Reach: контейнеры (Docker, Podman, Compose) и Kubernetes с Helm через ваши SSH-сеансы. Включите их в Настройки → DevOps.",
+  "help.k8s_unreachable_title": "Не удаётся связаться с кластером",
+  "help.k8s_unreachable_body": "Его API-сервер не ответил. Проверьте, что кластер работает и его адрес доступен: с этого устройства или с SSH-сервера, если кластер доступен через него."
 }

@@ -42,6 +42,9 @@
 		if (e.includes('read-only')) {
 			return { title: t('help.read_only_title'), body: t('help.read_only_body'), commands: [] };
 		}
+		if (e.includes('could not reach the api server')) {
+			return { title: t('help.k8s_unreachable_title'), body: t('help.k8s_unreachable_body'), commands: [] };
+		}
 		if (e.includes('unauthorized') || e.includes('(401)')) {
 			return { title: t('help.k8s_unauthorized_title'), body: t('help.k8s_unauthorized_body'), commands: [] };
 		}

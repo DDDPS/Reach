@@ -2137,5 +2137,7 @@
   "k8s.yaml_editor": "YAML de {{name}}, en edición",
   "k8s.yaml_of": "YAML de {{name}}",
   "k8s.yaml_saved": "{{name}} guardado",
-  "devops.containers_k8s_notice": "Novedad en Reach: contenedores (Docker, Podman, Compose) y Kubernetes con Helm, a través de tus sesiones SSH. Actívalos en Ajustes → DevOps."
+  "devops.containers_k8s_notice": "Novedad en Reach: contenedores (Docker, Podman, Compose) y Kubernetes con Helm, a través de tus sesiones SSH. Actívalos en Ajustes → DevOps.",
+  "help.k8s_unreachable_title": "No se puede llegar al clúster",
+  "help.k8s_unreachable_body": "Su servidor de API no respondió. Comprueba que el clúster está en marcha y que su dirección es accesible: desde este dispositivo, o desde el servidor SSH si el clúster se alcanza a través de él."
 }

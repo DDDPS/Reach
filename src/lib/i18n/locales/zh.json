@@ -2137,5 +2137,7 @@
   "k8s.yaml_editor": "{{name}} 的 YAML（编辑中）",
   "k8s.yaml_of": "{{name}} 的 YAML",
   "k8s.yaml_saved": "已保存 {{name}}",
-  "devops.containers_k8s_notice": "Reach 新功能：容器（Docker、Podman、Compose）和带 Helm 的 Kubernetes，通过你的 SSH 会话使用。在 设置 → DevOps 中开启。"
+  "devops.containers_k8s_notice": "Reach 新功能：容器（Docker、Podman、Compose）和带 Helm 的 Kubernetes，通过你的 SSH 会话使用。在 设置 → DevOps 中开启。",
+  "help.k8s_unreachable_title": "无法连接到集群",
+  "help.k8s_unreachable_body": "集群的 API 服务器没有响应。请检查集群是否在运行，以及其地址是否可以访问：从本设备，或在通过 SSH 服务器连接时从该服务器访问。"
 }

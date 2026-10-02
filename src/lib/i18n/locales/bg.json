@@ -2137,5 +2137,7 @@
   "k8s.yaml_editor": "YAML на {{name}}, редактиране",
   "k8s.yaml_of": "YAML на {{name}}",
   "k8s.yaml_saved": "{{name}} е запазен",
-  "devops.containers_k8s_notice": "Ново в Reach: контейнери (Docker, Podman, Compose) и Kubernetes с Helm през вашите SSH сесии. Включете ги от Настройки → DevOps."
+  "devops.containers_k8s_notice": "Ново в Reach: контейнери (Docker, Podman, Compose) и Kubernetes с Helm през вашите SSH сесии. Включете ги от Настройки → DevOps.",
+  "help.k8s_unreachable_title": "Клъстерът не е достъпен",
+  "help.k8s_unreachable_body": "Неговият API сървър не отговори. Проверете дали клъстерът работи и дали адресът му е достъпен: от това устройство или от SSH сървъра, ако клъстерът се достига през него."
 }

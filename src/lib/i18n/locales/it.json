@@ -2137,5 +2137,7 @@
   "k8s.yaml_editor": "YAML di {{name}}, in modifica",
   "k8s.yaml_of": "YAML di {{name}}",
   "k8s.yaml_saved": "{{name}} salvato",
-  "devops.containers_k8s_notice": "Novità in Reach: container (Docker, Podman, Compose) e Kubernetes con Helm, tramite le tue sessioni SSH. Attivali in Impostazioni → DevOps."
+  "devops.containers_k8s_notice": "Novità in Reach: container (Docker, Podman, Compose) e Kubernetes con Helm, tramite le tue sessioni SSH. Attivali in Impostazioni → DevOps.",
+  "help.k8s_unreachable_title": "Impossibile raggiungere il cluster",
+  "help.k8s_unreachable_body": "Il suo server API non ha risposto. Controlla che il cluster sia in funzione e che il suo indirizzo sia raggiungibile: da questo dispositivo, o dal server SSH se il cluster si raggiunge tramite esso."
 }

@@ -880,8 +880,18 @@
 			height: 44px;
 		}
 
+		/* Which cluster you are on is never squeezed away: its name takes the
+		   first line (the settings button beside it), version and badges wrap
+		   below. On production, that name is what keeps you on the right one. */
+		.topbar > .group:first-child {
+			flex-basis: 100%;
+			flex-wrap: wrap;
+		}
+
 		.cluster {
-			max-width: 50vw;
+			flex: 1 1 calc(100% - 56px);
+			min-width: 0;
+			max-width: none;
 		}
 
 		.ns {

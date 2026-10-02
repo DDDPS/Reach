@@ -93,6 +93,7 @@ pub async fn connect(yaml: &str, context: Option<&str>, forward: Option<Forward>
     let kc = Kubeconfig::from_yaml(yaml).map_err(|e| format!("Not a kubeconfig: {e}"))?;
     let opts = KubeConfigOptions { context: context.map(String::from), ..Default::default() };
     let mut config = kube::Config::from_custom_kubeconfig(kc, &opts).await.map_err(|e| e.to_string())?;
+    let kc_server = config.cluster_url.to_string();
     if let Some(f) = &forward {
         let real = config.cluster_url.clone();
         let host = real.host().unwrap_or_default().trim_matches(['[', ']']).to_string();
@@ -107,8 +108,14 @@ pub async fn connect(yaml: &str, context: Option<&str>, forward: Option<Forward>
     }
     let namespace = config.default_namespace.clone();
     let context_name = context.map(String::from).unwrap_or_default();
+    // Named by the kubeconfig's address, not the tunnel's loopback one.
+    let server = kc_server.clone();
     let client = Client::try_from(config).map_err(|e| e.to_string())?;
-    let version = client.apiserver_version().await.map_err(explain)?;
+    let version = client.apiserver_version().await.map_err(|e| match e {
+        // kube says "ServiceError: client error (Connect)"; say what failed.
+        kube::Error::Service(_) | kube::Error::HyperError(_) => format!("Could not reach the API server at {server}: {e}"),
+        other => explain(other),
+    })?;
     Ok(Cluster { client, context: context_name, namespace, version: version.git_version, read_only: false, _forward: forward })
 }
 

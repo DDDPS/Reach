@@ -136,8 +136,9 @@ fn only_replica_kinds_scale_and_only_controllers_restart() {
 fn helm_kubeconfig_file_is_private_and_removed() {
     use super::helm::with_stdin_kubeconfig;
     use std::io::Write;
-    // Stand-in for helm: report the file's mode and content, then fail.
-    let fake = r#"sh -c 'stat -c %a "$2"; cat "$2"; echo "$2" > /tmp/reach-kc-path; exit 3' x"#;
+    // Stand-in for helm: report the file's mode (GNU stat, or BSD stat on
+    // macOS) and content, then fail.
+    let fake = r#"sh -c '{ stat -c %a "$2" 2>/dev/null || stat -f %Lp "$2"; }; cat "$2"; echo "$2" > /tmp/reach-kc-path; exit 3' x"#;
     let cmd = with_stdin_kubeconfig(fake);
     let mut child = std::process::Command::new("sh")
         .arg("-c")
@@ -154,4 +155,15 @@ fn helm_kubeconfig_file_is_private_and_removed() {
     assert!(text.contains("apiVersion: v1"), "{text}");
     let path = std::fs::read_to_string("/tmp/reach-kc-path").unwrap();
     assert!(!std::path::Path::new(path.trim()).exists(), "the kubeconfig file was left behind");
+}
+
+/// A cluster that does not answer is named by its own address, in words a
+/// user can act on, not the client's "ServiceError: client error (Connect)".
+#[tokio::test]
+async fn an_unreachable_cluster_says_where() {
+    // As the app does at start (lib.rs): rustls needs a provider chosen.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let yaml = "apiVersion: v1\nkind: Config\ncurrent-context: c\nclusters:\n- name: c\n  cluster: {server: 'https://127.0.0.1:1', insecure-skip-tls-verify: true}\ncontexts:\n- name: c\n  context: {cluster: c, user: u}\nusers:\n- name: u\n  user: {token: x}\n";
+    let err = connect(yaml, Some("c"), None).await.err().expect("nothing listens on port 1");
+    assert!(err.starts_with("Could not reach the API server at https://127.0.0.1:1"), "{err}");
 }
