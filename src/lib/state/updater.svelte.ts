@@ -1,5 +1,18 @@
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { invoke } from '@tauri-apps/api/core';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import { isMobile } from '$lib/platform';
+
+/** A phone: Tauri's updater does not run there. Reach checks the same feed
+ *  (app_update_check) and links to the release's APK; Android's installer
+ *  checks the APK's signature against the installed app and asks the user. */
+interface MobileUpdate {
+	version: string;
+	url: string;
+	notes: string | null;
+}
+let mobileUrl: string | null = null;
 
 let updateAvailable = $state(false);
 let updateVersion = $state<string | null>(null);
@@ -33,7 +46,9 @@ export function getUpdaterState() {
 		get error() { return error; },
 		get dismissed() { return dismissed; },
 		get readyToRelaunch() { return readyToRelaunch; },
-		get relaunchPostponed() { return relaunchPostponed; }
+		get relaunchPostponed() { return relaunchPostponed; },
+		/** The update is a download link (a phone), not an in-place install. */
+		get isDownloadLink() { return mobileUrl !== null; }
 	};
 }
 
@@ -42,6 +57,14 @@ let cachedUpdate: Awaited<ReturnType<typeof check>> | null = null;
 export async function checkForUpdate(): Promise<boolean> {
 	try {
 		error = null;
+		if (isMobile()) {
+			const found = await invoke<MobileUpdate | null>('app_update_check');
+			mobileUrl = found?.url ?? null;
+			updateAvailable = !!found;
+			updateVersion = found?.version ?? null;
+			updateNotes = found?.notes ?? null;
+			return !!found;
+		}
 		const update = await check();
 		if (update) {
 			updateAvailable = true;
@@ -61,12 +84,23 @@ export async function checkForUpdate(): Promise<boolean> {
 
 export async function startupUpdateCheck(): Promise<void> {
 	const found = await checkForUpdate();
-	if (found) {
+	// A phone gets the banner, not the dialog: there is nothing to install in
+	// place, only a link to open.
+	if (found && !isMobile()) {
 		startupBlocking = true;
 	}
 }
 
 export async function downloadAndInstall(): Promise<void> {
+	if (mobileUrl) {
+		try {
+			await openUrl(mobileUrl);
+			dismissed = true;
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		}
+		return;
+	}
 	if (!cachedUpdate || downloading || installing) return;
 
 	try {

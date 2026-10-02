@@ -22,6 +22,7 @@ pub mod ansible_commands;
 pub mod db_commands;
 pub mod tofu_commands;
 pub mod theme_commands;
+pub mod update_commands;
 pub mod toolchain_commands;
 pub mod tunnel_commands;
 pub mod vault_commands;

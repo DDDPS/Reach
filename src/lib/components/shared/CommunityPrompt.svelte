@@ -11,7 +11,7 @@
 	link, so this can be closed forever without losing anything.
 -->
 <script lang="ts">
-	import { open as shellOpen } from '@tauri-apps/plugin-shell';
+	import { openUrl } from '@tauri-apps/plugin-opener';
 	import Modal from './Modal.svelte';
 	import Button from './Button.svelte';
 	import DiscordIcon from './DiscordIcon.svelte';
@@ -45,7 +45,7 @@
 		// Joining answers the question for good, whatever the checkbox says.
 		dismissCommunityPrompt();
 		open = false;
-		await shellOpen(COMMUNITY.discordInvite);
+		await openUrl(COMMUNITY.discordInvite);
 	}
 </script>
 

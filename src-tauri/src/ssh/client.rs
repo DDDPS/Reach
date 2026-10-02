@@ -79,67 +79,99 @@ pub fn expand_tilde(path: &str) -> PathBuf {
 /// into a hang no matter how it was built. `posix_init_lines_are_short` pins
 /// it. Do not merge these back onto one line to make it tidy.
 const POSIX_COLOR_INIT: &str = concat!(
+    // 🔴 KEEPING THE INIT OUT OF THE USER'S HISTORY. Typed lines are input, and
+    // a shell records input. Measured with a real login per setup: bash with
+    // HISTCONTROL unset, ignoreboth, ignoredups, erasedups, `history -a` in
+    // PROMPT_COMMAND and HISTTIMEFORMAT, zsh with and without a history file,
+    // with inc_append/share_history and oh-my-zsh's options, dash, mksh,
+    // BusyBox ash and fish. Every line starts with a space (ignored by bash's
+    // ignorespace, zsh's HIST_IGNORE_SPACE and fish), and these three lines
+    // cover the shells where that is not on:
+    //
+    // bash stores a line BEFORE it runs, so each guard deletes its own entry,
+    // but only when the newest entry really is that line (ends in `R@`).
+    // With ignorespace on, the line is never stored and $HISTCMD points at
+    // the user's previous command instead (measured: HISTCMD=1, the entry
+    // before ours); deleting blindly would have erased the user's history.
+    // History is then switched off until the last line, and switched back
+    // on only if it was on (`_rh`), so a user who turned it off keeps it off.
+    //
+    // zsh: `fc -p` moves to a fresh in-memory list with no file, and `fc -P`
+    // on the last line brings the user's list back; nothing in between is
+    // saved. The `fc -p` line itself is the one line a zsh with a history
+    // file and without HIST_IGNORE_SPACE still saves: zsh records a line
+    // before running it and has no way to delete an entry.
+    r#" [ "$ZSH_VERSION" ]&&fc -p;[ "$BASH" ]&&[[ $(history 1) = *R@ ]]&&history -d $HISTCMD #R@"#,
+    "\n",
+    // `$BASH` unquoted to fit the line limit; it is a path, and a path with a
+    // space in it only makes this test false, which records the line.
+    r#" [ $BASH ]&&{ _rh=$SHELLOPTS;[[ $(history 1) = *R@ ]]&&history -d $HISTCMD;set +o history;} #R@"#,
+    "\n",
+    r#" _reach_h(){ case :$_rh: in *:history:*)set -o history;;esac;[ "$ZSH_VERSION" ]&&fc -P;}"#,
+    "\n",
     // Blanking the prompt is not cosmetics. The shell prints a prompt for EVERY
     // line it reads, so the moment this stopped being one line it started
     // printing one prompt per line, running together into a single garbage line
     // of repeated prompts. `_op` carries the real prompt across; it is put back
     // at the end, and the screen is cleared after that.
-    "_op=$PS1; PS1=''\n",
-    "export COLORTERM=truecolor\n",
-    r#"_dc=''; command -v dircolors >/dev/null 2>&1 && [ -z "$LS_COLORS" ] && _dc=1"#,
+    " _op=$PS1; PS1=''\n",
+    " export COLORTERM=truecolor\n",
+    r#" _dc=''; command -v dircolors >/dev/null 2>&1 && [ -z "$LS_COLORS" ] && _dc=1"#,
     "\n",
-    r#"[ -n "$_dc" ] && eval "$(dircolors -b 2>/dev/null)""#,
+    r#" [ -n "$_dc" ] && eval "$(dircolors -b 2>/dev/null)""#,
     "\n",
-    r#"_lsc=''; ls --color=auto >/dev/null 2>&1 && _lsc='ls --color=auto'"#,
+    r#" _lsc=''; ls --color=auto >/dev/null 2>&1 && _lsc='ls --color=auto'"#,
     "\n",
-    r#"[ -n "$_lsc" ] || { ls -G >/dev/null 2>&1 && _lsc='ls -G'; }"#,
+    r#" [ -n "$_lsc" ] || { ls -G >/dev/null 2>&1 && _lsc='ls -G'; }"#,
     "\n",
     // Braces, not a trailing `2>/dev/null` on the command. A strict-POSIX shell
     // with no `alias` builtin (posh) reports `alias: not found` from the SHELL,
     // not from the command, and a redirection attached to the command does not
     // cover that: it printed the error straight onto the user's screen. A
     // redirection on the group covers everything inside it, error included.
-    r#"{ [ -n "$_lsc" ] && alias ls="$_lsc"; } 2>/dev/null"#,
+    r#" { [ -n "$_lsc" ] && alias ls="$_lsc"; } 2>/dev/null"#,
     "\n",
-    r#"{ alias grep='grep --color=auto'; } 2>/dev/null"#,
+    r#" { alias grep='grep --color=auto'; } 2>/dev/null"#,
     "\n",
-    r#"{ alias diff='diff --color=auto'; } 2>/dev/null"#,
+    r#" { alias diff='diff --color=auto'; } 2>/dev/null"#,
     "\n",
-    r#"_rp=0; [ -n "$BASH" ] && _rp=1"#,
+    r#" _rp=0; [ -n "$BASH" ] && _rp=1"#,
     "\n",
     // Against `_op`, not `$PS1`: PS1 is blank at this point, so testing it
     // would never see the colored prompt the user already had, and we would
     // stomp on it instead of leaving it alone.
-    r#"case "$_op" in *033*|*\\e\[*) _rp=0;; esac"#,
+    r#" case "$_op" in *033*|*\\e\[*) _rp=0;; esac"#,
     "\n",
     // The prompt we will end up with is chosen into `_np` and NOT installed
     // yet. Assigning PS1 here would make every line after it print a prompt
     // again: measured under BusyBox ash, restoring it at this point printed
     // exactly one prompt per remaining line. That is the whole bug.
-    "_np=$_op\n",
-    r#"[ "$_rp" = 1 ] && { _c=32; [ "${EUID:-$(id -u)}" = "0" ] && _c=31; }"#,
+    " _np=$_op\n",
+    r#" [ "$_rp" = 1 ] && { _c=32; [ "${EUID:-$(id -u)}" = "0" ] && _c=31; }"#,
     "\n",
-    r#"[ "$_rp" = 1 ] && _pp="\\[\\033[01;${_c}m\\]\\u@\\h\\[\\033[00m\\]""#,
+    r#" [ "$_rp" = 1 ] && _pp="\\[\\033[01;${_c}m\\]\\u@\\h\\[\\033[00m\\]""#,
     "\n",
-    r#"[ "$_rp" = 1 ] && _np="$_pp:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ""#,
+    r#" [ "$_rp" = 1 ] && _np="$_pp:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ ""#,
     "\n",
     // The real prompt goes in, the temporaries go out. BEFORE the clears: a
     // shell with its own line editor (mksh, BusyBox ash, zsh) echoes each line
     // as it reads it, so anything typed after the final clear gets echoed back
     // onto the screen that clear just cleaned. Measured on mksh: with this line
     // last, its own text was left sitting on the fresh screen.
-    "PS1=$_np; unset _c _dc _lsc _np _op _pp _rp\n",
+    " PS1=$_np; unset _c _dc _lsc _np _op _pp _rp\n",
     // Both, deliberately, and last. `clear` is an ncurses binary on most
     // distros and it fails silently (its stderr is discarded) when the terminfo
     // database is absent, which is the default on a minimal Alpine: the init
     // noise then just stayed on screen. The raw sequence needs no terminfo and
     // no binary, and being last it wipes its own echo along with every other
     // line above, so the user lands on a clean screen with one prompt on it.
-    "clear 2>/dev/null\n",
+    " clear 2>/dev/null\n",
     // The same line prints INIT_DONE right after its clear, so Reach knows
     // where the init's output ends without typing another line (which would
     // be echoed onto the clean screen).
-    r#"printf '\033[H\033[2J\033]7776;reach-init\007' 2>/dev/null"#,
+    // History goes back to how it was (`_reach_h`, above) on the same line
+    // as the final clear, so no line after it can be recorded either.
+    r#" _reach_h;unset -f _reach_h;unset _rh;printf '\033[H\033[2J\033]7776;reach-init\007' 2>/dev/null"#,
     "\n",
 );
 
@@ -186,9 +218,10 @@ fn shell_family(shell: Option<&str>) -> ShellFamily {
 fn shell_init(shell: Option<&str>) -> Option<String> {
     match shell_family(shell) {
         ShellFamily::Posix => Some(POSIX_COLOR_INIT.to_string()),
-        // Valid fish: avoids the bash-isms (`export`, `$(...)`, `if…then…fi`)
+        // The leading space keeps it out of fish's history (fish never saves
+        // a line that starts with one; measured). Valid fish: avoids the bash-isms (`export`, `$(...)`, `if…then…fi`)
         // that make fish throw a syntax error on every connect.
-        ShellFamily::Fish => Some("set -gx COLORTERM truecolor; clear; printf '\\e]7776;reach-init\\a'\n".to_string()),
+        ShellFamily::Fish => Some(" set -gx COLORTERM truecolor; clear; printf '\\e]7776;reach-init\\a'\n".to_string()),
         ShellFamily::Other => None,
     }
 }
@@ -208,6 +241,11 @@ async fn open_interactive_shell(
         .request_pty(false, "xterm-256color", cols as u32, rows as u32, 0, 0, &[])
         .await
         .map_err(|e| SshError::ChannelError(format!("PTY request failed: {}", e)))?;
+
+    // Announce truecolor the way `ssh -o SendEnv=COLORTERM` does: an "env"
+    // request without a reply (RFC 4254 6.4). A server that does not list
+    // COLORTERM in AcceptEnv ignores it, so this never fails the session.
+    let _ = channel.set_env(false, "COLORTERM", "truecolor").await;
 
     match shell.map(str::trim).filter(|s| !s.is_empty()) {
         Some(cmd) => {
@@ -593,13 +631,16 @@ pub enum SshError {
 }
 
 /// What happens in the shell right after login.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct LoginOptions {
     /// Type the color and prompt init into the shell (Settings → Appearance).
     pub inject_colors: bool,
     /// Keep the server's login message (MOTD, "Last login") on screen. The
     /// init ends with a clear that used to wipe it (issue #76).
     pub show_login_message: bool,
+    /// Write the session to a text file (Settings → Terminal). `None` logs
+    /// nothing, which is the default.
+    pub log: Option<crate::ssh::session_log::SessionLogConfig>,
 }
 
 /// Getting the server's login message past the init's clear. The init is
@@ -1914,11 +1955,31 @@ async fn into_active_connection(
         None => None,
     };
 
+    // A log that cannot be opened does not stop the session, but the user
+    // is told at once: someone relying on a log must not find out later
+    // that there is none.
+    let log = login.log.as_ref().and_then(|cfg| {
+        match crate::ssh::session_log::SessionLog::open(cfg, &info.host, info.port) {
+            Ok(log) => {
+                tracing::info!("SSH '{}' logging to {}", info.id, log.path().display());
+                Some(log)
+            }
+            Err(e) => {
+                tracing::error!("SSH '{}' session log not opened: {}", info.id, e);
+                let _ = app_handle.emit(
+                    "ssh-log-error",
+                    serde_json::json!({ "host": info.host, "message": e.to_string() }),
+                );
+                None
+            }
+        }
+    });
+
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let task_id = info.id.clone();
     let task_handle = app_handle.clone();
     tokio::spawn(async move {
-        ssh_session_task(channel, cmd_rx, task_id, task_handle, flow).await;
+        ssh_session_task(channel, cmd_rx, task_id, task_handle, flow, log).await;
     });
 
     Ok(ActiveConnection {
@@ -1935,6 +1996,7 @@ async fn ssh_session_task(
     connection_id: String,
     app_handle: tauri::AppHandle,
     mut flow: Option<LoginFlow>,
+    mut log: Option<crate::ssh::session_log::SessionLog>,
 ) {
     let data_event = format!("ssh-data-{}", connection_id);
     // Drives the login flow while it runs: types the init once the server
@@ -1981,6 +2043,11 @@ async fn ssh_session_task(
         ($payload:expr) => {{
             let payload = $payload;
             mirror_to_mcp!(payload);
+            // Logged as it is shown, before the hold-until-ready buffer, so
+            // the login message is in the file even if the tab opens late.
+            if let Some(l) = log.as_mut() {
+                l.push(&payload);
+            }
             if ready {
                 if let Err(e) = app_handle.emit(&data_event, &payload) {
                     tracing::error!("Failed to emit '{}': {}", data_event, e);
@@ -2079,6 +2146,9 @@ async fn ssh_session_task(
     // The stream ended; surface any bytes held back mid-character rather
     // than swallowing them.
     for tail in [out_decoder.flush(), err_decoder.flush()].into_iter().flatten() {
+        if let Some(l) = log.as_mut() {
+            l.push(&tail);
+        }
         let _ = app_handle.emit(&data_event, &tail);
     }
 
@@ -2264,15 +2334,14 @@ mod shell_tests {
         // Temporaries must not be left behind in the user's shell. Every `_x`
         // the init assigns has to appear in the `unset`, so adding a new one
         // without cleaning it up fails here rather than leaking into the shell.
-        let unset = POSIX_COLOR_INIT
-            .lines()
-            .find(|l| l.contains("unset "))
-            .expect("the init must unset its temporaries");
+        // Every `unset` counts: `_rh` is needed until the last line.
+        let unset: Vec<&str> =
+            POSIX_COLOR_INIT.lines().filter(|l| l.contains("unset ")).collect();
+        assert!(!unset.is_empty(), "the init must unset its temporaries");
         let cleaned: Vec<&str> = unset
-            .split("unset ")
-            .nth(1)
-            .expect("unset has arguments")
-            .split_whitespace()
+            .iter()
+            .flat_map(|l| l.split("unset ").skip(1))
+            .flat_map(|a| a.split(|c: char| c == ';' || c.is_whitespace()).take_while(|w| !w.is_empty()))
             .collect();
         let mut assigned: Vec<String> = Vec::new();
         for line in POSIX_COLOR_INIT.lines() {

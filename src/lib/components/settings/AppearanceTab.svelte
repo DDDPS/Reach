@@ -8,6 +8,9 @@
 	import { getSettings, updateSetting } from '$lib/state/settings.svelte';
 	import { t } from '$lib/state/i18n.svelte';
 	import { matchesQuery } from '$lib/utils/search';
+	import { isMobile } from '$lib/platform';
+	import { sessionLogDefaultDir } from '$lib/ipc/ssh';
+	import { open as pickFolder } from '@tauri-apps/plugin-dialog';
 
 	const settings = getSettings();
 	let currentFont = $derived(settings.fontFamily || 'monospace');
@@ -88,7 +91,17 @@
 		}
 	}
 
+	// Shown as the folder field's placeholder, so an empty field says where
+	// logs actually go.
+	let logDefaultDir = $state('');
+
+	async function browseLogFolder(): Promise<void> {
+		const picked = await pickFolder({ directory: true });
+		if (typeof picked === 'string') updateSetting('sessionLogFolder', picked);
+	}
+
 	onMount(() => {
+		sessionLogDefaultDir().then((d) => (logDefaultDir = d)).catch(() => {});
 		// Re-read from disk in case a theme was installed or edited since startup.
 		loadInstalledThemes();
 		loadRegistry();
@@ -360,9 +373,9 @@
 		<div class="setting-control">
 			<Toggle
 				hideLabel
-				checked={settings.injectShellColors}
+				checked={settings.typeShellSetup}
 				label={t('settings.shell_colors')}
-				onchange={(v) => updateSetting('injectShellColors', v)}
+				onchange={(v) => updateSetting('typeShellSetup', v)}
 			/>
 		</div>
 	</div>
@@ -381,6 +394,106 @@
 			/>
 		</div>
 	</div>
+
+	<h3 class="section-title">{t('settings.log_section')}</h3>
+
+	<div class="setting-row">
+		<div class="setting-info">
+			<span class="setting-label">{t('settings.log_mode')}</span>
+			<span class="setting-description">{t('settings.log_mode_desc')}</span>
+		</div>
+		<div class="setting-control">
+			<select
+				class="log-field"
+				aria-label={t('settings.log_mode')}
+				value={settings.sessionLogMode}
+				onchange={(e) =>
+					updateSetting('sessionLogMode', e.currentTarget.value as 'off' | 'printable' | 'all')}
+			>
+				<option value="off">{t('settings.log_off')}</option>
+				<option value="printable">{t('settings.log_printable')}</option>
+				<option value="all">{t('settings.log_all')}</option>
+			</select>
+		</div>
+	</div>
+
+	{#if settings.sessionLogMode !== 'off'}
+		<div class="setting-row">
+			<div class="setting-info">
+				<span class="setting-label">{t('settings.log_folder')}</span>
+				<!-- Android: only the app's own storage can be written without a
+				     system picker, so the folder is fixed there. -->
+				<span class="setting-description">
+					{isMobile() ? logDefaultDir : t('settings.log_folder_desc')}
+				</span>
+			</div>
+			{#if !isMobile()}
+				<div class="setting-control log-folder">
+					<input
+						class="log-field"
+						type="text"
+						spellcheck="false"
+						placeholder={logDefaultDir}
+						title={settings.sessionLogFolder || logDefaultDir}
+						aria-label={t('settings.log_folder')}
+						value={settings.sessionLogFolder}
+						onchange={(e) => updateSetting('sessionLogFolder', e.currentTarget.value.trim())}
+					/>
+					<button class="log-browse" type="button" onclick={browseLogFolder}>
+						{t('settings.log_browse')}
+					</button>
+				</div>
+			{/if}
+		</div>
+
+		<div class="setting-row">
+			<div class="setting-info">
+				<span class="setting-label">{t('settings.log_name')}</span>
+				<span class="setting-description">{t('settings.log_name_desc')}</span>
+			</div>
+			<div class="setting-control">
+				<input
+					class="log-field"
+					type="text"
+					spellcheck="false"
+					placeholder="&H-&Y&M&D-&T.log"
+					aria-label={t('settings.log_name')}
+					value={settings.sessionLogName}
+					onchange={(e) => updateSetting('sessionLogName', e.currentTarget.value.trim() || '&H-&Y&M&D-&T.log')}
+				/>
+			</div>
+		</div>
+
+		<div class="setting-row">
+			<div class="setting-info">
+				<span class="setting-label">{t('settings.log_append')}</span>
+				<span class="setting-description">{t('settings.log_append_desc')}</span>
+			</div>
+			<div class="setting-control">
+				<Toggle
+					hideLabel
+					checked={settings.sessionLogAppend}
+					label={t('settings.log_append')}
+					onchange={(v) => updateSetting('sessionLogAppend', v)}
+				/>
+			</div>
+		</div>
+
+		<div class="setting-row">
+			<div class="setting-info">
+				<span class="setting-label">{t('settings.log_header')}</span>
+				<span class="setting-description">{t('settings.log_header_desc')}</span>
+			</div>
+			<div class="setting-control">
+				<Toggle
+					hideLabel
+					checked={settings.sessionLogHeader}
+					label={t('settings.log_header')}
+					onchange={(v) => updateSetting('sessionLogHeader', v)}
+				/>
+			</div>
+		</div>
+	{/if}
 
 	<h3 class="section-title">{t('settings.rdp_section')}</h3>
 
@@ -406,6 +519,43 @@
 </div>
 
 <style>
+	.log-field {
+		width: 100%;
+		min-width: 0;
+		padding: 7px 10px;
+		border-radius: var(--radius-btn);
+		border: 1px solid var(--color-border);
+		background: var(--color-bg-primary);
+		color: var(--color-text-primary);
+		font-family: inherit;
+		font-size: 0.8125rem;
+	}
+
+	.log-field:focus {
+		outline: none;
+		border-color: var(--color-accent);
+	}
+
+	.log-folder {
+		display: flex;
+		gap: var(--space-2);
+	}
+
+	.log-browse {
+		flex-shrink: 0;
+		padding: 7px 12px;
+		border-radius: var(--radius-btn);
+		border: 1px solid var(--color-border);
+		background: var(--color-surface-sunken);
+		color: var(--color-text-primary);
+		font-family: inherit;
+		font-size: 0.8125rem;
+		cursor: pointer;
+	}
+
+	.log-browse:hover {
+		border-color: var(--color-accent);
+	}
 
 	.setting-section {
 		padding: 12px 0;

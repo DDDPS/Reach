@@ -24,7 +24,7 @@
 	import { sshConnect, sshDisconnect, sshDetectOs, type JumpHostConnectParams } from '$lib/ipc/ssh';
 	// Passwords are now stored encrypted in vault, not in memory cache
 	import { createTab, updateTabOs } from '$lib/state/tabs.svelte';
-	import { getSettings } from '$lib/state/settings.svelte';
+	import { getSettings, sessionLogConfig } from '$lib/state/settings.svelte';
 	import { addToast } from '$lib/state/toasts.svelte';
 	import { hasMasterPassword } from '$lib/ipc/credentials';
 	import { t } from '$lib/state/i18n.svelte';
@@ -571,7 +571,8 @@
 				cols: 80,
 				rows: 24,
 				shell: session.shell ?? undefined,
-				injectColors: getSettings().injectShellColors,
+				injectColors: getSettings().typeShellSetup,
+				sessionLog: sessionLogConfig(),
 				showLoginMessage: getSettings().showLoginMessage,
 				tryAgentKeys: authType === 'Key' && session.try_agent_keys === true,
 				jumpChain,
@@ -1647,6 +1648,8 @@
 	.prompt-overlay {
 		position: fixed;
 		inset: 0;
+		/* Clear of the phone's status and navigation bars (0 on a desktop). */
+		padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 		z-index: 200;
 		display: flex;
 		align-items: center;

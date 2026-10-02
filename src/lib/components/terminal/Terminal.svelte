@@ -20,7 +20,7 @@
 	import { trieMatch } from '$lib/state/snippets.svelte';
 	import { t } from '$lib/state/i18n.svelte';
 	import { readText as clipboardReadText, writeText as clipboardWriteText } from '@tauri-apps/plugin-clipboard-manager';
-	import { open as shellOpen } from '@tauri-apps/plugin-shell';
+	import { openUrl } from '@tauri-apps/plugin-opener';
 	import Modal from '$lib/components/shared/Modal.svelte';
 	import MobileKeyBar, { type BarKey } from '$lib/components/shared/MobileKeyBar.svelte';
 	import Button from '$lib/components/shared/Button.svelte';
@@ -312,7 +312,7 @@
 		// shell, not inside the WebView.
 		term.loadAddon(
 			new WebLinksAddon((_event, uri) => {
-				shellOpen(uri).catch((e) => console.error('Failed to open link:', e));
+				openUrl(uri).catch((e) => console.error('Failed to open link:', e));
 			})
 		);
 

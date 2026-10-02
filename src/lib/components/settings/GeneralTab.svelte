@@ -2,7 +2,7 @@
 	import { invoke } from '@tauri-apps/api/core';
 	import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart';
 	import { isMobile } from '$lib/platform';
-	import { open as shellOpen } from '@tauri-apps/plugin-shell';
+	import { openUrl } from '@tauri-apps/plugin-opener';
 	import FaIcon from '$lib/components/shared/FaIcon.svelte';
 	import { faCopy, faUpRightFromSquare } from '@fortawesome/free-solid-svg-icons';
 	import { addToast } from '$lib/state/toasts.svelte';
@@ -189,7 +189,7 @@
 			<button
 				class="discord-link"
 				title={COMMUNITY.discordInvite}
-				onclick={() => shellOpen(COMMUNITY.discordInvite)}
+				onclick={() => openUrl(COMMUNITY.discordInvite)}
 			>
 				<DiscordIcon size={14} />
 				<span>{t('settings.open_discord')}</span>
@@ -235,7 +235,7 @@
 			<button
 				class="discord-link sponsor-link"
 				title={COMMUNITY.sponsorLabel}
-				onclick={() => shellOpen(COMMUNITY.sponsorUrl)}
+				onclick={() => openUrl(COMMUNITY.sponsorUrl)}
 			>
 				<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
 					<path

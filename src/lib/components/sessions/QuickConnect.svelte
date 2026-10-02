@@ -7,7 +7,7 @@
 	import KeyPicker from '$lib/components/sessions/KeyPicker.svelte';
 	import { sshConnect, type JumpHostConnectParams } from '$lib/ipc/ssh';
 	import { createTab } from '$lib/state/tabs.svelte';
-	import { getSettings } from '$lib/state/settings.svelte';
+	import { getSettings, sessionLogConfig } from '$lib/state/settings.svelte';
 	import { t } from '$lib/state/i18n.svelte';
 
 	/** What the sessions search field parsed out of `user@host:port`. */
@@ -97,7 +97,8 @@
 				cols: 80,
 				rows: 24,
 				shell: shell.trim() || undefined,
-				injectColors: getSettings().injectShellColors,
+				injectColors: getSettings().typeShellSetup,
+				sessionLog: sessionLogConfig(),
 				showLoginMessage: getSettings().showLoginMessage,
 				jumpChain,
 				proxy: proxyEnabled ? {
