@@ -21,6 +21,7 @@ pub mod sshkey_commands;
 pub mod ansible_commands;
 pub mod container_commands;
 pub mod db_commands;
+pub mod k8s_commands;
 pub mod tofu_commands;
 pub mod theme_commands;
 pub mod update_commands;

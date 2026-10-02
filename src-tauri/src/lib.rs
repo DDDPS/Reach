@@ -10,6 +10,7 @@ pub mod vnc;
 pub mod container;
 pub mod db;
 pub mod devops;
+pub mod k8s;
 pub mod dragout;
 pub mod hardening;
 pub mod system_lock;
@@ -39,6 +40,7 @@ use ipc::db_commands::*;
 use ipc::ai_commands::*;
 use ipc::update_commands::*;
 use ipc::container_commands::*;
+use ipc::k8s_commands::*;
 use ipc::plugin_commands::*;
 use ipc::marketplace_commands::*;
 use ipc::credential_commands::*;
@@ -341,6 +343,25 @@ pub fn run() {
             ctr_logs,
             ctr_logs_stop,
             ctr_shell_command,
+            k8s_contexts,
+            k8s_open,
+            k8s_close,
+            k8s_namespaces,
+            k8s_pods,
+            k8s_workloads,
+            k8s_objects,
+            k8s_events,
+            k8s_get_yaml,
+            k8s_replace_yaml,
+            k8s_delete,
+            k8s_scale,
+            k8s_restart,
+            k8s_logs,
+            k8s_logs_stop,
+            k8s_helm_releases,
+            k8s_helm_history,
+            k8s_helm_detail,
+            k8s_helm_run,
             ssh_resize,
             ssh_list_connections,
             ssh_detect_os,
@@ -696,6 +717,25 @@ pub fn run() {
             ctr_logs,
             ctr_logs_stop,
             ctr_shell_command,
+            k8s_contexts,
+            k8s_open,
+            k8s_close,
+            k8s_namespaces,
+            k8s_pods,
+            k8s_workloads,
+            k8s_objects,
+            k8s_events,
+            k8s_get_yaml,
+            k8s_replace_yaml,
+            k8s_delete,
+            k8s_scale,
+            k8s_restart,
+            k8s_logs,
+            k8s_logs_stop,
+            k8s_helm_releases,
+            k8s_helm_history,
+            k8s_helm_detail,
+            k8s_helm_run,
             ssh_resize,
             ssh_list_connections,
             ssh_detect_os,

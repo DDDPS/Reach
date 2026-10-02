@@ -82,10 +82,17 @@ pub fn sh_quote(s: &str) -> String {
 impl Shell {
     /// Run `cmd` (a shell command line) and wait for it, up to `secs`.
     pub async fn run(&self, cmd: &str, secs: u64) -> Result<Output, String> {
+        self.run_with_input(cmd, None, secs).await
+    }
+
+    /// As [`Shell::run`], with `input` on the command's stdin. Secrets go
+    /// this way, never on the command line, where `ps` shows them to every
+    /// user on the machine.
+    pub async fn run_with_input(&self, cmd: &str, input: Option<&[u8]>, secs: u64) -> Result<Output, String> {
         let work = async {
             match self {
-                Shell::Ssh(h) => run_ssh(h, cmd).await,
-                Shell::Local => run_local(cmd).await,
+                Shell::Ssh(h) => run_ssh(h, cmd, input).await,
+                Shell::Local => run_local(cmd, input).await,
             }
         };
         tokio::time::timeout(std::time::Duration::from_secs(secs), work)
@@ -94,9 +101,14 @@ impl Shell {
     }
 }
 
-async fn run_ssh(h: &SharedHandle, cmd: &str) -> Result<Output, String> {
+async fn run_ssh(h: &SharedHandle, cmd: &str, input: Option<&[u8]>) -> Result<Output, String> {
     let mut ch = h.lock().await.channel_open_session().await.map_err(|e| format!("Could not open an SSH channel: {e}"))?;
     ch.exec(true, cmd).await.map_err(|e| e.to_string())?;
+    if let Some(bytes) = input {
+        ch.data(bytes).await.map_err(|e| e.to_string())?;
+    }
+    // End of input either way, so a command that reads stdin finishes.
+    ch.eof().await.map_err(|e| e.to_string())?;
     let (mut out, mut err, mut code) = (Vec::new(), Vec::new(), None);
     while let Some(msg) = ch.wait().await {
         match msg {
@@ -110,7 +122,8 @@ async fn run_ssh(h: &SharedHandle, cmd: &str) -> Result<Output, String> {
 }
 
 #[cfg(not(target_os = "android"))]
-async fn run_local(cmd: &str) -> Result<Output, String> {
+async fn run_local(cmd: &str, input: Option<&[u8]>) -> Result<Output, String> {
+    use tokio::io::AsyncWriteExt;
     #[cfg(windows)]
     let mut c = {
         let mut c = tokio::process::Command::new("cmd");
@@ -125,7 +138,15 @@ async fn run_local(cmd: &str) -> Result<Output, String> {
         c.args(["-c", cmd]);
         c
     };
-    let o = c.output().await.map_err(|e| e.to_string())?;
+    c.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let mut child = c.spawn().map_err(|e| e.to_string())?;
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Some(bytes) = input {
+            stdin.write_all(bytes).await.map_err(|e| e.to_string())?;
+        }
+        // Dropped here: end of input.
+    }
+    let o = child.wait_with_output().await.map_err(|e| e.to_string())?;
     Ok(Output {
         code: o.status.code().map(|c| c as u32),
         stdout: String::from_utf8_lossy(&o.stdout).into(),
@@ -134,7 +155,7 @@ async fn run_local(cmd: &str) -> Result<Output, String> {
 }
 
 #[cfg(target_os = "android")]
-async fn run_local(_cmd: &str) -> Result<Output, String> {
+async fn run_local(_cmd: &str, _input: Option<&[u8]>) -> Result<Output, String> {
     Err("A phone has no container engine of its own; choose a server.".into())
 }
 

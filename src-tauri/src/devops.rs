@@ -80,6 +80,9 @@ pub async fn devops_set_enabled(state: tauri::State<'_, crate::state::AppState>,
     if tool == Tool::Containers && !enabled {
         state.containers.lock().await.close_all();
     }
+    if tool == Tool::Kubernetes && !enabled {
+        state.k8s.lock().await.close_all();
+    }
     Ok(())
 }
 
