@@ -15,8 +15,10 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
+# Opening links in the browser. The shell plugin's open is denied on Android
+# ("Scoped shell IO error"); the opener uses the system's own view action.
+tauri-plugin-opener = "2"
 tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -74,7 +76,14 @@ keyring-core = "1"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "mysql"] }
 tiberius = { version = "0.13", default-features = false, features = ["tds73", "rustls", "chrono"] }
 # SQL Server sends dates as day counts; chrono turns them into readable text.
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+# `clock` gives local time for session log names and headers.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# Session logs: the DEC VT parser Alacritty uses, to keep only printable text
+# in "Printable output" mode, as PuTTY does.
+vte = "0.15"
+# Comparing release versions for the Android update notice (already in the
+# tree through Tauri).
+semver = "1"
 # Redis: keys, not tables, so it has its own module rather than going through sqlx.
 redis = { version = "1.7", default-features = false, features = ["aio", "tokio-comp", "tokio-rustls-comp", "tls-rustls-webpki-roots", "streams"] }
 tokio-util = { version = "0.7", features = ["compat"] }

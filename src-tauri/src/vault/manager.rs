@@ -3469,7 +3469,9 @@ fn decrypt_with_password(kek: &Kek, ciphertext: &[u8], nonce: &[u8]) -> Result<V
 /// still found: `{user}.{service}` in the Windows Credential Manager, service
 /// and account in the macOS login keychain, `keyring-rs:{user}@{service}` in
 /// the Linux kernel keyring. Android has none of these: see `android_keychain`.
-#[cfg(not(target_os = "android"))]
+// In tests every platform, Android too, keeps keys in the in-memory store of
+// keychain_entry_in: there is no app around to reach the Android Keystore.
+#[cfg(any(not(target_os = "android"), test))]
 fn keychain_entry(user_uuid: &str) -> Result<keyring_core::Entry, VaultError> {
     keychain_entry_in("reach-vault", user_uuid)
 }
@@ -3511,7 +3513,7 @@ pub(crate) fn keychain_entry_in(service: &str, user: &str) -> Result<keyring_cor
 /// never leaves it, seals the vault key, and the sealed copy lives in Reach's
 /// private app folder. Like a desktop keychain it asks for no user check;
 /// that is the fingerprint's job.
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(test)))]
 mod android_keychain {
     use super::{VaultError, BASE64};
     use base64::Engine;
@@ -3587,11 +3589,11 @@ mod android_keychain {
 
 /// Store key in OS keychain.
 fn store_key_in_keychain(user_uuid: &str, key: &[u8]) -> Result<(), VaultError> {
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", not(test)))]
     {
         android_keychain::store(user_uuid, key)
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(any(not(target_os = "android"), test))]
     {
         let entry = keychain_entry(user_uuid)?;
         entry
@@ -3603,11 +3605,11 @@ fn store_key_in_keychain(user_uuid: &str, key: &[u8]) -> Result<(), VaultError> 
 
 /// Remove the key from the OS keychain; a key already gone is fine.
 fn delete_key_from_keychain(user_uuid: &str) -> Result<(), VaultError> {
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", not(test)))]
     {
         android_keychain::delete(user_uuid)
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(any(not(target_os = "android"), test))]
     match keychain_entry(user_uuid)?.delete_credential() {
         Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
         Err(e) => Err(VaultError::KeychainError(e.to_string())),
@@ -3615,13 +3617,13 @@ fn delete_key_from_keychain(user_uuid: &str) -> Result<(), VaultError> {
 }
 
 /// Get key from OS keychain.
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", not(test)))]
 fn get_key_from_keychain(user_uuid: &str) -> Result<Vec<u8>, VaultError> {
     android_keychain::get(user_uuid)
 }
 
 /// Get key from OS keychain.
-#[cfg(not(target_os = "android"))]
+#[cfg(any(not(target_os = "android"), test))]
 fn get_key_from_keychain(user_uuid: &str) -> Result<Vec<u8>, VaultError> {
     let entry = keychain_entry(user_uuid)?;
     let password = entry.get_password().map_err(|e| match e {
@@ -3656,41 +3658,5 @@ mod duplicate_tests;
 mod backup_tests;
 
 #[cfg(test)]
-mod keychain_tests {
-    use super::*;
-
-    /// Tests run against an in-memory keychain that keeps what is written,
-    /// never the OS one (see keychain_entry_in).
-    #[test]
-    fn the_test_keychain_keeps_what_is_written() {
-        let entry = keychain_entry_in("reach-keychain-test", "user-a").unwrap();
-        entry.set_password("value").unwrap();
-        let again = keychain_entry_in("reach-keychain-test", "user-a").unwrap();
-        assert_eq!(again.get_password().unwrap(), "value");
-        again.delete_credential().unwrap();
-        assert!(keychain_entry_in("reach-keychain-test", "user-a").unwrap().get_password().is_err());
-    }
-
-    /// A reset removes the identity's key: it must not stay behind able to
-    /// open what the identity encrypted.
-    #[tokio::test]
-    async fn a_reset_takes_the_identity_key_with_it() {
-        let dir = std::env::temp_dir().join(format!("reach-reset-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let mut mgr = VaultManager::new(dir.clone());
-        let test_password = format!(
-            "reset-test-pass-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        mgr.init_identity(&test_password).await.unwrap();
-        let uuid = mgr.user_uuid.clone().unwrap();
-        assert!(get_key_from_keychain(&uuid).is_ok(), "the identity stored its key");
-        mgr.reset().await.unwrap();
-        assert!(get_key_from_keychain(&uuid).is_err(), "the key outlived the reset");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
+#[path = "manager_keychain_tests.rs"]
+mod keychain_tests;

@@ -2,6 +2,7 @@ import { DEFAULT_PASTE_THRESHOLD } from '$lib/terminal/paste';
 import { invoke } from '@tauri-apps/api/core';
 import * as settingsIpc from '$lib/ipc/settings';
 import type { AppSettings } from '$lib/ipc/settings';
+import type { SessionLogConfig } from '$lib/ipc/ssh';
 import { NEW_FEATURE_IDS } from '$lib/data/whats-new';
 
 export interface Settings {
@@ -15,9 +16,25 @@ export interface Settings {
 	locale: string;
 	minimizeToTray: boolean;
 	startWithSystem: boolean;
-	injectShellColors: boolean;
+	/** Type a colour and prompt setup into the remote shell after login. Off
+	 *  unless the user turns it on: it is typed, so the shell records it in
+	 *  its history, and servers colour themselves for an xterm-256color
+	 *  terminal anyway, as they do for PuTTY. Saved under a new name so the
+	 *  old default of "on" is not carried over. */
+	typeShellSetup: boolean;
 	/** Keep the server's login message (MOTD) on screen after connecting. */
 	showLoginMessage: boolean;
+	/** Write SSH sessions to a text file, as PuTTY's Logging panel does.
+	 *  Off unless turned on: a log holds whatever the server printed. */
+	sessionLogMode: 'off' | 'printable' | 'all';
+	/** Folder for session logs; empty means the default (Documents/Reach Logs). */
+	sessionLogFolder: string;
+	/** File name with PuTTY's placeholders: &H host, &P port, &Y &M &D date, &T time. */
+	sessionLogName: string;
+	/** Add to an existing file rather than replace it. */
+	sessionLogAppend: boolean;
+	/** Start each log with a date line. */
+	sessionLogHeader: boolean;
 	/** Remote desktop: paint through WebGL (the GPU) rather than the 2D canvas. */
 	rdpHardwareRendering: boolean;
 	/** Remote desktop: advertise the graphics pipeline, for hosts that encode H.264. */
@@ -99,8 +116,13 @@ const defaults: Settings = {
 	locale: 'en',
 	minimizeToTray: false,
 	startWithSystem: false,
-	injectShellColors: true,
+	typeShellSetup: false,
 	showLoginMessage: true,
+	sessionLogMode: 'off',
+	sessionLogFolder: '',
+	sessionLogName: '&H-&Y&M&D-&T.log',
+	sessionLogAppend: true,
+	sessionLogHeader: true,
 	rdpHardwareRendering: true,
 	rdpGraphicsPipeline: false,
 	warnOnMultilinePaste: true,
@@ -131,6 +153,18 @@ let secureError = $state<string | null>(null);
 
 export function getSettings(): Settings {
 	return settings;
+}
+
+/** The session log to ask `ssh_connect` for, or null when logging is off. */
+export function sessionLogConfig(): SessionLogConfig | null {
+	if (settings.sessionLogMode === 'off') return null;
+	return {
+		mode: settings.sessionLogMode,
+		folder: settings.sessionLogFolder.trim(),
+		name: settings.sessionLogName.trim(),
+		append: settings.sessionLogAppend,
+		header: settings.sessionLogHeader
+	};
 }
 
 export function updateSetting<K extends keyof Settings>(key: K, value: Settings[K]): void {
@@ -167,8 +201,13 @@ export function loadSettings(): void {
 			settings.locale = parsed.locale ?? defaults.locale;
 			settings.minimizeToTray = parsed.minimizeToTray ?? defaults.minimizeToTray;
 			settings.startWithSystem = parsed.startWithSystem ?? defaults.startWithSystem;
-			settings.injectShellColors = parsed.injectShellColors ?? defaults.injectShellColors;
+			settings.typeShellSetup = parsed.typeShellSetup ?? defaults.typeShellSetup;
 			settings.showLoginMessage = parsed.showLoginMessage ?? defaults.showLoginMessage;
+			settings.sessionLogMode = parsed.sessionLogMode ?? defaults.sessionLogMode;
+			settings.sessionLogFolder = parsed.sessionLogFolder ?? defaults.sessionLogFolder;
+			settings.sessionLogName = parsed.sessionLogName ?? defaults.sessionLogName;
+			settings.sessionLogAppend = parsed.sessionLogAppend ?? defaults.sessionLogAppend;
+			settings.sessionLogHeader = parsed.sessionLogHeader ?? defaults.sessionLogHeader;
 			settings.rdpHardwareRendering = parsed.rdpHardwareRendering ?? defaults.rdpHardwareRendering;
 			settings.rdpGraphicsPipeline = parsed.rdpGraphicsPipeline ?? defaults.rdpGraphicsPipeline;
 			settings.pendingTursoOrg = parsed.pendingTursoOrg ?? defaults.pendingTursoOrg;

@@ -67,7 +67,9 @@
 				{:else if showError && updater.error}
 					<span class="error-text">{updater.error}</span>
 				{:else}
-					<button class="btn-update" onclick={downloadAndInstall}>{t('updater.update_now')}</button>
+					<button class="btn-update" onclick={downloadAndInstall}>
+						{updater.isDownloadLink ? t('updater.download') : t('updater.update_now')}
+					</button>
 					<button class="btn-later" onclick={handleDismiss}>{t('updater.later')}</button>
 				{/if}
 			</div>
@@ -78,9 +80,10 @@
 <style>
 	.update-banner {
 		position: fixed;
-		top: 0;
-		left: 0;
-		right: 0;
+		/* Below a phone's status bar, where it can be tapped (0 on a desktop). */
+		top: env(safe-area-inset-top);
+		left: env(safe-area-inset-left);
+		right: env(safe-area-inset-right);
 		z-index: 150;
 		height: 40px;
 		background: linear-gradient(135deg, var(--color-accent) 0%, #0070e0 100%);

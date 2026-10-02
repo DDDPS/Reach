@@ -37,8 +37,10 @@ export interface SshConnectParams {
   proxy?: ProxyConfig;
   /** Optional per-session login shell (e.g. "fish" or "fish -l"). Empty = remote default. */
   shell?: string;
-  /** Inject the auto shell-color/prompt init after login (default true). */
+  /** Type the shell colour/prompt setup after login (off unless asked for). */
   injectColors?: boolean;
+  /** Write the session to a text file; null or absent logs nothing. */
+  sessionLog?: SessionLogConfig | null;
   /** Keep the server's login message (MOTD) on screen (default true). */
   showLoginMessage?: boolean;
   /** Key sessions: also offer the SSH agent's keys if the session's key is refused. Off unless the session says so. */
@@ -50,6 +52,21 @@ export interface ConnectionInfo {
   host: string;
   port: number;
   username: string;
+}
+
+/** Settings → Appearance → Session logging, in the shape the backend reads. */
+export interface SessionLogConfig {
+  mode: 'printable' | 'all';
+  /** Empty means the default folder (see sessionLogDefaultDir). */
+  folder: string;
+  /** PuTTY placeholders: &H &P &Y &M &D &T. */
+  name: string;
+  append: boolean;
+  header: boolean;
+}
+
+export async function sessionLogDefaultDir(): Promise<string> {
+  return invoke<string>('session_log_default_dir');
 }
 
 export async function sshConnect(params: SshConnectParams): Promise<string> {
@@ -70,6 +87,7 @@ export async function sshConnect(params: SshConnectParams): Promise<string> {
     shell: params.shell?.trim() ? params.shell.trim() : null,
     injectColors: params.injectColors ?? null,
     showLoginMessage: params.showLoginMessage ?? null,
+    sessionLog: params.sessionLog ?? null,
     tryAgentKeys: params.tryAgentKeys ?? null,
   });
 }

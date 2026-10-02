@@ -141,7 +141,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: var(--space-4);
+		padding: max(var(--space-4), env(safe-area-inset-top)) max(var(--space-4), env(safe-area-inset-right)) max(var(--space-4), env(safe-area-inset-bottom)) max(var(--space-4), env(safe-area-inset-left));
 		background: var(--color-surface-sunken);
 		backdrop-filter: blur(16px);
 		-webkit-backdrop-filter: blur(16px);

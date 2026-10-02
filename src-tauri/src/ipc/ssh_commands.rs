@@ -99,12 +99,16 @@ pub async fn ssh_connect(
     shell: Option<String>,
     inject_colors: Option<bool>,
     show_login_message: Option<bool>,
+    session_log: Option<crate::ssh::session_log::SessionLogConfig>,
     try_agent_keys: Option<bool>,
 ) -> Result<String, String> {
-    // Default ON when the frontend doesn't specify (back-compat).
+    // Nothing is typed into the user's shell unless the caller asks for it
+    // (Settings → Appearance): a caller that does not say gets no setup. The
+    // login message is shown unless asked otherwise.
     let login = crate::ssh::client::LoginOptions {
-        inject_colors: inject_colors.unwrap_or(true),
+        inject_colors: inject_colors.unwrap_or(false),
         show_login_message: show_login_message.unwrap_or(true),
+        log: session_log,
     };
     tracing::info!(
         "ssh_connect IPC: id={}, host={}, port={}, user={}, auth_method='{}', has_key_path={}, has_password={}, has_passphrase={}, has_proxy={}, has_jump={}",
@@ -231,6 +235,13 @@ pub async fn ssh_ready(
 ) -> Result<(), String> {
     let manager = state.ssh_manager.lock().await;
     manager.mark_ready(&connection_id).map_err(|e| e.to_string())
+}
+
+/// Where session logs go when Settings leaves the folder empty, shown there
+/// as the placeholder.
+#[tauri::command]
+pub fn session_log_default_dir() -> String {
+    crate::ssh::session_log::default_dir().display().to_string()
 }
 
 /// The frontend's host-key verification dialog reports the user's decision,
