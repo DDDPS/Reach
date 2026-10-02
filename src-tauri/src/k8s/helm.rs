@@ -179,7 +179,7 @@ impl Cluster {
     /// Every revision of one release, newest first, as `helm history`.
     pub async fn release_history(&self, ns: &str, name: &str) -> Result<Vec<Revision>, String> {
         let mut list: Vec<Revision> = self.release_secrets(Some(ns), Some(name)).await?.iter().map(revision_of).collect();
-        list.sort_by(|a, b| b.revision.cmp(&a.revision));
+        list.sort_by_key(|r| std::cmp::Reverse(r.revision));
         Ok(list)
     }
 

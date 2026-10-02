@@ -165,6 +165,8 @@ pub struct Host {
     pub engine: Engine,
     pub shell: Shell,
     pub info: HostInfo,
+    /// Set from the saved host; every change refuses while it is on.
+    pub read_only: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -224,7 +226,7 @@ pub(crate) async fn open(engine: Engine, ssh: Option<(SharedHandle, Option<Headl
         arch: v.arch.unwrap_or_default(),
         compose,
     };
-    Ok(Host { docker, engine, shell, info })
+    Ok(Host { docker, engine, shell, info, read_only: false })
 }
 
 /// Podman's API socket, as `podman system connection` finds it.
@@ -361,6 +363,16 @@ pub enum Action {
 }
 
 impl Host {
+    /// Refuse a change on a read-only host. The backend checks this, so a
+    /// read-only host stays read-only whatever the page does.
+    pub fn writable(&self) -> Result<(), String> {
+        if self.read_only {
+            Err("This host is read-only. Turn that off in its settings to make changes.".into())
+        } else {
+            Ok(())
+        }
+    }
+
     pub async fn containers(&self) -> Result<Vec<ContainerRow>, String> {
         let list = self
             .docker
@@ -408,6 +420,7 @@ impl Host {
     }
 
     pub async fn act(&self, id: &str, action: Action) -> Result<(), String> {
+        self.writable()?;
         let d = &self.docker;
         let r = match action {
             Action::Start => d.start_container(id, None::<q::StartContainerOptions>).await,
@@ -423,6 +436,7 @@ impl Host {
     }
 
     pub async fn remove_image(&self, id: &str) -> Result<(), String> {
+        self.writable()?;
         self.docker
             .remove_image(id, Some(q::RemoveImageOptions { force: false, noprune: false, platforms: None }), None)
             .await
@@ -431,10 +445,12 @@ impl Host {
     }
 
     pub async fn remove_volume(&self, name: &str) -> Result<(), String> {
+        self.writable()?;
         self.docker.remove_volume(name, Some(q::RemoveVolumeOptions { force: false })).await.map_err(|e| e.to_string())
     }
 
     pub async fn remove_network(&self, id: &str) -> Result<(), String> {
+        self.writable()?;
         self.docker.remove_network(id).await.map_err(|e| e.to_string())
     }
 

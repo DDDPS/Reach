@@ -92,7 +92,7 @@ impl<H: Handler + 'static> SshTransport<H> {
             parts.uri = hyper::Uri::from(pq);
         }
         parts.headers.insert(hyper::header::HOST, hyper::header::HeaderValue::from_static(HOST));
-        let req = hyper::Request::from_parts(parts, body.map_err(|e| e.into()).boxed_unsync());
+        let req = hyper::Request::from_parts(parts, body.boxed_unsync());
         let mut sender = match self.take_ready().await {
             Some(s) => s,
             None => self.connect().await.map_err(|e| io_error(&e))?,

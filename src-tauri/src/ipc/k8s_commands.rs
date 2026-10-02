@@ -8,6 +8,7 @@ use tauri::State;
 
 use crate::db::types::Route;
 use crate::devops::{self, Tool};
+use crate::devops_store::{Cluster as SavedCluster, ClusterView, Environment};
 use crate::k8s::helm::{self, Detail, HelmAction, Revision};
 use crate::k8s::{self, ContextInfo, EventRow, Kind, ObjectRow, PodRow, WorkloadRow};
 use crate::state::AppState;
@@ -27,39 +28,124 @@ pub fn k8s_contexts(yaml: String) -> Result<Contexts, String> {
     Ok(Contexts { contexts, current })
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+async fn saved(state: &State<'_, AppState>, id: &str) -> Result<SavedCluster, String> {
+    let mut vault = state.vault_manager.lock().await;
+    let mut store = state.devops_store.lock().await;
+    store.ensure_loaded(&mut vault).await?;
+    store.cluster(id).cloned().ok_or_else(|| "That cluster is no longer saved".to_string())
+}
+
+#[tauri::command]
+pub async fn k8s_clusters(state: State<'_, AppState>) -> Result<Vec<ClusterView>, String> {
+    devops::require(Tool::Kubernetes)?;
+    let mut vault = state.vault_manager.lock().await;
+    let mut store = state.devops_store.lock().await;
+    store.ensure_loaded(&mut vault).await?;
+    Ok(store.clusters())
+}
+
+/// Save a cluster. A new one (empty id) needs `yaml`; editing one keeps its
+/// stored kubeconfig unless a new one is given. The kubeconfig is never
+/// sent back.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn k8s_cluster_save(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+    yaml: Option<String>,
+    context: String,
+    route: Route,
+    environment: Environment,
+    read_only: bool,
+    namespace: Option<String>,
+) -> Result<ClusterView, String> {
+    devops::require(Tool::Kubernetes)?;
+    if name.trim().is_empty() {
+        return Err("Give the cluster a name".into());
+    }
+    if matches!(route, Route::Live { .. }) {
+        return Err("A terminal tab's connection ends with the tab; save the session instead".into());
+    }
+    let kubeconfig = match yaml.filter(|y| !y.trim().is_empty()) {
+        Some(y) => y,
+        None if !id.is_empty() => saved(&state, &id).await?.kubeconfig,
+        None => return Err("Paste or choose a kubeconfig".into()),
+    };
+    let (list, _) = k8s::contexts(&kubeconfig)?;
+    if !list.iter().any(|c| c.name == context) {
+        return Err(format!("The kubeconfig has no context called {context}"));
+    }
+    let cluster = SavedCluster {
+        id: if id.is_empty() { uuid::Uuid::new_v4().to_string() } else { id },
+        name: name.trim().to_string(),
+        kubeconfig,
+        context,
+        route,
+        environment,
+        read_only,
+        namespace: namespace.filter(|n| !n.is_empty()),
+        last_used_at: now_ms(),
+    };
+    // A changed setting (read-only, route) takes effect on the next open.
+    state.k8s.lock().await.close(&cluster.id);
+    let view = cluster.view();
+    let mut vault = state.vault_manager.lock().await;
+    let mut store = state.devops_store.lock().await;
+    store.ensure_loaded(&mut vault).await?;
+    store.save_cluster(cluster, &mut vault).await?;
+    Ok(view)
+}
+
+#[tauri::command]
+pub async fn k8s_cluster_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    devops::require(Tool::Kubernetes)?;
+    state.k8s.lock().await.close(&id);
+    let mut vault = state.vault_manager.lock().await;
+    let mut store = state.devops_store.lock().await;
+    store.ensure_loaded(&mut vault).await?;
+    store.delete(&id, &mut vault).await
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenedCluster {
     pub key: String,
     pub version: String,
     pub namespace: String,
+    pub read_only: bool,
 }
 
-/// Connect to `context` of `yaml`. With an SSH route, the API server is
-/// reached through it, and its certificate is still checked by name.
+/// Connect to a saved cluster. With an SSH route the API server is reached
+/// through it, and its certificate is still checked by name. The kubeconfig
+/// and the read-only setting come from the vault.
 #[tauri::command]
-pub async fn k8s_open(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    yaml: String,
-    context: Option<String>,
-    route: Route,
-) -> Result<OpenedCluster, String> {
+pub async fn k8s_open(app: tauri::AppHandle, state: State<'_, AppState>, cluster_id: String) -> Result<OpenedCluster, String> {
     devops::require(Tool::Kubernetes)?;
-    let (list, current) = k8s::contexts(&yaml)?;
-    let name = context.clone().or(current).ok_or("The kubeconfig names no context")?;
-    let ctx = list.iter().find(|c| c.name == name).ok_or_else(|| format!("No context called {name}"))?;
-    let forward = match route {
+    let s = saved(&state, &cluster_id).await?;
+    let (list, _) = k8s::contexts(&s.kubeconfig)?;
+    let ctx = list.iter().find(|c| c.name == s.context).ok_or_else(|| format!("No context called {}", s.context))?;
+    let forward = match s.route {
         Route::Direct => None,
         ref r => {
             let (host, port) = k8s::server_addr(&ctx.server)?;
             crate::ipc::db_commands::forward_route(&app, &state, r, host, port).await?
         }
     };
-    let cluster = k8s::connect(&yaml, Some(&name), forward).await?;
-    let key = format!("{name}:{}", serde_json::to_string(&route).unwrap_or_default());
-    let opened = OpenedCluster { key: key.clone(), version: cluster.version.clone(), namespace: cluster.namespace.clone() };
-    state.k8s.lock().await.insert(key, cluster);
+    let mut cluster = k8s::connect(&s.kubeconfig, Some(&s.context), forward).await?;
+    cluster.read_only = s.read_only;
+    let namespace = s.namespace.clone().unwrap_or_else(|| cluster.namespace.clone());
+    let opened = OpenedCluster { key: s.id.clone(), version: cluster.version.clone(), namespace, read_only: s.read_only };
+    state.k8s.lock().await.insert(s.id.clone(), cluster);
+    {
+        let mut vault = state.vault_manager.lock().await;
+        let mut store = state.devops_store.lock().await;
+        let _ = store.save_cluster(SavedCluster { last_used_at: now_ms(), ..s }, &mut vault).await;
+    }
     Ok(opened)
 }
 
@@ -174,34 +260,33 @@ pub async fn k8s_helm_detail(state: State<'_, AppState>, key: String, namespace:
     cluster(&state, &key).await?.release_detail(&namespace, &name, revision).await
 }
 
-/// Roll back or uninstall a release with `helm` on the host `route` leads
-/// to (or this computer), using the kubeconfig `yaml` Reach connected with,
-/// so it acts as the same identity on the same cluster. From that host the
-/// kubeconfig's server address must be reachable, as it is when the route is
-/// the one the cluster was opened through.
+/// Roll back or uninstall a release of a saved cluster with `helm`, on the
+/// host the cluster is reached through (or this computer for a direct one),
+/// with the cluster's own kubeconfig and context, so it acts as the same
+/// identity on the same cluster.
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn k8s_helm_run(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-    route: Route,
-    yaml: String,
+    cluster_id: String,
     action: HelmAction,
     namespace: String,
     name: String,
     revision: Option<i32>,
-    kube_context: Option<String>,
 ) -> Result<String, String> {
     devops::require(Tool::Kubernetes)?;
-    k8s::contexts(&yaml)?;
-    let cmd = helm::command(action, &namespace, &name, revision, kube_context.as_deref())?;
-    let o = match crate::ipc::db_commands::ssh_for_route(&app, &state, &route).await? {
+    let s = saved(&state, &cluster_id).await?;
+    if s.read_only {
+        return Err("This cluster is read-only. Turn that off in its settings to make changes.".into());
+    }
+    let cmd = helm::command(action, &namespace, &name, revision, Some(&s.context))?;
+    let o = match crate::ipc::db_commands::ssh_for_route(&app, &state, &s.route).await? {
         Some((h, _keep)) => {
             crate::container::Shell::Ssh(h)
-                .run_with_input(&helm::with_stdin_kubeconfig(&cmd), Some(yaml.as_bytes()), 900)
+                .run_with_input(&helm::with_stdin_kubeconfig(&cmd), Some(s.kubeconfig.as_bytes()), 900)
                 .await?
         }
-        None => run_helm_here(&cmd, &yaml).await?,
+        None => run_helm_here(&cmd, &s.kubeconfig).await?,
     };
     if !o.ok() {
         return Err(o.failure("helm"));

@@ -229,6 +229,8 @@ pub struct AppState {
     pub containers: Arc<tokio::sync::Mutex<crate::container::ContainerManager>>,
     /// Open Kubernetes clusters and their log streams.
     pub k8s: Arc<tokio::sync::Mutex<crate::k8s::K8sManager>>,
+    /// Saved container hosts and clusters, from the `__devops__` vault.
+    pub devops_store: Arc<tokio::sync::Mutex<crate::devops_store::DevopsStore>>,
     pub close_to_tray: AtomicBool,
     /// Pending file for the editor window to pick up on mount
     pub pending_editor_file: Arc<tokio::sync::Mutex<Option<serde_json::Value>>>,
@@ -270,6 +272,7 @@ impl AppState {
             tofu_schema_cache: Arc::new(tokio::sync::Mutex::new(SchemaCache::default())),
             containers: Arc::new(tokio::sync::Mutex::new(crate::container::ContainerManager::default())),
             k8s: Arc::new(tokio::sync::Mutex::new(crate::k8s::K8sManager::default())),
+            devops_store: Arc::new(tokio::sync::Mutex::new(crate::devops_store::DevopsStore::default())),
             db: Arc::new(tokio::sync::Mutex::new(crate::db::DbManager::new())),
             close_to_tray: AtomicBool::new(false),
             pending_editor_file: Arc::new(tokio::sync::Mutex::new(None)),

@@ -10,6 +10,7 @@ pub mod vnc;
 pub mod container;
 pub mod db;
 pub mod devops;
+pub mod devops_store;
 pub mod k8s;
 pub mod dragout;
 pub mod hardening;
@@ -330,6 +331,10 @@ pub fn run() {
             session_log_default_dir,
             app_update_check,
             ctr_open,
+            ctr_open_live,
+            ctr_hosts,
+            ctr_host_save,
+            ctr_host_delete,
             ctr_close,
             ctr_containers,
             ctr_images,
@@ -344,6 +349,9 @@ pub fn run() {
             ctr_logs_stop,
             ctr_shell_command,
             k8s_contexts,
+            k8s_clusters,
+            k8s_cluster_save,
+            k8s_cluster_delete,
             k8s_open,
             k8s_close,
             k8s_namespaces,
@@ -704,6 +712,10 @@ pub fn run() {
             session_log_default_dir,
             app_update_check,
             ctr_open,
+            ctr_open_live,
+            ctr_hosts,
+            ctr_host_save,
+            ctr_host_delete,
             ctr_close,
             ctr_containers,
             ctr_images,
@@ -718,6 +730,9 @@ pub fn run() {
             ctr_logs_stop,
             ctr_shell_command,
             k8s_contexts,
+            k8s_clusters,
+            k8s_cluster_save,
+            k8s_cluster_delete,
             k8s_open,
             k8s_close,
             k8s_namespaces,

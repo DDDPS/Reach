@@ -80,6 +80,8 @@ pub struct Cluster {
     pub context: String,
     pub namespace: String,
     pub version: String,
+    /// Set from the saved cluster; every change refuses while it is on.
+    pub read_only: bool,
     /// The SSH tunnel to the API server, when there is one; kept as long
     /// as the cluster is open.
     _forward: Option<Forward>,
@@ -107,7 +109,7 @@ pub async fn connect(yaml: &str, context: Option<&str>, forward: Option<Forward>
     let context_name = context.map(String::from).unwrap_or_default();
     let client = Client::try_from(config).map_err(|e| e.to_string())?;
     let version = client.apiserver_version().await.map_err(explain)?;
-    Ok(Cluster { client, context: context_name, namespace, version: version.git_version, _forward: forward })
+    Ok(Cluster { client, context: context_name, namespace, version: version.git_version, read_only: false, _forward: forward })
 }
 
 /// The API server's error, in its own words.
@@ -304,6 +306,15 @@ fn created<K: kube::Resource>(o: &K) -> Option<String> {
 }
 
 impl Cluster {
+    /// Refuse a change on a read-only cluster, in the backend.
+    pub fn writable(&self) -> Result<(), String> {
+        if self.read_only {
+            Err("This cluster is read-only. Turn that off in its settings to make changes.".into())
+        } else {
+            Ok(())
+        }
+    }
+
     fn api<K>(&self, ns: Option<&str>) -> Api<K>
     where
         K: kube::Resource<Scope = k8s_openapi::NamespaceResourceScope> + Clone + serde::de::DeserializeOwned + std::fmt::Debug,
@@ -506,6 +517,7 @@ impl Cluster {
     /// Save edited YAML: a replace carrying the resourceVersion it was read
     /// with, so it is refused if the object changed in the meantime.
     pub async fn replace_yaml(&self, kind: Kind, ns: Option<&str>, name: &str, yaml: &str) -> Result<(), String> {
+        self.writable()?;
         let obj: DynamicObject = serde_saphyr::from_str(yaml).map_err(|e| format!("Not valid YAML: {e}"))?;
         if obj.metadata.name.as_deref() != Some(name) {
             return Err("The name cannot be changed here; that would be a different object.".into());
@@ -517,10 +529,12 @@ impl Cluster {
     }
 
     pub async fn delete(&self, kind: Kind, ns: Option<&str>, name: &str) -> Result<(), String> {
+        self.writable()?;
         self.dynamic(kind, ns).delete(name, &DeleteParams::default()).await.map(|_| ()).map_err(explain)
     }
 
     pub async fn scale(&self, kind: Kind, ns: &str, name: &str, replicas: i32) -> Result<(), String> {
+        self.writable()?;
         if !kind.scalable() {
             return Err(format!("A {kind:?} cannot be scaled"));
         }
@@ -534,6 +548,7 @@ impl Cluster {
     /// `kubectl rollout restart`: a new template annotation, so the
     /// controller replaces the pods one by one under its own rollout rules.
     pub async fn restart(&self, kind: Kind, ns: &str, name: &str) -> Result<(), String> {
+        self.writable()?;
         if !kind.restartable() {
             return Err(format!("A {kind:?} cannot be restarted"));
         }
@@ -573,6 +588,7 @@ impl K8sManager {
     }
 
     /// Follow a pod container's log into `out`, as `kubectl logs -f`.
+    #[allow(clippy::too_many_arguments)]
     pub fn follow_logs(
         &mut self,
         stream_id: String,

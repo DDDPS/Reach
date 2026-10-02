@@ -113,6 +113,7 @@ impl Host {
 
     /// Run `action` on the project called `name`; returns what Compose printed.
     pub async fn compose(&self, name: &str, action: ComposeAction) -> Result<String, String> {
+        self.writable()?;
         let projects = self.projects().await?;
         let p = projects.iter().find(|p| p.name == name).ok_or_else(|| format!("No Compose project called {name}"))?;
         // Compose prints its progress on stderr even when it succeeds.
