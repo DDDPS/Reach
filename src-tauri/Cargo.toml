@@ -4,7 +4,7 @@ version = "0.7.3"
 description = "Cross-platform SSH & Remote Management Tool"
 authors = ["Reach Contributors"]
 edition = "2021"
-license = "LicenseRef-Reach-SAL"
+license = "MIT"
 
 [lib]
 name = "reach_lib"

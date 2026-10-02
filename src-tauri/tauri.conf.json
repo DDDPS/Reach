@@ -38,6 +38,8 @@
   "bundle": {
     "active": true,
     "publisher": "Alexander Nt.",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2026 Alexander Nt.",
     "targets": "all",
     "createUpdaterArtifacts": "v1Compatible",
     "icon": [
