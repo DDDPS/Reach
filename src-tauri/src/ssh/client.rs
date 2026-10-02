@@ -353,13 +353,13 @@ fn describe_key_load_error(
 /// How a login got in, and the fingerprint of the session's own key if the
 /// server refused it on the way.
 #[derive(Debug, Default)]
-struct AuthOutcome {
+pub(crate) struct AuthOutcome {
     by: Option<AuthBy>,
     refused_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AuthBy {
+pub(crate) enum AuthBy {
     Key,
     Agent,
     Password,
@@ -367,7 +367,7 @@ enum AuthBy {
 
 impl AuthOutcome {
     /// Ok when something got in; otherwise the error that says what to fix.
-    fn into_result(self) -> Result<AuthBy, SshError> {
+    pub(crate) fn into_result(self) -> Result<AuthBy, SshError> {
         match (self.by, self.refused_key) {
             (Some(by), _) => Ok(by),
             (None, Some(fingerprint)) => Err(SshError::KeyRefused(fingerprint)),
@@ -386,7 +386,7 @@ fn rsa_hashes(known: Option<Option<russh::keys::HashAlg>>) -> Vec<Option<russh::
     vec![known.flatten()]
 }
 
-async fn cascade_authenticate<H: russh::client::Handler>(
+pub(crate) async fn cascade_authenticate<H: russh::client::Handler>(
     handle: &mut russh::client::Handle<H>,
     username: &str,
     auth: &AuthParams,

@@ -156,6 +156,14 @@ ironrdp-egfx = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e
 ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59" }
 ironrdp-graphics = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59" }
 smallvec = "1"
+# Docker and Podman: the Engine API client. Remote engines go over an SSH
+# channel of Reach's own (src/container/transport.rs); `pipe` is the local
+# socket or Windows named pipe, for an engine on this computer.
+bollard = { version = "0.21", default-features = false, features = ["pipe"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
 
 # PTY, Serial, Autostart, Updater, native drag-out (desktop only)
 [target.'cfg(not(target_os = "android"))'.dependencies]

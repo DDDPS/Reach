@@ -7,6 +7,7 @@ pub mod monitoring;
 pub mod pty;
 pub mod rdp;
 pub mod vnc;
+pub mod container;
 pub mod db;
 pub mod devops;
 pub mod dragout;
@@ -37,6 +38,7 @@ use ipc::ansible_commands::*;
 use ipc::db_commands::*;
 use ipc::ai_commands::*;
 use ipc::update_commands::*;
+use ipc::container_commands::*;
 use ipc::plugin_commands::*;
 use ipc::marketplace_commands::*;
 use ipc::credential_commands::*;
@@ -325,6 +327,20 @@ pub fn run() {
             ssh_hostkey_response,
             session_log_default_dir,
             app_update_check,
+            ctr_open,
+            ctr_close,
+            ctr_containers,
+            ctr_images,
+            ctr_volumes,
+            ctr_networks,
+            ctr_projects,
+            ctr_act,
+            ctr_remove,
+            ctr_inspect,
+            ctr_compose,
+            ctr_logs,
+            ctr_logs_stop,
+            ctr_shell_command,
             ssh_resize,
             ssh_list_connections,
             ssh_detect_os,
@@ -666,6 +682,20 @@ pub fn run() {
             ssh_hostkey_response,
             session_log_default_dir,
             app_update_check,
+            ctr_open,
+            ctr_close,
+            ctr_containers,
+            ctr_images,
+            ctr_volumes,
+            ctr_networks,
+            ctr_projects,
+            ctr_act,
+            ctr_remove,
+            ctr_inspect,
+            ctr_compose,
+            ctr_logs,
+            ctr_logs_stop,
+            ctr_shell_command,
             ssh_resize,
             ssh_list_connections,
             ssh_detect_os,

@@ -21,6 +21,8 @@ pub enum Tool {
     Ansible,
     Tofu,
     Databases,
+    Containers,
+    Kubernetes,
 }
 
 impl Tool {
@@ -29,6 +31,8 @@ impl Tool {
             Tool::Ansible => "Ansible",
             Tool::Tofu => "OpenTofu",
             Tool::Databases => "Databases",
+            Tool::Containers => "Containers",
+            Tool::Kubernetes => "Kubernetes",
         }
     }
 
@@ -36,10 +40,14 @@ impl Tool {
         static ANSIBLE: AtomicBool = AtomicBool::new(false);
         static TOFU: AtomicBool = AtomicBool::new(false);
         static DATABASES: AtomicBool = AtomicBool::new(false);
+        static CONTAINERS: AtomicBool = AtomicBool::new(false);
+        static KUBERNETES: AtomicBool = AtomicBool::new(false);
         match self {
             Tool::Ansible => &ANSIBLE,
             Tool::Tofu => &TOFU,
             Tool::Databases => &DATABASES,
+            Tool::Containers => &CONTAINERS,
+            Tool::Kubernetes => &KUBERNETES,
         }
     }
 }
@@ -69,6 +77,9 @@ pub async fn devops_set_enabled(state: tauri::State<'_, crate::state::AppState>,
     if tool == Tool::Databases && !enabled {
         state.db.lock().await.close_all().await;
     }
+    if tool == Tool::Containers && !enabled {
+        state.containers.lock().await.close_all();
+    }
     Ok(())
 }
 
@@ -90,7 +101,7 @@ mod tests {
 
     #[test]
     fn tool_names_match_the_frontend_ids() {
-        let tools: Vec<Tool> = serde_json::from_str(r#"["ansible","tofu","databases"]"#).unwrap();
-        assert_eq!(tools, [Tool::Ansible, Tool::Tofu, Tool::Databases]);
+        let tools: Vec<Tool> = serde_json::from_str(r#"["ansible","tofu","databases","containers","kubernetes"]"#).unwrap();
+        assert_eq!(tools, [Tool::Ansible, Tool::Tofu, Tool::Databases, Tool::Containers, Tool::Kubernetes]);
     }
 }
