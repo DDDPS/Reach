@@ -130,19 +130,23 @@ fn only_replica_kinds_scale_and_only_controllers_restart() {
 }
 
 /// The kubeconfig reaches helm through a private temp file that is removed
-/// however helm ends; checked by running the wrapper in a real shell.
-#[cfg(unix)]
+/// however helm ends; checked by running the wrapper in a real shell. The
+/// wrapper runs on the SSH server (Linux, macOS), never on a phone, so it is
+/// checked where it runs.
+#[cfg(all(unix, not(target_os = "android")))]
 #[test]
 fn helm_kubeconfig_file_is_private_and_removed() {
+    let mark = std::env::temp_dir().join(format!("reach-kc-path-{}", std::process::id()));
     use super::helm::with_stdin_kubeconfig;
     use std::io::Write;
     // Stand-in for helm: report the file's mode (GNU stat, or BSD stat on
     // macOS) and content, then fail.
-    let fake = r#"sh -c '{ stat -c %a "$2" 2>/dev/null || stat -f %Lp "$2"; }; cat "$2"; echo "$2" > /tmp/reach-kc-path; exit 3' x"#;
+    let fake = r#"sh -c '{ stat -c %a "$2" 2>/dev/null || stat -f %Lp "$2"; }; cat "$2"; echo "$2" > "$REACH_KC_MARK"; exit 3' x"#;
     let cmd = with_stdin_kubeconfig(fake);
     let mut child = std::process::Command::new("sh")
         .arg("-c")
         .arg(&cmd)
+        .env("REACH_KC_MARK", &mark)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -153,7 +157,8 @@ fn helm_kubeconfig_file_is_private_and_removed() {
     assert_eq!(out.status.code(), Some(3), "helm's own exit code comes back");
     assert!(text.starts_with("600\n"), "the file is owner-only: {text}");
     assert!(text.contains("apiVersion: v1"), "{text}");
-    let path = std::fs::read_to_string("/tmp/reach-kc-path").unwrap();
+    let path = std::fs::read_to_string(&mark).unwrap();
+    let _ = std::fs::remove_file(&mark);
     assert!(!std::path::Path::new(path.trim()).exists(), "the kubeconfig file was left behind");
 }
 
