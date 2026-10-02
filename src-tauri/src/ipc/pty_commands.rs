@@ -11,6 +11,7 @@ pub async fn pty_spawn(
     state: tauri::State<'_, AppState>,
     id: String,
     shell: Option<String>,
+    args: Option<Vec<String>>,
     cols: u16,
     rows: u16,
 ) -> Result<String, String> {
@@ -22,7 +23,7 @@ pub async fn pty_spawn(
         .map_err(|e| format!("Failed to lock PTY manager: {}", e))?;
 
     manager
-        .spawn(&id, shell, cols, rows, app)
+        .spawn(&id, shell, args.unwrap_or_default(), cols, rows, app)
         .map_err(|e| e.to_string())
 }
 

@@ -4,11 +4,14 @@ export async function ptySpawn(
 	id: string,
 	shell?: string,
 	cols?: number,
-	rows?: number
+	rows?: number,
+	/** Arguments for `shell`, each one word; no shell parses them. */
+	args?: string[]
 ): Promise<string> {
 	return invoke<string>('pty_spawn', {
 		id,
 		shell: shell ?? null,
+		args: args ?? null,
 		cols: cols ?? 80,
 		rows: rows ?? 24
 	});

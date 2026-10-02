@@ -16,9 +16,11 @@ import { getActivePage, setActivePage, type Page } from '$lib/state/navigation.s
 import { isCommandRunning as isAnsibleRunning } from '$lib/state/ansible.svelte';
 import { isCommandRunning as isTofuRunning } from '$lib/state/tofu.svelte';
 import { isAnyBusy as isDbBusy } from '$lib/state/db.svelte';
+import { isBusy as isContainersBusy } from '$lib/state/containers.svelte';
+import { isBusy as isK8sBusy } from '$lib/state/k8s.svelte';
 import { t } from '$lib/state/i18n.svelte';
 
-export type DevopsToolId = 'ansible' | 'tofu' | 'databases';
+export type DevopsToolId = 'ansible' | 'tofu' | 'databases' | 'containers' | 'kubernetes';
 
 export interface DevopsTool {
 	id: DevopsToolId;
@@ -56,6 +58,22 @@ export const DEVOPS_TOOLS: DevopsTool[] = [
 		label: () => t('nav.databases'),
 		description: () => t('devops.databases_desc'),
 		isBusy: isDbBusy
+	},
+	{
+		id: 'containers',
+		page: 'containers',
+		binary: '',
+		label: () => t('nav.containers'),
+		description: () => t('devops.containers_desc'),
+		isBusy: isContainersBusy
+	},
+	{
+		id: 'kubernetes',
+		page: 'kubernetes',
+		binary: '',
+		label: () => t('nav.kubernetes'),
+		description: () => t('devops.kubernetes_desc'),
+		isBusy: isK8sBusy
 	}
 ];
 

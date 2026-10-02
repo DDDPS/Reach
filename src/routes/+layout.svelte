@@ -44,6 +44,11 @@
 			setTimeout(() => addToast(t('devops.new_notice'), 'info', 12000), 2500);
 			markFeaturesSeen(['devops-notice']);
 		}
+		// The same, once, for Containers and Kubernetes (0.7.4).
+		if (settings.setupComplete && !settings.seenFeatures.includes('containers-k8s') && !settings.seenFeatures.includes('containers-k8s-notice')) {
+			setTimeout(() => addToast(t('devops.containers_k8s_notice'), 'info', 12000), 3500);
+			markFeaturesSeen(['containers-k8s-notice']);
+		}
 		loadAISettings();
 		initShortcuts();
 		startupUpdateCheck();

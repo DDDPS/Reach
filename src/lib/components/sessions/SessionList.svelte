@@ -20,7 +20,8 @@
 	import SessionCard from './SessionCard.svelte';
 	import VaultSelector from '$lib/components/vault/VaultSelector.svelte';
 	import ContextMenuBackdrop from '$lib/components/shared/ContextMenuBackdrop.svelte';
-	import { sessionKind, sessionList, sessionDelete, sessionUpdate, sessionListFolders, sessionCreateFolder, sessionDeleteFolder, type SessionConfig, type Folder } from '$lib/ipc/sessions';
+	import { sessionKind, sessionGet, sessionList, sessionDelete, sessionUpdate, sessionListFolders, sessionCreateFolder, sessionDeleteFolder, type SessionConfig, type Folder } from '$lib/ipc/sessions';
+	import { setActivePage } from '$lib/state/navigation.svelte';
 	import { sshConnect, sshDisconnect, sshDetectOs, type JumpHostConnectParams } from '$lib/ipc/ssh';
 	// Passwords are now stored encrypted in vault, not in memory cache
 	import { createTab, updateTabOs } from '$lib/state/tabs.svelte';
@@ -134,6 +135,23 @@
 		const reload = () => void loadSessions();
 		window.addEventListener('reach:sessions-changed', reload);
 		return () => window.removeEventListener('reach:sessions-changed', reload);
+	});
+
+	// Another workspace asks for a session to be opened, with every prompt a
+	// normal connect has (password, passphrase): a shell inside a container
+	// opens this way, as the session with a different login shell.
+	$effect(() => {
+		const open = (e: Event) => {
+			const { sessionId, shell } = (e as CustomEvent<{ sessionId: string; shell?: string }>).detail;
+			void sessionGet(sessionId)
+				.then((s) => {
+					setActivePage('terminal');
+					return handleConnect(shell ? { ...s, shell } : s);
+				})
+				.catch((err) => addToast(String(err), 'error'));
+		};
+		window.addEventListener('reach:connect-session', open);
+		return () => window.removeEventListener('reach:connect-session', open);
 	});
 
 	onMount(() => {
@@ -598,9 +616,12 @@
 				sshDetectOs(id).then(async (osId) => {
 					if (osId) {
 						updateTabOs(id, osId);
-						const updated = { ...session, detected_os: osId };
 						try {
-							await sessionUpdate(updated);
+							// Only the OS changes, on the session as stored. The copy
+							// connected with may carry a one-off override (a shell
+							// inside a container), which must never be saved.
+							const stored = await sessionGet(session.id);
+							await sessionUpdate({ ...stored, detected_os: osId });
 							await loadSessions();
 						} catch {
 							// Non-critical: icon will show next time

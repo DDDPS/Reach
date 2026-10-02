@@ -21,6 +21,8 @@ pub enum Tool {
     Ansible,
     Tofu,
     Databases,
+    Containers,
+    Kubernetes,
 }
 
 impl Tool {
@@ -29,6 +31,8 @@ impl Tool {
             Tool::Ansible => "Ansible",
             Tool::Tofu => "OpenTofu",
             Tool::Databases => "Databases",
+            Tool::Containers => "Containers",
+            Tool::Kubernetes => "Kubernetes",
         }
     }
 
@@ -36,10 +40,14 @@ impl Tool {
         static ANSIBLE: AtomicBool = AtomicBool::new(false);
         static TOFU: AtomicBool = AtomicBool::new(false);
         static DATABASES: AtomicBool = AtomicBool::new(false);
+        static CONTAINERS: AtomicBool = AtomicBool::new(false);
+        static KUBERNETES: AtomicBool = AtomicBool::new(false);
         match self {
             Tool::Ansible => &ANSIBLE,
             Tool::Tofu => &TOFU,
             Tool::Databases => &DATABASES,
+            Tool::Containers => &CONTAINERS,
+            Tool::Kubernetes => &KUBERNETES,
         }
     }
 }
@@ -69,7 +77,33 @@ pub async fn devops_set_enabled(state: tauri::State<'_, crate::state::AppState>,
     if tool == Tool::Databases && !enabled {
         state.db.lock().await.close_all().await;
     }
+    if tool == Tool::Containers && !enabled {
+        state.containers.lock().await.close_all();
+    }
+    if tool == Tool::Kubernetes && !enabled {
+        state.k8s.lock().await.close_all();
+    }
     Ok(())
+}
+
+/// Save text the user asked to download (a log, say). The native Save
+/// dialog is opened here, so where the file goes is the user's choice in the
+/// system's own dialog, never a path the page names. Returns false when the
+/// user cancels.
+#[tauri::command]
+pub async fn devops_save_text(app: tauri::AppHandle, default_name: String, content: String) -> Result<bool, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let name: String = default_name
+        .chars()
+        .map(|c| if "<>:\"/\\|?*".contains(c) || c.is_control() { '_' } else { c })
+        .collect();
+    app.dialog().file().set_file_name(name).add_filter("Text", &["log", "txt"]).save_file(move |picked| {
+        let _ = tx.send(picked);
+    });
+    let Some(picked) = rx.await.map_err(|e| e.to_string())? else { return Ok(false) };
+    crate::ipc::vault_commands::picked_file::write(&app, &picked.to_string(), content.as_bytes()).await?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -90,7 +124,7 @@ mod tests {
 
     #[test]
     fn tool_names_match_the_frontend_ids() {
-        let tools: Vec<Tool> = serde_json::from_str(r#"["ansible","tofu","databases"]"#).unwrap();
-        assert_eq!(tools, [Tool::Ansible, Tool::Tofu, Tool::Databases]);
+        let tools: Vec<Tool> = serde_json::from_str(r#"["ansible","tofu","databases","containers","kubernetes"]"#).unwrap();
+        assert_eq!(tools, [Tool::Ansible, Tool::Tofu, Tool::Databases, Tool::Containers, Tool::Kubernetes]);
     }
 }

@@ -33,12 +33,14 @@ pub const ANSIBLE_PROJECTS_VAULT: &str = "__ansible_projects__";
 pub const SNIPPETS_VAULT: &str = "__snippets__";
 pub const SSH_KEYS_VAULT: &str = "__ssh_keys__";
 pub const DATABASES_VAULT: &str = "__databases__";
+/// Saved container hosts and Kubernetes clusters (kubeconfigs).
+pub const DEVOPS_VAULT: &str = "__devops__";
 
 /// Every vault Reach keeps for itself. They are opened together, migrate
 /// together and map together onto the unified vault when personal sync is on,
 /// so the list lives in one place — a vault missing from one of those sites is
 /// a vault whose data silently stops syncing.
-pub const INTERNAL_VAULTS: [&str; 10] = [
+pub const INTERNAL_VAULTS: [&str; 11] = [
     SESSIONS_VAULT,
     CREDENTIALS_VAULT,
     FOLDERS_VAULT,
@@ -49,6 +51,7 @@ pub const INTERNAL_VAULTS: [&str; 10] = [
     SNIPPETS_VAULT,
     SSH_KEYS_VAULT,
     DATABASES_VAULT,
+    DEVOPS_VAULT,
 ];
 
 /// How long a remote connection may sit unused before Reach stops trusting

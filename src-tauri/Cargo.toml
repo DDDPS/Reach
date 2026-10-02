@@ -1,10 +1,10 @@
 [package]
 name = "reach"
-version = "0.7.3"
+version = "0.7.4"
 description = "Cross-platform SSH & Remote Management Tool"
 authors = ["Reach Contributors"]
 edition = "2021"
-license = "LicenseRef-Reach-SAL"
+license = "MIT"
 
 [lib]
 name = "reach_lib"
@@ -156,6 +156,22 @@ ironrdp-egfx = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e
 ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59" }
 ironrdp-graphics = { git = "https://github.com/Devolutions/IronRDP", rev = "bfd16a2e5573d4cd6617dd71b2802b4e7b944a59" }
 smallvec = "1"
+# Docker and Podman: the Engine API client. Remote engines go over an SSH
+# channel of Reach's own (src/container/transport.rs); `pipe` is the local
+# socket or Windows named pipe, for an engine on this computer.
+bollard = { version = "0.21", default-features = false, features = ["pipe"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+http = "1"
+# Kubernetes: the standard Rust client, rustls only (no OpenSSL), with `ws` for
+# exec, attach and port-forward. k8s-openapi needs one API version: the lowest
+# it offers, so the types fit the widest range of clusters.
+kube = { version = "4.2", default-features = false, features = ["client", "rustls-tls", "ring", "ws"] }
+k8s-openapi = { version = "0.28", features = ["v1_32"] }
+# YAML for viewing and editing resources: the same parser kube itself uses.
+serde-saphyr = { version = "0.0.29", features = ["serialize"] }
 
 # PTY, Serial, Autostart, Updater, native drag-out (desktop only)
 [target.'cfg(not(target_os = "android"))'.dependencies]
@@ -296,6 +312,10 @@ libc = "0.2"
 # Root certificates for HTTPS on Android; see src/http.rs.
 [target.'cfg(target_os = "android")'.dependencies]
 webpki-root-certs = "1"
+# A cluster whose kubeconfig names no CA is checked against the bundled
+# Mozilla roots here, as Reach's HTTP client is: the OS verifier needs a Java
+# component Reach does not ship. With a CA (the usual case) only that CA counts.
+kube = { version = "4.2", default-features = false, features = ["webpki-roots"] }
 
 # libsql with its double close of a local connection fixed; see the header of
 # vendor/libsql/Cargo.toml.

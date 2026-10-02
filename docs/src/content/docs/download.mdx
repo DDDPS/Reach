@@ -34,6 +34,41 @@ chmod +x Reach_*_amd64.AppImage
 The `.deb` and `.rpm` packages are linked under the cards if you would rather
 install through your package manager.
 
+### Install with apt or dnf
+
+Add Reach's signed repository once, and your system's own updates keep Reach
+up to date from then on.
+
+**Ubuntu, Debian and their derivatives:**
+
+```sh
+sudo apt install -y curl gpg
+curl -fsSL https://github.com/alexandrosnt/Reach/releases/latest/download/reach-packages.asc \
+  | sudo gpg --dearmor -o /usr/share/keyrings/reach.gpg
+echo "deb [signed-by=/usr/share/keyrings/reach.gpg] https://github.com/alexandrosnt/Reach/releases/latest/download ./" \
+  | sudo tee /etc/apt/sources.list.d/reach.list
+sudo apt update && sudo apt install reach
+```
+
+**Fedora, RHEL and their derivatives:**
+
+```sh
+sudo tee /etc/yum.repos.d/reach.repo <<'EOF'
+[reach]
+name=Reach
+baseurl=https://reachssh.com/rpm
+enabled=1
+repo_gpgcheck=1
+gpgcheck=0
+gpgkey=https://reachssh.com/reach-packages.asc
+EOF
+sudo dnf install reach
+```
+
+The key is trusted for Reach's repository only (`signed-by`), not for the rest
+of your system. Every index is signed with it, and each package is checked
+against the checksum the signed index lists; a changed index is refused.
+
 **Android.** The APK is installed outside the Play Store, so Android will ask
 you to allow installs from this source. The download is for 64-bit phones,
 which is nearly all of them; older 32-bit phones take the `armv7` APK under

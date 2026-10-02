@@ -58,6 +58,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # dnf reads its repository from the site: the signed repodata the
+      # release made, unpacked under /rpm. A release without it (before
+      # 0.7.4) leaves the site as it was.
+      - name: Add the dnf repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release download --repo "$GITHUB_REPOSITORY" --pattern rpm-repodata.tar.gz --pattern reach-packages.asc --dir repo-dl 2>/dev/null; then
+            mkdir -p docs/dist/rpm
+            tar -xzf repo-dl/rpm-repodata.tar.gz -C docs/dist/rpm
+            cp repo-dl/reach-packages.asc docs/dist/reach-packages.asc
+          else
+            echo "The latest release has no dnf repository yet."
+          fi
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:

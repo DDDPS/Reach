@@ -25,6 +25,9 @@ export interface Tab {
 	rdpConnectParams?: RdpConnectParams;
 	/** What a VNC tab connects to. */
 	vncConnectParams?: VncConnectParams;
+	/** A local tab that runs this program instead of the default shell
+	 *  (a shell inside a container on this computer, say). */
+	localCommand?: { program: string; args: string[] };
 }
 
 let tabs = $state<Tab[]>([]);

@@ -15,6 +15,8 @@
 	import AnsiblePage from '$lib/components/ansible/AnsiblePage.svelte';
 	import TofuPage from '$lib/components/tofu/TofuPage.svelte';
 	import DbPage from '$lib/components/db/DbPage.svelte';
+	import ContainersPage from '$lib/components/containers/ContainersPage.svelte';
+	import K8sPage from '$lib/components/k8s/K8sPage.svelte';
 	import EditorWindow from '$lib/components/editor/EditorWindow.svelte';
 
 	const isEditorWindow = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('editor');
@@ -56,6 +58,16 @@
 		if (activePage === 'databases') dbVisited = true;
 	});
 	let dbMounted = $derived(dbVisited && isDevopsEnabled('databases'));
+	let containersVisited = $state(false);
+	$effect(() => {
+		if (activePage === 'containers') containersVisited = true;
+	});
+	let containersMounted = $derived(containersVisited && isDevopsEnabled('containers'));
+	let k8sVisited = $state(false);
+	$effect(() => {
+		if (activePage === 'kubernetes') k8sVisited = true;
+	});
+	let k8sMounted = $derived(k8sVisited && isDevopsEnabled('kubernetes'));
 
 	let spawnedPtys = $state(new Set<string>());
 	let connectedSsh = $state(new Set<string>());
@@ -67,7 +79,7 @@
 		for (const tab of tabs) {
 			if (tab.type === 'local' && !spawnedPtys.has(tab.id)) {
 				spawnedPtys.add(tab.id);
-				ptySpawn(tab.id).catch((err) => {
+				ptySpawn(tab.id, tab.localCommand?.program, undefined, undefined, tab.localCommand?.args).catch((err) => {
 					console.error(`Failed to spawn PTY for tab ${tab.id}:`, err);
 				});
 			}
@@ -224,6 +236,20 @@
 		{#if dbMounted}
 			<div class="page-view" class:active={activePage === 'databases'}>
 				<DbPage />
+			</div>
+		{/if}
+
+		<!-- Kept mounted from the first visit, as Databases is, so an open log
+		     and the chosen host survive a trip to the terminal. -->
+		{#if containersMounted}
+			<div class="page-view" class:active={activePage === 'containers'}>
+				<ContainersPage />
+			</div>
+		{/if}
+
+		{#if k8sMounted}
+			<div class="page-view" class:active={activePage === 'kubernetes'}>
+				<K8sPage />
 			</div>
 		{/if}
 

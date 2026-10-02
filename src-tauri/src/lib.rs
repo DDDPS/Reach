@@ -7,8 +7,11 @@ pub mod monitoring;
 pub mod pty;
 pub mod rdp;
 pub mod vnc;
+pub mod container;
 pub mod db;
 pub mod devops;
+pub mod devops_store;
+pub mod k8s;
 pub mod dragout;
 pub mod hardening;
 pub mod system_lock;
@@ -37,6 +40,8 @@ use ipc::ansible_commands::*;
 use ipc::db_commands::*;
 use ipc::ai_commands::*;
 use ipc::update_commands::*;
+use ipc::container_commands::*;
+use ipc::k8s_commands::*;
 use ipc::plugin_commands::*;
 use ipc::marketplace_commands::*;
 use ipc::credential_commands::*;
@@ -325,6 +330,46 @@ pub fn run() {
             ssh_hostkey_response,
             session_log_default_dir,
             app_update_check,
+            ctr_open,
+            ctr_open_live,
+            ctr_hosts,
+            ctr_host_save,
+            ctr_host_delete,
+            ctr_close,
+            ctr_containers,
+            ctr_images,
+            ctr_volumes,
+            ctr_networks,
+            ctr_projects,
+            ctr_act,
+            ctr_remove,
+            ctr_inspect,
+            ctr_compose,
+            ctr_logs,
+            ctr_logs_stop,
+            ctr_shell_command,
+            k8s_contexts,
+            k8s_clusters,
+            k8s_cluster_save,
+            k8s_cluster_delete,
+            k8s_open,
+            k8s_close,
+            k8s_namespaces,
+            k8s_pods,
+            k8s_workloads,
+            k8s_objects,
+            k8s_events,
+            k8s_get_yaml,
+            k8s_replace_yaml,
+            k8s_delete,
+            k8s_scale,
+            k8s_restart,
+            k8s_logs,
+            k8s_logs_stop,
+            k8s_helm_releases,
+            k8s_helm_history,
+            k8s_helm_detail,
+            k8s_helm_run,
             ssh_resize,
             ssh_list_connections,
             ssh_detect_os,
@@ -577,6 +622,7 @@ pub fn run() {
             share_reset_ice_servers,
             share_load,
             devops::devops_set_enabled,
+            devops::devops_save_text,
             // Databases
             db_list_connections,
             db_save_connection,
@@ -666,6 +712,46 @@ pub fn run() {
             ssh_hostkey_response,
             session_log_default_dir,
             app_update_check,
+            ctr_open,
+            ctr_open_live,
+            ctr_hosts,
+            ctr_host_save,
+            ctr_host_delete,
+            ctr_close,
+            ctr_containers,
+            ctr_images,
+            ctr_volumes,
+            ctr_networks,
+            ctr_projects,
+            ctr_act,
+            ctr_remove,
+            ctr_inspect,
+            ctr_compose,
+            ctr_logs,
+            ctr_logs_stop,
+            ctr_shell_command,
+            k8s_contexts,
+            k8s_clusters,
+            k8s_cluster_save,
+            k8s_cluster_delete,
+            k8s_open,
+            k8s_close,
+            k8s_namespaces,
+            k8s_pods,
+            k8s_workloads,
+            k8s_objects,
+            k8s_events,
+            k8s_get_yaml,
+            k8s_replace_yaml,
+            k8s_delete,
+            k8s_scale,
+            k8s_restart,
+            k8s_logs,
+            k8s_logs_stop,
+            k8s_helm_releases,
+            k8s_helm_history,
+            k8s_helm_detail,
+            k8s_helm_run,
             ssh_resize,
             ssh_list_connections,
             ssh_detect_os,
@@ -908,6 +994,7 @@ pub fn run() {
             share_reset_ice_servers,
             share_load,
             devops::devops_set_enabled,
+            devops::devops_save_text,
             // Databases
             db_list_connections,
             db_save_connection,

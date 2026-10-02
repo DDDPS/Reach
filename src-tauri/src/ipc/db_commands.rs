@@ -22,7 +22,7 @@ use crate::db::types::{
 };
 use crate::db::{csv, Live};
 use crate::devops::{self, Tool};
-use crate::ssh::client::{AuthParams, JumpHostParams, KeySource, SharedHandle, SshManager};
+use crate::ssh::client::{AuthParams, HeadlessConnection, JumpHostParams, KeySource, SharedHandle, SshManager};
 use crate::state::{AppState, AuthMethod};
 
 fn now_ms() -> u64 {
@@ -125,6 +125,20 @@ pub(crate) async fn forward_route(
     host: String,
     port: u16,
 ) -> Result<Option<Forward>, String> {
+    match ssh_for_route(app, state, route).await? {
+        None => Ok(None),
+        Some((handle, ssh)) => open_forward(handle, ssh, host, port).await.map(Some),
+    }
+}
+
+/// The SSH connection a route goes through: a terminal tab's own, or a new
+/// login with a saved session's settings (kept alive by the returned
+/// connection). `None` for a direct route. Shared with VNC and containers.
+pub(crate) async fn ssh_for_route(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    route: &Route,
+) -> Result<Option<(SharedHandle, Option<HeadlessConnection>)>, String> {
     match route {
         Route::Direct => Ok(None),
         Route::Live { connection_id } => {
@@ -134,7 +148,7 @@ pub(crate) async fn forward_route(
                 .await
                 .get_handle(connection_id)
                 .map_err(|_| "That terminal tab is no longer connected".to_string())?;
-            open_forward(handle, None, host, port).await.map(Some)
+            Ok(Some((handle, None)))
         }
         Route::Session { session_id } => {
             let s = crate::ipc::session_commands::session_get(state.clone(), session_id.clone()).await?;
@@ -146,8 +160,7 @@ pub(crate) async fn forward_route(
             let ssh = SshManager::open_headless(&s.host, s.port, &s.username, auth, jumps, s.proxy.clone(), app.clone())
                 .await
                 .map_err(|e| format!("SSH to {}: {e}", s.name))?;
-            let handle = ssh.handle.clone();
-            open_forward(handle, Some(ssh), host, port).await.map(Some)
+            Ok(Some((ssh.handle.clone(), Some(ssh))))
         }
     }
 }

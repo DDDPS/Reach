@@ -21,6 +21,7 @@
 	import McpConfirmDialog from '$lib/components/shared/McpConfirmDialog.svelte';
 	import { getUpdaterState, relaunchNow, postponeRelaunch } from '$lib/state/updater.svelte';
 	import { getActiveTab, getTabs, isDesktopTab } from '$lib/state/tabs.svelte';
+	import { getActivePage } from '$lib/state/navigation.svelte';
 	import { getSettings } from '$lib/state/settings.svelte';
 	import { sshListConnections } from '$lib/ipc/ssh';
 	import AIPanel from '$lib/components/ai/AIPanel.svelte';
@@ -46,6 +47,17 @@
 			sidebarCollapsed = true;
 		}
 		lastTabId = id;
+	});
+
+	// The same for a workspace (Containers, Kubernetes, Databases…): picked
+	// from the tab bar, it is what you came to see, not the session drawer.
+	let lastPage: string | undefined;
+	$effect(() => {
+		const page = getActivePage();
+		if (page !== lastPage && page !== 'terminal' && window.matchMedia('(max-width: 700px)').matches) {
+			sidebarCollapsed = true;
+		}
+		lastPage = page;
 	});
 
 	// --- Active-session guards for window close / app quit + update relaunch ---

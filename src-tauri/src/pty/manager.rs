@@ -50,6 +50,7 @@ impl PtyManager {
         &mut self,
         id: &str,
         shell: Option<String>,
+        args: Vec<String>,
         cols: u16,
         rows: u16,
         app_handle: tauri::AppHandle,
@@ -76,6 +77,9 @@ impl PtyManager {
             .map_err(|e| PtyError::SpawnFailed(format!("Failed to open PTY pair: {}", e)))?;
 
         let mut cmd = CommandBuilder::new(&shell_path);
+        // Arguments go to the program as they are, each one word: nothing is
+        // parsed by a shell (a container's shell is opened this way).
+        cmd.args(&args);
 
         // Set TERM so that programs like clear, htop, vim work correctly.
         // xterm-256color matches the xterm.js frontend.
