@@ -175,6 +175,10 @@ jobs:
 
       # The .zsync that the update information above points to belongs next to
       # the AppImage in the release; tauri-action uploads only the bundles.
+      # appimagetool writes it into its working directory, which under the
+      # Tauri CLI is src-tauri/, not the bundle folder (seen in a local build).
+      # It must describe the very AppImage being shipped, so its name and
+      # SHA-1 are checked against that file before anything is uploaded.
       - name: Upload the AppImage .zsync
         if: matrix.platform == 'ubuntu-22.04'
         env:
@@ -183,9 +187,13 @@ jobs:
         run: |
           set -euo pipefail
           found=0
-          for f in src-tauri/target/release/bundle/appimage/*.AppImage.zsync; do
+          for f in src-tauri/*.AppImage.zsync; do
             [ -f "$f" ] || continue
             found=1
+            img="src-tauri/target/release/bundle/appimage/$(basename "$f" .zsync)"
+            [ -f "$img" ] || { echo "::error::$f has no matching AppImage at $img"; exit 1; }
+            grep -aqx "Filename: $(basename "$img")" "$f" || { echo "::error::$f names another file"; exit 1; }
+            grep -aqx "SHA-1: $(sha1sum "$img" | cut -d' ' -f1)" "$f" || { echo "::error::$f does not match $img"; exit 1; }
             url="https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$(basename "$f")"
             gh api --method POST -H "Content-Type: application/octet-stream" "$url" --input "$f" --jq .name
           done
