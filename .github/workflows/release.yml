@@ -259,6 +259,40 @@ jobs:
           [ "$apks" -ge 2 ] || { echo "::error::The Android APKs are missing from the release."; exit 1; }
           echo "Every platform is in latest.json, and the APKs are attached."
 
+      # apt install reach / dnf install reach. The indexes are signed with
+      # the repository key (secrets APT_GPG_PRIVATE_KEY, APT_GPG_PASSPHRASE)
+      # and nothing is published without them: a missing key stops the
+      # release here, as a draft. APT's flat index goes into the release
+      # beside the .deb; dnf's repodata cannot (asset names have no
+      # folders), so it travels as one archive the docs site unpacks.
+      - uses: actions/checkout@v7
+      - name: Sign the apt and dnf repositories
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.create-release.outputs.id }}
+          REPO_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          REPO_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-utils createrepo-c
+          mkdir -p pkgs
+          for kind in deb rpm; do
+            id=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+              --jq "[.[] | select(.name | endswith(\".$kind\"))][0].id")
+            name=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+              --jq "[.[] | select(.name | endswith(\".$kind\"))][0].name")
+            [ -n "$id" ] || { echo "::error::No .$kind in the release"; exit 1; }
+            gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$id" > "pkgs/$name"
+          done
+          bash scripts/package-repos.sh pkgs repo "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          tar -C repo/rpm -czf rpm-repodata.tar.gz repodata
+          for f in repo/apt/InRelease repo/apt/Release repo/apt/Release.gpg repo/apt/Packages repo/apt/Packages.gz repo/reach-packages.asc rpm-repodata.tar.gz; do
+            gh api --method POST -H "Content-Type: application/octet-stream" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$(basename "$f")" \
+              --input "$f" --jq .name
+          done
+
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
