@@ -16,6 +16,7 @@
 	import TofuPage from '$lib/components/tofu/TofuPage.svelte';
 	import DbPage from '$lib/components/db/DbPage.svelte';
 	import ContainersPage from '$lib/components/containers/ContainersPage.svelte';
+	import K8sPage from '$lib/components/k8s/K8sPage.svelte';
 	import EditorWindow from '$lib/components/editor/EditorWindow.svelte';
 
 	const isEditorWindow = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('editor');
@@ -62,6 +63,11 @@
 		if (activePage === 'containers') containersVisited = true;
 	});
 	let containersMounted = $derived(containersVisited && isDevopsEnabled('containers'));
+	let k8sVisited = $state(false);
+	$effect(() => {
+		if (activePage === 'kubernetes') k8sVisited = true;
+	});
+	let k8sMounted = $derived(k8sVisited && isDevopsEnabled('kubernetes'));
 
 	let spawnedPtys = $state(new Set<string>());
 	let connectedSsh = $state(new Set<string>());
@@ -238,6 +244,12 @@
 		{#if containersMounted}
 			<div class="page-view" class:active={activePage === 'containers'}>
 				<ContainersPage />
+			</div>
+		{/if}
+
+		{#if k8sMounted}
+			<div class="page-view" class:active={activePage === 'kubernetes'}>
+				<K8sPage />
 			</div>
 		{/if}
 
