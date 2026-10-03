@@ -86,7 +86,7 @@
 			try {
 				report = await sshOptionsReport(h, p, u, snapshot);
 			} catch (e) {
-				report = { host: h, lines: [], weakenings: [], commands: [], refused: null, errors: [String(e)] };
+				report = { host: h, lines: [], weakenings: [], commands: [], refused: null, errors: [String(e)], otherHostLines: 0 };
 			} finally {
 				checking = false;
 			}

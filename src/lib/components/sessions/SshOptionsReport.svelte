@@ -148,9 +148,17 @@
 			</ul>
 		{/if}
 	{/if}
+	{#if report.otherHostLines > 0}
+		<p class="other-hosts">{t('sshopt.other_host_lines', { count: String(report.otherHostLines) })}</p>
+	{/if}
 </div>
 
 <style>
+	.other-hosts {
+		margin: 0;
+		color: var(--color-text-tertiary);
+	}
+
 	.report {
 		display: flex;
 		flex-direction: column;

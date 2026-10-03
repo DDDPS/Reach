@@ -133,6 +133,39 @@ pub struct Report {
     pub refused: Option<String>,
     /// Errors that would make ssh refuse the files, and expansion errors.
     pub errors: Vec<String>,
+    /// Lines in `Host` blocks for other hosts, left out of `lines`: in a
+    /// file of hundreds of hosts they would be most of every report.
+    pub other_host_lines: usize,
+}
+
+/// Which notes sit in a `Host` block that does not apply: its header and
+/// every line under it inactive. Errors and `Match` blocks always stay.
+fn other_host_blocks(notes: &[super::resolve::Note]) -> Vec<bool> {
+    let mut hide = vec![false; notes.len()];
+    let mut i = 0;
+    while i < notes.len() {
+        let n = &notes[i];
+        let header = n.status == Status::Structure && n.keyword.eq_ignore_ascii_case("host");
+        if !header {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < notes.len()
+            && notes[j].at.file == n.at.file
+            && !(notes[j].status == Status::Structure && (notes[j].keyword.eq_ignore_ascii_case("host") || notes[j].keyword.eq_ignore_ascii_case("match")))
+        {
+            j += 1;
+        }
+        let body = &notes[i + 1..j];
+        if !body.is_empty() && body.iter().all(|b| b.status == Status::Inactive) {
+            for h in &mut hide[i..j] {
+                *h = true;
+            }
+        }
+        i = j;
+    }
+    hide
 }
 
 /// The report for a resolved host and the plan made from it. `exec_asked`
@@ -141,7 +174,12 @@ pub fn build(r: &Resolved, plan: &Plan, finish_errors: &[String], exec_asked: &[
     let mut weakenings = plan.weakenings.clone();
     let mut commands: Vec<String> = exec_asked.to_vec();
     let mut lines = Vec::new();
-    for n in &r.notes {
+    let hide = other_host_blocks(&r.notes);
+    let other_host_lines = hide.iter().filter(|h| **h).count();
+    for (n, hidden) in r.notes.iter().zip(&hide) {
+        if *hidden {
+            continue;
+        }
         let mut line = Line {
             at: n.at.clone(),
             keyword: n.keyword.clone(),
@@ -206,12 +244,41 @@ pub fn build(r: &Resolved, plan: &Plan, finish_errors: &[String], exec_asked: &[
         })
         .collect();
     errors.extend(finish_errors.iter().cloned());
-    Report { host: r.host.clone(), lines, weakenings, commands, refused: r.refused.clone(), errors }
+    Report { host: r.host.clone(), lines, weakenings, commands, refused: r.refused.clone(), errors, other_host_lines }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn other_hosts_blocks_are_counted_not_listed() {
+        use super::super::env::{ExecPolicy, SystemEnv};
+        use super::super::resolve::{resolve, Query, Source};
+        let text = "Host a
+  Port 1
+Host b
+  Port 2
+  User x
+Match host zzz
+  User y
+Host *
+  Compression yes
+";
+        let env = SystemEnv::new(ExecPolicy::Never);
+        let src = Source { path: "cfg".into(), text: Some(text.into()), user: true };
+        let mut r = resolve(&[src], &Query { host: "a".into(), ..Default::default() }, &env);
+        let fe = r.finish(&env);
+        let plan = Plan::new(&r, russh::client::Config::default(), &[]);
+        let rep = build(&r, &plan, &fe, &[]);
+        // Host b and its two lines are left out and counted.
+        assert_eq!(rep.other_host_lines, 3);
+        let kws: Vec<&str> = rep.lines.iter().map(|l| l.keyword.as_str()).collect();
+        assert!(!kws.contains(&"User") || rep.lines.iter().any(|l| l.keyword == "User" && l.text == "y"), "{kws:?}");
+        // The Match block stays, though it does not apply.
+        assert!(rep.lines.iter().any(|l| l.keyword.eq_ignore_ascii_case("match")));
+        assert!(rep.lines.iter().any(|l| l.keyword == "Compression"));
+    }
 
     #[test]
     fn every_keyword_has_a_place() {

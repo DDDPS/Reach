@@ -10,7 +10,10 @@
 		faFolderPlus,
 		faFileImport,
 		faMagnifyingGlass,
-		faXmark
+		faXmark,
+		faListCheck,
+		faFolder,
+		faFolderOpen
 	} from '@fortawesome/free-solid-svg-icons';
 	import { registerSessionActions, shortcutLabel } from '$lib/state/shortcuts.svelte';
 	import { onMount, tick } from 'svelte';
@@ -20,7 +23,10 @@
 	import SessionCard from './SessionCard.svelte';
 	import VaultSelector from '$lib/components/vault/VaultSelector.svelte';
 	import ContextMenuBackdrop from '$lib/components/shared/ContextMenuBackdrop.svelte';
-	import { sessionKind, sessionGet, sessionList, sessionDelete, sessionUpdate, sessionListFolders, sessionCreateFolder, sessionDeleteFolder, type SessionConfig, type Folder } from '$lib/ipc/sessions';
+	import ConfirmAction from '$lib/components/devops/ConfirmAction.svelte';
+	import Modal from '$lib/components/shared/Modal.svelte';
+	import Button from '$lib/components/shared/Button.svelte';
+	import { sessionKind, sessionGet, sessionList, sessionDelete, sessionUpdate, sessionListFolders, sessionCreateFolder, sessionDeleteFolder, sessionMoveToFolder, type SessionConfig, type Folder } from '$lib/ipc/sessions';
 	import { setActivePage } from '$lib/state/navigation.svelte';
 	import { sshConnect, sshDisconnect, sshDetectOs, type JumpHostConnectParams } from '$lib/ipc/ssh';
 	// Passwords are now stored encrypted in vault, not in memory cache
@@ -187,8 +193,17 @@
 			if (selectedVaultId === null) return !s.vault_id;
 			return s.vault_id === selectedVaultId;
 		});
-		const q = searchQuery.trim().toLowerCase();
-		if (q) {
+		const raw = searchQuery.trim();
+		const re = searchRegex.re;
+		if (re) {
+			result = result.filter(s => {
+				const fields = [s.name, s.host, s.username, `${s.username ? s.username + '@' : ''}${s.host}:${s.port}`, ...s.tags];
+				return fields.some(f => re.test(f));
+			});
+		} else if (searchRegex.error) {
+			result = [];
+		} else if (raw) {
+			const q = raw.toLowerCase();
 			result = result.filter(s =>
 				s.name.toLowerCase().includes(q) ||
 				s.host.toLowerCase().includes(q) ||
@@ -198,6 +213,164 @@
 		}
 		return result;
 	});
+
+	/** "/pattern/flags" searches by regular expression (case-insensitive
+	 *  unless flags are given), over name, host, user, user@host:port and
+	 *  tags. A pattern that does not compile says why and matches nothing. */
+	let searchRegex = $derived.by((): { re: RegExp | null; error: string | null } => {
+		const m = /^\/(.+)\/([a-z]*)$/.exec(searchQuery.trim());
+		if (!m) return { re: null, error: null };
+		try {
+			// g and y would make test() remember where it stopped.
+			const flags = (m[2] || 'i').replace(/[gy]/g, '');
+			return { re: new RegExp(m[1], flags), error: null };
+		} catch (e) {
+			return { re: null, error: e instanceof Error ? e.message : String(e) };
+		}
+	});
+
+	// ---- Selecting several sessions -------------------------------------------
+	// Ctrl/Cmd+click toggles one, Shift+click selects the range from the last
+	// one clicked; "Select" turns plain clicks into selection (and is the way
+	// on a phone). Only sessions on screen stay selected, so a bulk action
+	// never reaches one the search has hidden.
+	let selectMode = $state(false);
+	let selected = $state(new Set<string>());
+	let lastSelected = $state<string | null>(null);
+	let selecting = $derived(selectMode || selected.size > 0);
+	let bulkDeleteConfirm = $state(false);
+	/** The move dialog: which sessions, the folder filter, the choice. */
+	let moveIds_ = $state<string[] | null>(null);
+	let moveFilter = $state('');
+	let moveTarget = $state<string | null | undefined>(undefined);
+	let moveNewName = $state('');
+	const NEW_FOLDER = '__new__';
+	let moveFolders = $derived(
+		moveFilter.trim() ? folders.filter(f => f.name.toLowerCase().includes(moveFilter.trim().toLowerCase())) : folders
+	);
+	/** Sessions to move into the folder being created. */
+	let pendingMove = $state<string[] | null>(null);
+
+	/** The sessions in the order they are shown, folded folders left out. */
+	function visibleOrder(): string[] {
+		return groupedSessions.flatMap(g => (g.folder && collapsedFolders.has(g.folder.id) ? [] : g.sessions)).map(s => s.id);
+	}
+
+	$effect(() => {
+		const shown = new Set(filteredSessions.map(s => s.id));
+		const current = untrack(() => selected);
+		const kept = [...current].filter(id => shown.has(id));
+		if (kept.length !== current.size) selected = new Set(kept);
+	});
+
+	function toggleSelect(session: SessionConfig, e: MouseEvent): void {
+		const next = new Set(selected);
+		const order = visibleOrder();
+		if (e.shiftKey && lastSelected && order.includes(lastSelected)) {
+			const a = order.indexOf(lastSelected);
+			const b = order.indexOf(session.id);
+			for (const id of order.slice(Math.min(a, b), Math.max(a, b) + 1)) next.add(id);
+		} else if (next.has(session.id)) {
+			next.delete(session.id);
+		} else {
+			next.add(session.id);
+		}
+		lastSelected = session.id;
+		selected = next;
+	}
+
+	function selectAllShown(): void {
+		selected = new Set(filteredSessions.map(s => s.id));
+		selectMode = true;
+	}
+
+	function clearSelection(): void {
+		selected = new Set();
+		selectMode = false;
+		bulkDeleteConfirm = false;
+		lastSelected = null;
+	}
+
+	/** What a menu or drag on `session` acts on: the selection when the
+	 *  session is in it, else the session alone. */
+	function targetsOf(session: SessionConfig): string[] {
+		return selected.has(session.id) ? [...selected] : [session.id];
+	}
+
+	function openMove(ids: string[]): void {
+		moveIds_ = ids;
+		moveFilter = '';
+		moveTarget = undefined;
+		moveNewName = '';
+	}
+
+	async function confirmMove(): Promise<void> {
+		const ids = moveIds_;
+		if (!ids || moveTarget === undefined) return;
+		let target = moveTarget;
+		if (target === NEW_FOLDER) {
+			const name = moveNewName.trim();
+			if (!name) return;
+			try {
+				target = (await sessionCreateFolder(name, null, targetVaultId)).id;
+				folders = await sessionListFolders();
+			} catch (err) {
+				addToast(String(err), 'error');
+				return;
+			}
+		}
+		moveIds_ = null;
+		await moveIds(ids, target);
+	}
+
+	async function moveIds(ids: string[], folderId: string | null): Promise<void> {
+		closeContextMenu();
+		try {
+			const n = await sessionMoveToFolder(ids, folderId);
+			await loadSessions();
+			if (ids.length > 1) {
+				const name = folderId ? (folders.find(f => f.id === folderId)?.name ?? '') : '';
+				addToast(folderId ? t('session.moved_n', { count: String(n), folder: name }) : t('session.moved_out_n', { count: String(n) }), 'success');
+				clearSelection();
+			}
+		} catch (err) {
+			addToast(String(err), 'error');
+		}
+	}
+
+	async function deleteSelected(): Promise<void> {
+		const ids = [...selected];
+		bulkDeleteConfirm = false;
+		let done = 0;
+		try {
+			for (const id of ids) {
+				await sessionDelete(id);
+				done++;
+			}
+		} catch (err) {
+			addToast(String(err), 'error');
+		}
+		await loadSessions();
+		addToast(t('session.deleted_n', { count: String(done) }), 'success');
+		clearSelection();
+	}
+
+	$effect(() => {
+		if (!selecting) return;
+		function onKey(e: KeyboardEvent) {
+			// A dialog on top closes itself first.
+			if (e.key === 'Escape' && !moveIds_ && !bulkDeleteConfirm) clearSelection();
+		}
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	});
+
+	function newFolderFor(ids: string[]): void {
+		closeContextMenu();
+		pendingMove = ids;
+		creatingFolder = true;
+		newFolderName = '';
+	}
 
 
 	// Group sessions by folder
@@ -251,10 +424,13 @@
 		const name = newFolderName.trim();
 		if (!name) return;
 		try {
-			await sessionCreateFolder(name, null, targetVaultId);
+			const folder = await sessionCreateFolder(name, null, targetVaultId);
 			newFolderName = '';
 			creatingFolder = false;
 			folders = await sessionListFolders();
+			const ids = pendingMove;
+			pendingMove = null;
+			if (ids?.length) await moveIds(ids, folder.id);
 		} catch (err) {
 			addToast(String(err), 'error');
 		}
@@ -262,10 +438,8 @@
 
 	async function handleDeleteFolder(folderId: string): Promise<void> {
 		try {
-			const affected = sessions.filter(s => s.folder_id === folderId);
-			for (const s of affected) {
-				await sessionUpdate({ ...s, folder_id: null });
-			}
+			const affected = sessions.filter(s => s.folder_id === folderId).map(s => s.id);
+			if (affected.length) await sessionMoveToFolder(affected, null);
 			await sessionDeleteFolder(folderId);
 			folders = await sessionListFolders();
 			await loadSessions();
@@ -303,13 +477,8 @@
 			dragSession = undefined;
 			dropTarget = undefined;
 			dragging = false;
-			if (session && target !== undefined && session.folder_id !== target) {
-				try {
-					await sessionUpdate({ ...session, folder_id: target });
-					await loadSessions();
-				} catch (err) {
-					addToast(String(err), 'error');
-				}
+			if (session && target !== undefined && (selected.has(session.id) || session.folder_id !== target)) {
+				await moveIds(targetsOf(session), target);
 			}
 		};
 		window.addEventListener('pointermove', onMove);
@@ -335,18 +504,14 @@
 	}
 
 	async function moveToFolder(session: SessionConfig, folderId: string | null): Promise<void> {
-		closeContextMenu();
-		try {
-			await sessionUpdate({ ...session, folder_id: folderId });
-			await loadSessions();
-		} catch (err) {
-			addToast(String(err), 'error');
-		}
+		await moveIds(targetsOf(session), folderId);
 	}
 
 	function contextNewFolder(): void {
+		const session = contextMenu?.session;
 		closeContextMenu();
-		creatingFolder = true;
+		if (session) newFolderFor(targetsOf(session));
+		else creatingFolder = true;
 	}
 
 	// Vault state (TLS-style: auto-unlock, no password needed)
@@ -882,6 +1047,10 @@
 							<FaIcon icon={faFolderPlus} size={12} />
 							<span>{t('session.new_folder')}</span>
 						</button>
+						<button class="menu-item" role="menuitem" onclick={() => fromMenu(() => { selectMode = true; })}>
+							<FaIcon icon={faListCheck} size={12} />
+							<span>{t('session.select_sessions')}</span>
+						</button>
 						<div class="menu-sep"></div>
 						<button class="menu-item" role="menuitem" onclick={() => fromMenu(() => (showImport = true))}>
 							<FaIcon icon={faFileImport} size={12} />
@@ -902,6 +1071,36 @@
 				</span>
 				{#if filteredSessions.length === 0}<kbd>↵</kbd>{/if}
 			</button>
+		{/if}
+
+		{#if searchRegex.error}
+			<p class="search-error" role="alert">{t('session.regex_error', { error: searchRegex.error })}</p>
+		{/if}
+
+		{#if selecting}
+			<div class="bulk-bar" role="toolbar" aria-label={t('session.selection')}>
+				<div class="bulk-head">
+					<span class="bulk-count">{t('session.selected_n', { count: String(selected.size) })}</span>
+					{#if selected.size < filteredSessions.length}
+						<button class="bulk-link" type="button" onclick={selectAllShown}>{t('session.select_all_n', { count: String(filteredSessions.length) })}</button>
+					{/if}
+					<button class="bulk-close" type="button" onclick={clearSelection} title={t('session.done_selecting')} aria-label={t('session.done_selecting')}>
+						<FaIcon icon={faXmark} size={11} />
+					</button>
+				</div>
+				<div class="bulk-actions">
+					<button class="bulk-btn primary" type="button" disabled={selected.size === 0} onclick={() => openMove([...selected])}>
+						<FaIcon icon={faFolderOpen} size={11} />
+						<span>{t('session.move_to')}</span>
+					</button>
+					<button class="bulk-btn danger" type="button" disabled={selected.size === 0} onclick={() => (bulkDeleteConfirm = true)}>{t('common.delete')}</button>
+				</div>
+			</div>
+		{:else if searchQuery.trim() && filteredSessions.length > 1}
+			<div class="match-row">
+				<span>{t('session.matches_n', { count: String(filteredSessions.length) })}</span>
+				<button class="match-select" type="button" onclick={selectAllShown}>{t('session.select_all')}</button>
+			</div>
 		{/if}
 
 		{#if loading}
@@ -987,7 +1186,7 @@
 								</div>
 							{:else}
 								<div class="folder-session">
-									<SessionCard {session} vault={selectedVaultId === ALL_VAULTS && session.vault_id ? (vaultState.vaults.get(session.vault_id) ?? null) : null} onconnect={() => handleConnect(session)} onedit={() => handleEdit(session)} ondelete={() => handleDelete(session)} oncontextmenu={(e) => openSessionContextMenu(e, session)} ondragstart={(e) => handleDragStart(e, session)} ondragend={() => {}} />
+									<SessionCard {session} vault={selectedVaultId === ALL_VAULTS && session.vault_id ? (vaultState.vaults.get(session.vault_id) ?? null) : null} onconnect={() => handleConnect(session)} onedit={() => handleEdit(session)} ondelete={() => handleDelete(session)} oncontextmenu={(e) => openSessionContextMenu(e, session)} ondragstart={(e) => handleDragStart(e, session)} ondragend={() => {}} {selecting} selected={selected.has(session.id)} onselect={(e) => toggleSelect(session, e)} />
 								</div>
 							{/if}
 						{/each}
@@ -1001,7 +1200,7 @@
 								<button class="delete-cancel-btn" onclick={() => (deleteConfirm = null)}>{t('common.cancel')}</button>
 							</div>
 						{:else}
-							<SessionCard {session} vault={selectedVaultId === ALL_VAULTS && session.vault_id ? (vaultState.vaults.get(session.vault_id) ?? null) : null} onconnect={() => handleConnect(session)} onedit={() => handleEdit(session)} ondelete={() => handleDelete(session)} oncontextmenu={(e) => openSessionContextMenu(e, session)} ondragstart={(e) => handleDragStart(e, session)} ondragend={() => {}} />
+							<SessionCard {session} vault={selectedVaultId === ALL_VAULTS && session.vault_id ? (vaultState.vaults.get(session.vault_id) ?? null) : null} onconnect={() => handleConnect(session)} onedit={() => handleEdit(session)} ondelete={() => handleDelete(session)} oncontextmenu={(e) => openSessionContextMenu(e, session)} ondragstart={(e) => handleDragStart(e, session)} ondragend={() => {}} {selecting} selected={selected.has(session.id)} onselect={(e) => toggleSelect(session, e)} />
 						{/if}
 					{/each}
 				{/if}
@@ -1021,7 +1220,7 @@
 					{t('session.edit')}
 				</button>
 				<div class="context-sep"></div>
-				<div class="context-label">{t('session.move_to_folder')}</div>
+				<div class="context-label">{contextMenu.session && selected.has(contextMenu.session.id) && selected.size > 1 ? t('session.move_n_to_folder', { count: String(selected.size) }) : t('session.move_to_folder')}</div>
 				<!-- Scrollable so a large number of folders doesn't make the menu
 				     overflow the screen — caps at ~5 visible rows. -->
 				<div class="context-folders">
@@ -1040,15 +1239,21 @@
 					</svg>
 					{t('session.new_folder')}
 				</button>
-				{#if contextMenu.session.folder_id}
+				{#if contextMenu.session.folder_id || (selected.has(contextMenu.session.id) && selected.size > 1)}
 					<button class="context-item" onclick={() => { if (contextMenu?.session) moveToFolder(contextMenu.session, null); }} type="button">
 						{t('session.remove_from_folder')}
 					</button>
 				{/if}
 				<div class="context-sep"></div>
-				<button class="context-item context-danger" onclick={() => { if (contextMenu?.session) handleDelete(contextMenu.session); closeContextMenu(); }} type="button">
-					{t('common.delete')}
-				</button>
+				{#if selected.has(contextMenu.session.id) && selected.size > 1}
+					<button class="context-item context-danger" onclick={() => { bulkDeleteConfirm = true; closeContextMenu(); }} type="button">
+						{t('session.delete_n', { count: String(selected.size) })}
+					</button>
+				{:else}
+					<button class="context-item context-danger" onclick={() => { if (contextMenu?.session) handleDelete(contextMenu.session); closeContextMenu(); }} type="button">
+						{t('common.delete')}
+					</button>
+				{/if}
 			{:else}
 				<button class="context-item" onclick={contextNewFolder} type="button">
 					{t('session.new_folder')}
@@ -1057,6 +1262,64 @@
 		</div>
 	{/if}
 </div>
+
+<Modal open={moveIds_ !== null} onclose={() => (moveIds_ = null)} title={t('session.move_n_title', { count: String(moveIds_?.length ?? 0) })} maxWidth="420px">
+	<div class="move-body">
+		{#if folders.length > 6}
+			<input class="move-filter" type="search" placeholder={t('session.move_filter')} aria-label={t('session.move_filter')} bind:value={moveFilter} />
+		{/if}
+		<div class="move-list" role="radiogroup" aria-label={t('session.move_to')}>
+			{#each moveFolders as folder (folder.id)}
+				<button type="button" role="radio" aria-checked={moveTarget === folder.id} class="move-option" class:chosen={moveTarget === folder.id} onclick={() => (moveTarget = folder.id)} ondblclick={() => { moveTarget = folder.id; void confirmMove(); }}>
+					<FaIcon icon={faFolder} size={12} />
+					<span class="move-name">{folder.name}</span>
+					<span class="move-count">{sessions.filter(s => s.folder_id === folder.id).length}</span>
+				</button>
+			{/each}
+			{#if moveFolders.length === 0 && moveFilter.trim()}
+				<p class="move-empty">{t('session.no_matches')}</p>
+			{/if}
+		</div>
+		<div class="move-extra">
+			<button type="button" role="radio" aria-checked={moveTarget === NEW_FOLDER} class="move-option" class:chosen={moveTarget === NEW_FOLDER} onclick={() => (moveTarget = NEW_FOLDER)}>
+				<FaIcon icon={faFolderPlus} size={12} />
+				<span class="move-name">{t('session.new_folder')}</span>
+			</button>
+			{#if moveTarget === NEW_FOLDER}
+				<!-- svelte-ignore a11y_autofocus -->
+				<input class="move-filter" type="text" autofocus placeholder={t('session.folder_name')} aria-label={t('session.folder_name')} bind:value={moveNewName} onkeydown={(e) => e.key === 'Enter' && void confirmMove()} />
+			{/if}
+			{#if sessions.some(s => moveIds_?.includes(s.id) && s.folder_id)}
+				<button type="button" role="radio" aria-checked={moveTarget === null} class="move-option" class:chosen={moveTarget === null} onclick={() => (moveTarget = null)}>
+					<span class="move-name">{t('session.remove_from_folder')}</span>
+				</button>
+			{/if}
+		</div>
+	</div>
+	{#snippet actions()}
+		<Button variant="ghost" onclick={() => (moveIds_ = null)}>{t('common.cancel')}</Button>
+		<Button variant="primary" disabled={moveTarget === undefined || (moveTarget === NEW_FOLDER && !moveNewName.trim())} onclick={() => void confirmMove()}>
+			{t('session.move_n', { count: String(moveIds_?.length ?? 0) })}
+		</Button>
+	{/snippet}
+</Modal>
+
+{#if bulkDeleteConfirm}
+	<!-- Deleting several sessions reaches every device the vault syncs to:
+	     the names are listed and the count typed, as for other bulk deletes. -->
+	<ConfirmAction
+		open={bulkDeleteConfirm}
+		title={t('session.delete_n', { count: String(selected.size) })}
+		message={t('session.delete_n_message', { count: String(selected.size) })}
+		items={sessions.filter(s => selected.has(s.id)).map(s => `${s.name} (${s.username ? s.username + '@' : ''}${s.host})`)}
+		where={selectedVaultId === ALL_VAULTS ? t('vault.all_vaults') : selectedVaultId ? (vaultState.vaults.get(selectedVaultId)?.name ?? t('vault.private')) : t('vault.private')}
+		environment="none"
+		confirmLabel={t('session.delete_n', { count: String(selected.size) })}
+		typeToConfirm={t('session.delete_n_typed', { count: String(selected.size) })}
+		onconfirm={() => void deleteSelected()}
+		onclose={() => (bulkDeleteConfirm = false)}
+	/>
+{/if}
 
 <QuickConnect bind:open={showQuickConnect} prefill={quickPrefill} />
 <RdpQuickConnect bind:open={showRdpConnect} />
@@ -1921,5 +2184,218 @@
 	.init-btn:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
+	}
+
+	.search-error {
+		margin: 4px 4px 0;
+		font-size: 0.6875rem;
+		color: var(--color-danger, #ff453a);
+		overflow-wrap: anywhere;
+	}
+
+	.match-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		margin: 6px 4px 2px;
+		font-size: 0.6875rem;
+		color: var(--color-text-secondary);
+	}
+
+	.match-select {
+		border: none;
+		background: none;
+		padding: 2px 4px;
+		font: inherit;
+		color: var(--color-accent);
+		cursor: pointer;
+	}
+
+	.bulk-bar {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		margin: 6px 0 4px;
+		padding: 6px 8px;
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg-secondary));
+		border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+	}
+
+	.bulk-head {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.bulk-count {
+		font-size: 0.75rem;
+		font-weight: 600;
+		margin-right: auto;
+	}
+
+	.bulk-link {
+		border: none;
+		background: none;
+		padding: 2px 4px;
+		font: inherit;
+		font-size: 0.6875rem;
+		color: var(--color-accent);
+		cursor: pointer;
+	}
+
+	.bulk-actions {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 6px;
+	}
+
+	.bulk-actions .bulk-btn {
+		justify-content: center;
+	}
+
+	.bulk-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		min-height: 26px;
+		padding: 3px 9px;
+		border-radius: 6px;
+		border: 1px solid var(--color-border);
+		background: var(--color-bg-elevated);
+		color: var(--color-text-primary);
+		font-size: 0.75rem;
+		cursor: pointer;
+	}
+
+	.bulk-btn:disabled {
+		opacity: 0.45;
+		cursor: default;
+	}
+
+	.bulk-btn.primary {
+		background: var(--color-accent);
+		border-color: var(--color-accent);
+		color: #fff;
+	}
+
+	.bulk-btn.danger {
+		color: var(--color-danger, #ff453a);
+	}
+
+	.bulk-close {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
+		border: none;
+		border-radius: 6px;
+		background: none;
+		color: var(--color-text-secondary);
+		cursor: pointer;
+	}
+
+	.bulk-close:hover {
+		background: var(--color-surface-hover);
+	}
+
+
+	@media (pointer: coarse) {
+		.bulk-btn,
+		.bulk-close {
+			min-height: 36px;
+		}
+
+		.bulk-close {
+			width: 36px;
+		}
+	}
+
+	.move-body {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.move-filter {
+		width: 100%;
+		box-sizing: border-box;
+		min-height: 32px;
+		padding: 5px 9px;
+		border-radius: 6px;
+		border: 1px solid var(--color-border);
+		background: var(--color-bg-secondary);
+		color: var(--color-text-primary);
+		font: inherit;
+		font-size: 0.8125rem;
+	}
+
+	.move-list {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		max-height: min(320px, 45vh);
+		overflow-y: auto;
+	}
+
+	.move-extra {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		padding-top: 6px;
+		border-top: 1px solid var(--color-border);
+	}
+
+	.move-option {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		width: 100%;
+		min-height: 34px;
+		padding: 6px 10px;
+		border: 1px solid transparent;
+		border-radius: 6px;
+		background: none;
+		color: var(--color-text-primary);
+		font: inherit;
+		font-size: 0.8125rem;
+		text-align: left;
+		cursor: pointer;
+	}
+
+	.move-option:hover {
+		background: var(--color-surface-hover);
+	}
+
+	.move-option.chosen {
+		border-color: var(--color-accent);
+		background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+	}
+
+	.move-name {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.move-count {
+		font-size: 0.6875rem;
+		color: var(--color-text-tertiary);
+	}
+
+	.move-empty {
+		margin: 4px 2px;
+		font-size: 0.75rem;
+		color: var(--color-text-secondary);
+	}
+
+	@media (pointer: coarse) {
+		.move-option {
+			min-height: 44px;
+		}
 	}
 </style>

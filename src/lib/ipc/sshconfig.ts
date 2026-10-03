@@ -43,6 +43,8 @@ export interface SshConfigReport {
   commands: string[];
   refused: string | null;
   errors: string[];
+  /** Lines in Host blocks for other hosts, counted but not listed. */
+  otherHostLines: number;
 }
 
 export interface ImportHop {

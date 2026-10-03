@@ -9,7 +9,7 @@
 	import Button from '$lib/components/shared/Button.svelte';
 	import SshOptionsReport from './SshOptionsReport.svelte';
 	import { sshconfigScan, weakeningKey, type HostImport } from '$lib/ipc/sshconfig';
-	import { sessionCreate, sessionList, type SessionConfig, type AuthMethod, type JumpHostConfig } from '$lib/ipc/sessions';
+	import { sessionCreate, sessionList, sessionListFolders, sessionCreateFolder, type SessionConfig, type AuthMethod, type JumpHostConfig, type Folder } from '$lib/ipc/sessions';
 	import { addToast } from '$lib/state/toasts.svelte';
 	import { t } from '$lib/state/i18n.svelte';
 
@@ -31,7 +31,38 @@
 	let importing = $state(false);
 	let error = $state<string | undefined>();
 
-	let selectableHosts = $derived(hosts.filter((h) => !isAlreadyImported(h)));
+	/** Where the imported sessions go: '' no folder, a folder id, or NEW. */
+	const NEW = '__new__';
+	let folders = $state<Folder[]>([]);
+	let folderChoice = $state('');
+	let newFolder = $state('');
+
+	/** Narrows the list (as the session search does, /regex/ included), so
+	 *  "Select all" can pick a group of a large file at a time. */
+	let filter = $state('');
+	let filterRe = $derived.by((): { re: RegExp | null; error: string | null } => {
+		const m = /^\/(.+)\/([a-z]*)$/.exec(filter.trim());
+		if (!m) return { re: null, error: null };
+		try {
+			return { re: new RegExp(m[1], (m[2] || 'i').replace(/[gy]/g, '')), error: null };
+		} catch (e) {
+			return { re: null, error: e instanceof Error ? e.message : String(e) };
+		}
+	});
+	let shownHosts = $derived.by(() => {
+		const raw = filter.trim();
+		if (!raw) return hosts;
+		if (filterRe.error) return [];
+		const fields = (h: HostImport) => [h.alias, h.hostname, h.user, `${h.user ? h.user + '@' : ''}${h.hostname}:${h.port}`];
+		if (filterRe.re) {
+			const re = filterRe.re;
+			return hosts.filter((h) => fields(h).some((f) => re.test(f)));
+		}
+		const q = raw.toLowerCase();
+		return hosts.filter((h) => fields(h).some((f) => f.toLowerCase().includes(q)));
+	});
+
+	let selectableHosts = $derived(shownHosts.filter((h) => !isAlreadyImported(h)));
 	let selectedCount = $derived(selected.size);
 	let canImport = $derived(selectedCount > 0 && !importing);
 	/** Errors in the files themselves: the same for every host, shown once. */
@@ -70,8 +101,12 @@
 		error = undefined;
 		selected = new Set();
 		expanded = null;
+		filter = '';
+		folderChoice = '';
+		newFolder = '';
 		try {
-			const [scan, sessions] = await Promise.all([sshconfigScan(), sessionList()]);
+			const [scan, sessions, folderList] = await Promise.all([sshconfigScan(), sessionList(), sessionListFolders()]);
+			folders = folderList;
 			hosts = scan.hosts;
 			files = scan.files;
 			existingSessions = sessions;
@@ -100,6 +135,12 @@
 		error = undefined;
 		let count = 0;
 		try {
+			let folderId: string | null = folderChoice && folderChoice !== NEW ? folderChoice : null;
+			if (folderChoice === NEW) {
+				const name = newFolder.trim();
+				if (!name) throw new Error(t('session.import_folder_name_needed'));
+				folderId = (await sessionCreateFolder(name, null, null)).id;
+			}
 			for (const host of hosts) {
 				if (!selected.has(host.alias)) continue;
 				const a = approvals[host.alias] ?? { commands: [], weakenings: [] };
@@ -113,7 +154,7 @@
 					port: host.port,
 					username: host.user,
 					authMethod: keyAuth(host.identityFiles),
-					folderId: null,
+					folderId,
 					tags: ['ssh-config'],
 					jumpChain,
 					sshOptions: { ...host.options, approved_commands: a.commands, accepted_weakenings: a.weakenings }
@@ -158,6 +199,18 @@
 				</div>
 			{/if}
 
+			<input
+				class="tool-input filter-input"
+				type="search"
+				placeholder={t('session.import_filter')}
+				aria-label={t('session.import_filter')}
+				bind:value={filter}
+				disabled={importing}
+			/>
+			{#if filterRe.error}
+				<p class="filter-error" role="alert">{t('session.regex_error', { error: filterRe.error })}</p>
+			{/if}
+
 			<div class="select-actions">
 				<button class="select-btn" onclick={() => (selected = new Set(selectableHosts.map((h) => h.alias)))} disabled={importing}>
 					{t('session.import_select_all')}
@@ -165,11 +218,28 @@
 				<button class="select-btn" onclick={() => (selected = new Set())} disabled={importing}>
 					{t('session.import_deselect_all')}
 				</button>
+				{#if filter.trim() && !filterRe.error}
+					<span class="filter-count">{t('session.matches_n', { count: String(shownHosts.length) })}</span>
+				{/if}
 				<span class="files" title={files.join('\n')}>{t('sshopt.files_read', { count: String(files.length) })}</span>
 			</div>
 
+			<div class="import-tools">
+				<label class="folder-pick">
+					<span>{t('session.import_into')}</span>
+					<select class="tool-input" bind:value={folderChoice} disabled={importing}>
+						<option value="">{t('session.import_no_folder')}</option>
+						{#each folders as f (f.id)}<option value={f.id}>{f.name}</option>{/each}
+						<option value={NEW}>{t('session.new_folder')}</option>
+					</select>
+				</label>
+				{#if folderChoice === NEW}
+					<input class="tool-input new-folder-input" type="text" placeholder={t('session.folder_name')} aria-label={t('session.folder_name')} bind:value={newFolder} disabled={importing} />
+				{/if}
+			</div>
+
 			<div class="host-list">
-				{#each hosts as host (host.alias)}
+				{#each shownHosts as host (host.alias)}
 					{@const already = isAlreadyImported(host)}
 					{@const waiting = pending(host)}
 					{@const missing = notYet(host)}
@@ -284,6 +354,54 @@
 		display: flex;
 		align-items: center;
 		gap: 6px;
+	}
+
+	.import-tools {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.tool-input {
+		min-height: 30px;
+		padding: 4px 8px;
+		border-radius: 6px;
+		border: 1px solid var(--color-border);
+		background: var(--color-bg-secondary);
+		color: var(--color-text-primary);
+		font: inherit;
+		font-size: 0.8125rem;
+	}
+
+	.filter-input {
+		width: 100%;
+		box-sizing: border-box;
+	}
+
+	.new-folder-input {
+		flex: 1 1 160px;
+		min-width: 0;
+	}
+
+	.folder-pick {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 0.75rem;
+		color: var(--color-text-secondary);
+	}
+
+	.filter-error,
+	.filter-count {
+		margin: 0;
+		font-size: 0.6875rem;
+		color: var(--color-text-secondary);
+	}
+
+	.filter-error {
+		color: var(--color-danger);
+		overflow-wrap: anywhere;
 	}
 
 	.files {

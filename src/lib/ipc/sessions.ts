@@ -147,6 +147,12 @@ export async function sessionDelete(sessionId: string): Promise<void> {
   return invoke('session_delete', { sessionId });
 }
 
+/** Move sessions into a folder (`null`: out of any folder) in one call.
+ *  Only the folder changes; returns how many moved. */
+export async function sessionMoveToFolder(sessionIds: string[], folderId: string | null): Promise<number> {
+  return invoke<number>('session_move_to_folder', { sessionIds, folderId });
+}
+
 export async function sessionListFolders(): Promise<Folder[]> {
   return invoke<Folder[]>('session_list_folders');
 }

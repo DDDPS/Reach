@@ -22,11 +22,25 @@ pub struct SystemEnv {
     pub exec: ExecPolicy,
     /// `Match exec` commands asked for but not allowed to run.
     pub refused: std::cell::RefCell<Vec<String>>,
+    /// What one resolve (or one import of many hosts) asks the system again
+    /// and again, asked once: files, names, addresses. A SystemEnv lives for
+    /// one scan or one connection, so nothing goes stale.
+    cache: Cache,
+}
+
+#[derive(Default)]
+struct Cache {
+    home: std::cell::OnceCell<String>,
+    user: std::cell::OnceCell<String>,
+    host: std::cell::OnceCell<String>,
+    addrs: std::cell::OnceCell<Vec<IpAddr>>,
+    files: std::cell::RefCell<std::collections::HashMap<PathBuf, Option<String>>>,
+    globs: std::cell::RefCell<std::collections::HashMap<String, Vec<PathBuf>>>,
 }
 
 impl SystemEnv {
     pub fn new(exec: ExecPolicy) -> Self {
-        Self { exec, refused: Default::default() }
+        Self { exec, refused: Default::default(), cache: Cache::default() }
     }
 
     /// The user's config file: ~/.ssh/config.
@@ -65,11 +79,11 @@ fn system_dir() -> String {
 
 impl Env for SystemEnv {
     fn home(&self) -> String {
-        dirs::home_dir().map(|h| h.display().to_string()).unwrap_or_default()
+        self.cache.home.get_or_init(|| dirs::home_dir().map(|h| h.display().to_string()).unwrap_or_default()).clone()
     }
 
     fn local_user(&self) -> String {
-        whoami::username().unwrap_or_default()
+        self.cache.user.get_or_init(|| whoami::username().unwrap_or_default()).clone()
     }
 
     fn uid(&self) -> String {
@@ -87,7 +101,7 @@ impl Env for SystemEnv {
     }
 
     fn local_host(&self) -> String {
-        gethostname::gethostname().to_string_lossy().into_owned()
+        self.cache.host.get_or_init(|| gethostname::gethostname().to_string_lossy().into_owned()).clone()
     }
 
     fn system_dir(&self) -> String {
@@ -95,15 +109,24 @@ impl Env for SystemEnv {
     }
 
     fn read(&self, path: &Path) -> Option<String> {
-        let bytes = std::fs::read(path).ok()?;
-        Some(String::from_utf8_lossy(&bytes).into_owned())
+        if let Some(hit) = self.cache.files.borrow().get(path) {
+            return hit.clone();
+        }
+        let text = std::fs::read(path).ok().map(|b| String::from_utf8_lossy(&b).into_owned());
+        self.cache.files.borrow_mut().insert(path.to_path_buf(), text.clone());
+        text
     }
 
     fn glob(&self, pattern: &str) -> Vec<PathBuf> {
-        match glob::glob(pattern) {
+        if let Some(hit) = self.cache.globs.borrow().get(pattern) {
+            return hit.clone();
+        }
+        let found: Vec<PathBuf> = match glob::glob(pattern) {
             Ok(paths) => paths.filter_map(Result::ok).filter(|p| p.is_file()).collect(),
             Err(_) => Vec::new(),
-        }
+        };
+        self.cache.globs.borrow_mut().insert(pattern.to_string(), found.clone());
+        found
     }
 
     fn getenv(&self, name: &str) -> Option<String> {
@@ -111,7 +134,7 @@ impl Env for SystemEnv {
     }
 
     fn local_addresses(&self) -> Vec<IpAddr> {
-        if_addrs::get_if_addrs().map(|v| v.into_iter().map(|i| i.ip()).collect()).unwrap_or_default()
+        self.cache.addrs.get_or_init(|| if_addrs::get_if_addrs().map(|v| v.into_iter().map(|i| i.ip()).collect()).unwrap_or_default()).clone()
     }
 
     fn exec(&self, command: &str) -> Result<bool, String> {

@@ -263,6 +263,46 @@ pub async fn session_update(
     Ok(session)
 }
 
+/// Move many sessions into a folder (`None`: out of any folder) in one
+/// go. Only `folder_id` changes: each stored session is read and written
+/// back with every other field as it was, including fields a newer Reach
+/// may have added. Returns how many moved; a session that no longer
+/// exists is skipped.
+#[tauri::command]
+#[tracing::instrument(skip(state, session_ids), fields(count = session_ids.len()))]
+pub async fn session_move_to_folder(
+    state: State<'_, AppState>,
+    session_ids: Vec<String>,
+    folder_id: Option<String>,
+) -> Result<u32, String> {
+    let manager = state.vault_manager.lock().await;
+    if manager.is_locked() {
+        return Err("Vault is locked".to_string());
+    }
+    let mut moved = 0u32;
+    for id in &session_ids {
+        let Some(vault_id) = find_session_vault(&manager, id).await else { continue };
+        let plaintext = manager.read_secret(&vault_id, id).await.map_err(|e| e.to_string())?;
+        use secrecy::ExposeSecret;
+        let mut value: serde_json::Value =
+            serde_json::from_slice(plaintext.expose_secret()).map_err(|e| format!("Invalid session data: {e}"))?;
+        let Some(obj) = value.as_object_mut() else { return Err(format!("Invalid session data: {id}")) };
+        let target = folder_id.clone().map_or(serde_json::Value::Null, serde_json::Value::String);
+        if obj.get("folder_id") == Some(&target) {
+            continue;
+        }
+        obj.insert("folder_id".into(), target);
+        let json = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
+        manager
+            .update_secret(&vault_id, id, SecretBox::new(Box::new(json)))
+            .await
+            .map_err(|e| e.to_string())?;
+        moved += 1;
+    }
+    tracing::info!("Moved {moved} sessions to folder {folder_id:?}");
+    Ok(moved)
+}
+
 /// Delete a session by ID. O(1) delete.
 #[tauri::command]
 #[tracing::instrument(skip(state))]

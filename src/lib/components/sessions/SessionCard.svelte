@@ -15,9 +15,23 @@
 		oncontextmenu?: (e: MouseEvent) => void;
 		ondragstart?: (e: PointerEvent) => void;
 		ondragend?: () => void;
+		/** Selecting several: a click selects instead of connecting. */
+		selecting?: boolean;
+		selected?: boolean;
+		/** Ctrl/Cmd or Shift click, or any click while selecting. */
+		onselect?: (e: MouseEvent) => void;
 	}
 
-	let { session, vault = null, onconnect, onedit, ondelete, oncontextmenu, ondragstart, ondragend }: Props = $props();
+	let { session, vault = null, onconnect, onedit, ondelete, oncontextmenu, ondragstart, ondragend, selecting = false, selected = false, onselect }: Props = $props();
+
+	function onMain(e: MouseEvent): void {
+		if (onselect && (selecting || e.ctrlKey || e.metaKey || e.shiftKey)) {
+			e.preventDefault();
+			onselect(e);
+		} else {
+			onconnect();
+		}
+	}
 
 	let authLabel = $derived(
 		session.auth_method.type === 'Password' ? t('session.auth_pw_label') :
@@ -26,7 +40,16 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="session-card" oncontextmenu={oncontextmenu} role="group">
+<div class="session-card" class:selected oncontextmenu={oncontextmenu} role="group">
+	{#if selecting}
+		<input
+			class="select-box"
+			type="checkbox"
+			checked={selected}
+			aria-label={t('session.select_name', { name: session.name })}
+			onclick={(e) => { e.stopPropagation(); onselect?.(e); }}
+		/>
+	{/if}
 	<span
 		class="drag-handle"
 		role="img"
@@ -39,7 +62,7 @@
 			<circle cx="2" cy="10" r="1.2"/><circle cx="6" cy="10" r="1.2"/>
 		</svg>
 	</span>
-	<button class="card-main" onclick={onconnect} title={t('session.connect_to', { name: session.name })}>
+	<button class="card-main" onclick={onMain} aria-pressed={selecting ? selected : undefined} title={selecting ? t('session.select_name', { name: session.name }) : t('session.connect_to', { name: session.name })}>
 		<DistroIcon osId={session.detected_os} size={18} />
 		<div class="session-info">
 			<span class="session-name-row">
@@ -121,6 +144,20 @@
 
 	.session-card:hover {
 		background-color: var(--color-surface-hover);
+	}
+
+	.session-card.selected,
+	.session-card.selected:hover {
+		background-color: color-mix(in srgb, var(--color-accent) 18%, transparent);
+	}
+
+	.select-box {
+		flex-shrink: 0;
+		width: 15px;
+		height: 15px;
+		margin: 0 4px 0 2px;
+		accent-color: var(--color-accent);
+		cursor: pointer;
 	}
 
 	.card-main {
