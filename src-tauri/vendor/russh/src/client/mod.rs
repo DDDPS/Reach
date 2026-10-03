@@ -76,7 +76,10 @@ use crate::{
 
 mod encrypted;
 mod kex;
+mod openssh_ext;
 mod session;
+
+pub use openssh_ext::HostKeyProof;
 
 #[cfg(test)]
 mod test;
@@ -102,6 +105,9 @@ pub struct Session {
     inbound_channel_receiver: Receiver<Msg>,
     open_global_requests: VecDeque<GlobalRequestResponse>,
     server_sig_algs: Option<Vec<Algorithm>>,
+    /// The host key algorithm of the last key exchange, which RSA host key
+    /// proofs are checked with (OpenSSH's kex->hostkey_alg).
+    host_key_algorithm: Option<Algorithm>,
 }
 
 impl Drop for Session {
@@ -240,6 +246,21 @@ pub enum Msg {
     },
     NoMoreSessions {
         want_reply: bool,
+    },
+    /// hostkeys-prove-00@openssh.com for these keys.
+    ProveHostKeys {
+        keys: Vec<PublicKey>,
+        reply_channel: oneshot::Sender<Result<Vec<HostKeyProof>, crate::Error>>,
+    },
+    /// A tun@openssh.com channel.
+    ChannelOpenTun {
+        mode: u32,
+        remote_unit: u32,
+        channel_ref: ChannelRef,
+    },
+    /// The session identifier, once there is one.
+    GetSessionId {
+        reply_channel: oneshot::Sender<Option<Vec<u8>>>,
     },
 }
 
@@ -1226,6 +1247,7 @@ impl Session {
             pending_len: 0,
             open_global_requests: VecDeque::new(),
             server_sig_algs: None,
+            host_key_algorithm: None,
         }
     }
 
@@ -1676,6 +1698,22 @@ impl Session {
             Msg::NoMoreSessions { want_reply } => {
                 let _ = self.no_more_sessions(want_reply);
             }
+            Msg::ProveHostKeys {
+                keys,
+                reply_channel,
+            } => self.request_host_key_proofs(keys, reply_channel)?,
+            Msg::ChannelOpenTun {
+                mode,
+                remote_unit,
+                channel_ref,
+            } => {
+                let id = self.channel_open_tun(mode, remote_unit)?;
+                self.channels.insert(id, channel_ref);
+            }
+            Msg::GetSessionId { reply_channel } => {
+                let id = self.common.encrypted.as_ref().map(|e| e.session_id.to_vec());
+                let _ = reply_channel.send(id);
+            }
             Msg::ServerChannelOpenReply { pending, result } => {
                 self.finalize_server_channel_open_reply(pending, result)?;
             }
@@ -1859,6 +1897,7 @@ async fn reply<H: Handler>(
                     newkeys,
                 } => {
                     debug!("kex impl has completed");
+                    session.host_key_algorithm = Some(newkeys.names.key.clone());
                     session.common.strict_kex =
                         session.common.strict_kex || newkeys.names.strict_kex();
 
@@ -2729,7 +2768,11 @@ pub trait Handler: Sized + Send {
         window
     }
 
-    /// Called when the server signals success.
+    /// Called when the server announces all its host keys
+    /// (hostkeys-00@openssh.com, sent after login). Keys that do not parse
+    /// are left out, as OpenSSH skips them. To learn them as ssh's
+    /// UpdateHostKeys does, ask the server to prove the new ones with
+    /// [`Session::prove_host_keys`].
     #[allow(unused_variables)]
     fn openssh_ext_host_keys_announced(
         &mut self,

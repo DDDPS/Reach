@@ -26,7 +26,6 @@ use crate::auth::AuthRequest;
 use crate::cert::PublicKeyOrCertificate;
 use crate::client::{ChannelOpenHandle, Handler, Msg, Prompt, Reply, Session};
 use crate::helpers::{AlgorithmExt, EncodedExt, NameList, sign_with_hash_alg};
-use crate::keys::key::parse_public_key;
 use crate::parsing::{ChannelOpenConfirmation, ChannelType, OpenChannelMessage, ensure_end};
 use crate::session::{Encrypted, EncryptedState, GlobalRequestResponse};
 use crate::{
@@ -746,13 +745,8 @@ impl Session {
                         let mut keys = vec![];
                         while !r.is_empty() {
                             let key_blob = map_err!(Bytes::decode(&mut r))?;
-                            match parse_public_key(&key_blob) {
-                                Ok(key) => keys.push(key),
-                                Err(ref err) => {
-                                    debug!(
-                                        "failed to parse announced host key {key_blob:?}: {err:?}",
-                                    )
-                                }
+                            if let Some(key) = super::openssh_ext::announced_host_key(&key_blob) {
+                                keys.push(key);
                             }
                         }
                         map_err!(ensure_end(&r))?;
@@ -970,6 +964,9 @@ impl Session {
                         map_err!(ensure_end(&r))?;
                         let _ = return_channel.send(true);
                     }
+                    Some(GlobalRequestResponse::HostKeysProve(keys, return_channel)) => {
+                        let _ = return_channel.send(self.check_host_key_proofs(&keys, &mut r));
+                    }
                     None => {
                         error!("Received global request failure for unknown request!")
                     }
@@ -1000,6 +997,9 @@ impl Session {
                     }
                     Some(GlobalRequestResponse::CancelStreamLocalForward(return_channel)) => {
                         let _ = return_channel.send(false);
+                    }
+                    Some(GlobalRequestResponse::HostKeysProve(_, return_channel)) => {
+                        let _ = return_channel.send(Err(Error::RequestDenied));
                     }
                     None => {
                         error!("Received global request failure for unknown request!")
@@ -1409,6 +1409,23 @@ impl Encrypted {
                     for oid in mechanism_oids {
                         oid.as_slice().encode(&mut self.write)?;
                     }
+                    true
+                }
+                auth::Method::Hostbased {
+                    ref algorithm,
+                    ref key_blob,
+                    ref client_host,
+                    ref client_user,
+                    ref signature,
+                } => {
+                    user.as_bytes().encode(&mut self.write)?;
+                    "ssh-connection".encode(&mut self.write)?;
+                    "hostbased".encode(&mut self.write)?;
+                    algorithm.as_str().encode(&mut self.write)?;
+                    key_blob.as_slice().encode(&mut self.write)?;
+                    client_host.as_str().encode(&mut self.write)?;
+                    client_user.as_str().encode(&mut self.write)?;
+                    signature.as_slice().encode(&mut self.write)?;
                     true
                 }
             }

@@ -368,6 +368,22 @@ impl<S: From<(ChannelId, ChannelMsg)> + Send + Sync + 'static> ChannelWriteHalf<
         Ok(())
     }
 
+    /// Send one datagram as one data message, as OpenSSH does on datagram
+    /// channels (tun@openssh.com): never split, and dropped when it does
+    /// not fit the server's window or packet size. `Ok(false)` if dropped.
+    pub async fn datagram(&self, data: impl Into<Bytes>) -> Result<bool, Error> {
+        let data = data.into();
+        {
+            let mut window_size = self.window_size.value.lock().await;
+            if data.len() > self.max_packet_size as usize || data.len() > *window_size as usize {
+                return Ok(false);
+            }
+            *window_size -= data.len() as u32;
+        }
+        self.send_msg(ChannelMsg::Data { data }).await?;
+        Ok(true)
+    }
+
     async fn reserve_writable_chunk(&self, remaining: usize) -> Result<usize, Error> {
         if self.max_packet_size == 0 {
             return Err(Error::Inconsistent);
@@ -630,6 +646,11 @@ impl<S: From<(ChannelId, ChannelMsg)> + Send + Sync + 'static> Channel<S> {
     /// Send owned bytes to a channel without copying them into the `AsyncWrite` path.
     pub async fn data_bytes(&self, data: impl Into<Bytes>) -> Result<(), Error> {
         self.write_half.data_bytes(data).await
+    }
+
+    /// Send one datagram whole, or drop it; see [`ChannelWriteHalf::datagram`].
+    pub async fn datagram(&self, data: impl Into<Bytes>) -> Result<bool, Error> {
+        self.write_half.datagram(data).await
     }
 
     /// Send data to a channel. The number of bytes added to the

@@ -64,6 +64,8 @@ pub struct AuthPolicy {
     pub use_keychain: bool,
     /// GSSAPI settings, when GSSAPIAuthentication is on.
     pub gssapi: Option<super::gssapi::GssapiPolicy>,
+    /// HostbasedAuthentication (see `hostbased`), when on.
+    pub hostbased: Option<std::sync::Arc<super::hostbased::HostbasedContext>>,
 }
 
 /// Where to ask the user, and about which host.
@@ -586,8 +588,28 @@ pub(crate) async fn authenticate<H: russh::client::Handler>(
                 }
                 s
             }
+            MethodKind::HostBased if p.hostbased.is_some() => {
+                let ctx = p.hostbased.clone().expect("checked");
+                match super::hostbased::next_attempt(handle, user, &ctx).await {
+                    None => {
+                        done.push(method);
+                        continue;
+                    }
+                    Some(Err(e)) => {
+                        tracing::info!("SSH hostbased: {e}");
+                        continue;
+                    }
+                    Some(Ok(r)) => {
+                        let s = step(r);
+                        if matches!(s, Step::Success) {
+                            outcome.by = Some(AuthBy::Key);
+                        }
+                        s
+                    }
+                }
+            }
             MethodKind::HostBased => {
-                tracing::info!("SSH: {} is not available in Reach yet; skipped", <&str>::from(&method));
+                tracing::info!("SSH: {} is not set up for this host; skipped", <&str>::from(&method));
                 done.push(method);
                 continue;
             }
@@ -740,6 +762,7 @@ impl AuthPolicy {
             min_rsa_bits: o.first(Kw::RequiredRSASize).and_then(|n| n.parse().ok()).unwrap_or(1024),
             use_keychain: flag(Kw::UseKeychain, false),
             gssapi: flag(Kw::GSSAPIAuthentication, false).then(|| super::gssapi::GssapiPolicy::from_options(o)),
+            hostbased: None,
         }
     }
 }

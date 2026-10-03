@@ -56,6 +56,10 @@ pub struct HostKeyPolicy {
     pub warn_weak_crypto: bool,
     /// VerifyHostKeyDNS: 0 no, 1 yes, 2 ask.
     pub verify_dns: u8,
+    /// UpdateHostKeys (see `hostkey_update`).
+    pub update_host_keys: super::hostkey_update::UpdateHostKeys,
+    /// HostKeyAlgorithms as offered, which announced keys must be in.
+    pub host_key_algorithms: Vec<String>,
 }
 
 /// OpenSSH's default CASignatureAlgorithms (SSH_ALLOWED_CA_SIGALGS).
@@ -338,6 +342,8 @@ mod tests {
             tokens: Default::default(),
             warn_weak_crypto: false,
             verify_dns: 0,
+            update_host_keys: Default::default(),
+            host_key_algorithms: vec![],
         }
     }
 
