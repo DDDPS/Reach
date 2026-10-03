@@ -6860,6 +6860,7 @@ dependencies = [
  "keyring-core",
  "kube",
  "libc",
+ "libloading 0.8.9",
  "libsql",
  "linux-keyutils-keyring-store",
  "memsec",

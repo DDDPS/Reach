@@ -62,6 +62,8 @@ pub struct AuthPolicy {
     pub add_keys_lifetime: Option<u32>,
     pub min_rsa_bits: usize,
     pub use_keychain: bool,
+    /// GSSAPI settings, when GSSAPIAuthentication is on.
+    pub gssapi: Option<super::gssapi::GssapiPolicy>,
 }
 
 /// Where to ask the user, and about which host.
@@ -572,7 +574,19 @@ pub(crate) async fn authenticate<H: russh::client::Handler>(
                     }
                 }
             }
-            MethodKind::GssapiWithMic | MethodKind::HostBased => {
+            MethodKind::GssapiWithMic => {
+                // One mechanism, Kerberos, tried once: ssh moves past each
+                // mechanism it tried.
+                done.push(method);
+                let Some(g) = &p.gssapi else { continue };
+                let Some(r) = super::gssapi::authenticate(handle, user, ui.host, g).await? else { continue };
+                let s = step(r);
+                if matches!(s, Step::Success) {
+                    outcome.by = Some(AuthBy::Gssapi);
+                }
+                s
+            }
+            MethodKind::HostBased => {
                 tracing::info!("SSH: {} is not available in Reach yet; skipped", <&str>::from(&method));
                 done.push(method);
                 continue;
@@ -725,6 +739,7 @@ impl AuthPolicy {
             add_keys_lifetime,
             min_rsa_bits: o.first(Kw::RequiredRSASize).and_then(|n| n.parse().ok()).unwrap_or(1024),
             use_keychain: flag(Kw::UseKeychain, false),
+            gssapi: flag(Kw::GSSAPIAuthentication, false).then(|| super::gssapi::GssapiPolicy::from_options(o)),
         }
     }
 }

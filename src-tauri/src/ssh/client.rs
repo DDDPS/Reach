@@ -363,6 +363,8 @@ pub(crate) enum AuthBy {
     Key,
     Agent,
     Password,
+    /// Kerberos, through gssapi-with-mic.
+    Gssapi,
     /// The server let the user in without credentials ("none").
     NoCredentials,
 }

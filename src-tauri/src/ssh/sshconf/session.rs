@@ -418,5 +418,14 @@ fn auth_policy(r: &Resolved, plan: &super::apply::Plan, imported: bool) -> crate
     };
     let ids = paths(&r.options.identity_files);
     let certs = paths(&r.options.certificate_files);
-    crate::ssh::userauth::AuthPolicy::from_options(&r.options, ids, certs, plan.pubkey_algorithms.clone(), imported)
+    let mut p = crate::ssh::userauth::AuthPolicy::from_options(&r.options, ids, certs, plan.pubkey_algorithms.clone(), imported);
+    // GSSAPIDelegateCredentials hands the server your Kerberos credentials:
+    // only once approved.
+    if let Some(g) = p.gssapi.as_mut().filter(|g| g.delegate) {
+        if !plan.approved(&r.options, super::keyword::Kw::GSSAPIDelegateCredentials, "yes") {
+            tracing::warn!("GSSAPIDelegateCredentials yes waits for approval; not delegating");
+            g.delegate = false;
+        }
+    }
+    p
 }

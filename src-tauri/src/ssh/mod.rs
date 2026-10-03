@@ -1,5 +1,6 @@
 pub mod client;
 pub mod forwarding;
+pub mod gssapi;
 pub mod hostkeys;
 pub mod knownhosts;
 pub mod sshconf;

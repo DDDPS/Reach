@@ -36,6 +36,9 @@ pub fn support(kw: Kw) -> Support {
         IdentityFile | IdentitiesOnly | IdentityAgent | CertificateFile | AddKeysToAgent | BatchMode
         | KbdInteractiveAuthentication | KbdInteractiveDevices | NumberOfPasswordPrompts | PasswordAuthentication
         | PreferredAuthentications | PubkeyAcceptedAlgorithms | PubkeyAuthentication | UseKeychain => Support::Yes,
+        // Kerberos (ssh/gssapi.rs), with the Debian/Fedora patch's options.
+        GSSAPIAuthentication | GSSAPIDelegateCredentials | GSSAPIClientIdentity | GSSAPIServerIdentity
+        | GSSAPITrustDns => Support::Yes,
         // Host keys (ssh/hostkeys.rs).
         StrictHostKeyChecking | UserKnownHostsFile | GlobalKnownHostsFile | HostKeyAlias | CheckHostIP
         | HashKnownHosts | NoHostAuthenticationForLocalhost | RevokedHostKeys | KnownHostsCommand | VisualHostKey
@@ -51,12 +54,10 @@ pub fn support(kw: Kw) -> Support {
         // X11 (ssh/x11.rs).
         ForwardX11 | ForwardX11Trusted | ForwardX11Timeout | XAuthLocation => Support::Yes,
         ControlMaster | ControlPath
-        | ControlPersist | EnableSSHKeysign | GSSAPIAuthentication
-        | GSSAPIDelegateCredentials | HostbasedAcceptedAlgorithms | HostbasedAuthentication | LogLevel | LogVerbose
+        | ControlPersist | EnableSSHKeysign | HostbasedAcceptedAlgorithms | HostbasedAuthentication | LogLevel | LogVerbose
         | PKCS11Provider | SecurityKeyProvider | Tunnel
         | TunnelDevice | UpdateHostKeys | VerifyHostKeyDNS
-        | GSSAPIKeyExchange | GSSAPIClientIdentity | GSSAPIServerIdentity | GSSAPIRenewalForcesRekey
-        | GSSAPITrustDns | GSSAPIKexAlgorithms => Support::NotYet,
+        | GSSAPIKeyExchange | GSSAPIRenewalForcesRekey | GSSAPIKexAlgorithms => Support::NotYet,
     }
 }
 
@@ -76,6 +77,7 @@ pub fn weakening(kw: Kw, args: &[String]) -> Option<&'static str> {
             "never remembers host keys, so every key is new and none can be checked"
         }
         (Kw::ForwardAgent, x) if x != "no" => "lets the server use your keys while you are connected",
+        (Kw::GSSAPIDelegateCredentials, "yes") => "gives the server your Kerberos credentials",
         (Kw::ForwardX11Trusted, "yes") => "gives the server full access to your display",
         (Kw::ForwardX11, "yes") => "lets the server open windows on your display",
         (Kw::GatewayPorts, "yes") => "opens forwarded ports to the whole network, not just this machine",
