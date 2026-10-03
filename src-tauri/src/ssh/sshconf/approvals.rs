@@ -1,10 +1,14 @@
 //! A session's approvals (commands that may run, weaker settings that may
 //! apply) are the user's own decisions, but the session record syncs and
 //! may sit in a vault other people can write to. So each approval is
-//! stored signed: who gave it, which session and list it is for, what was
-//! approved, and an HMAC-SHA256 under a key only that identity has
-//! (`VaultManager::approval_key`). Nobody else can write one that passes,
-//! and one cannot be copied to another session or list.
+//! stored signed: who gave it, which list it is for, what was approved, and
+//! an HMAC-SHA256 under a key only that identity has
+//! (`VaultManager::approval_key`) over all of that and the session's
+//! context: its id and everything that decides where and how it connects
+//! (see `session_commands::approval_context`). Nobody else can write one
+//! that passes, and one does not survive a change of host, port, user,
+//! route or ssh_config: an approval given for one server is never replayed
+//! against another.
 
 use base64::Engine;
 
@@ -27,9 +31,9 @@ impl Kind {
 const SEP: char = '\t';
 
 /// HMAC-SHA256: HKDF's extract step is exactly HMAC(salt, ikm).
-fn mac(key: &[u8; 32], who: &str, kind: Kind, session: &str, what: &str) -> [u8; 32] {
+fn mac(key: &[u8; 32], who: &str, kind: Kind, context: &str, what: &str) -> [u8; 32] {
     let mut msg = Vec::new();
-    for part in [who, kind.tag(), session, what] {
+    for part in [who, kind.tag(), context, what] {
         msg.extend((part.len() as u32).to_be_bytes());
         msg.extend(part.as_bytes());
     }
@@ -42,8 +46,8 @@ fn b64() -> base64::engine::GeneralPurpose {
 }
 
 /// The stored form of one approval.
-pub fn sign(key: &[u8; 32], who: &str, kind: Kind, session: &str, what: &str) -> String {
-    format!("{who}{SEP}{}{SEP}{}", b64().encode(what.as_bytes()), b64().encode(mac(key, who, kind, session, what)))
+pub fn sign(key: &[u8; 32], who: &str, kind: Kind, context: &str, what: &str) -> String {
+    format!("{who}{SEP}{}{SEP}{}", b64().encode(what.as_bytes()), b64().encode(mac(key, who, kind, context, what)))
 }
 
 /// Who an entry claims to be from.
@@ -51,9 +55,10 @@ fn owner(entry: &str) -> Option<&str> {
     entry.split(SEP).next()
 }
 
-/// The approvals in `stored` that `who` really gave for this session and
-/// list. Anything else, forged or copied, is not among them.
-pub fn verified(stored: &[String], key: &[u8; 32], who: &str, kind: Kind, session: &str) -> Vec<String> {
+/// The approvals in `stored` that `who` really gave for this list and this
+/// context. Anything else, forged, copied or given before a change, is not
+/// among them.
+pub fn verified(stored: &[String], key: &[u8; 32], who: &str, kind: Kind, context: &str) -> Vec<String> {
     stored
         .iter()
         .filter_map(|e| {
@@ -64,7 +69,7 @@ pub fn verified(stored: &[String], key: &[u8; 32], who: &str, kind: Kind, sessio
             }
             let what = String::from_utf8(b64().decode(what).ok()?).ok()?;
             let tag = b64().decode(tag).ok()?;
-            let want = mac(key, who, kind, session, &what);
+            let want = mac(key, who, kind, context, &what);
             // Constant time.
             let same = tag.len() == want.len() && tag.iter().zip(want.iter()).fold(0u8, |a, (x, y)| a | (x ^ y)) == 0;
             same.then_some(what)
@@ -74,12 +79,12 @@ pub fn verified(stored: &[String], key: &[u8; 32], who: &str, kind: Kind, sessio
 
 /// `stored` with `who`'s approvals replaced by `mine`, signed; other
 /// people's entries stay for them.
-pub fn replace_mine(stored: &[String], mine: &[String], key: &[u8; 32], who: &str, kind: Kind, session: &str) -> Vec<String> {
+pub fn replace_mine(stored: &[String], mine: &[String], key: &[u8; 32], who: &str, kind: Kind, context: &str) -> Vec<String> {
     let mut out: Vec<String> = stored.iter().filter(|e| owner(e) != Some(who)).cloned().collect();
     let mut seen = std::collections::HashSet::new();
     for m in mine {
         if seen.insert(m.as_str()) {
-            out.push(sign(key, who, kind, session, m));
+            out.push(sign(key, who, kind, context, m));
         }
     }
     out

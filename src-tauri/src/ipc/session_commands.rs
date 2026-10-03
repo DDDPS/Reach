@@ -85,22 +85,51 @@ pub async fn session_list(state: State<'_, AppState>) -> Result<Vec<SessionConfi
     Ok(sessions)
 }
 
+/// What an approval is given for: the session and everything that decides
+/// where and how it connects. Change any of it (a shared vault's other
+/// members can) and the approvals given before no longer count. Credentials
+/// are left out, so saving a password does not cost the approvals.
+fn approval_context(s: &SessionConfig) -> String {
+    use sha2::Digest;
+    let jumps: Option<Vec<(String, u16, String)>> =
+        s.jump_chain.as_ref().map(|c| c.iter().map(|j| (j.host.clone(), j.port, j.username.clone())).collect());
+    let o = s.ssh_options.as_ref();
+    let v = serde_json::json!([
+        s.id,
+        s.host,
+        s.port,
+        s.username,
+        s.kind,
+        s.via_session_id,
+        s.shell,
+        jumps,
+        s.proxy,
+        o.map(|o| &o.imported),
+        o.map(|o| &o.lines),
+    ]);
+    sha2::Sha256::digest(v.to_string().as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// After reading a session: the user's approvals are the ones signed with
-/// their key for this session; nothing else in the record counts.
+/// their key for this session as it now is; nothing else in the record
+/// counts.
 fn open_approvals(manager: &crate::vault::VaultManager, session: &mut SessionConfig) {
+    let context = approval_context(session);
     if let Some(o) = session.ssh_options.as_mut() {
         let key = manager.approval_key();
         let who = manager.get_user_uuid();
-        o.open_for(key.as_deref(), who.as_deref(), &session.id);
+        o.open_for(key.as_deref(), who.as_deref(), &context);
     }
 }
 
-/// Before storing a session: the user's approvals signed into it.
+/// Before storing a session: the user's approvals signed into it, for it as
+/// it is saved.
 fn seal_approvals(manager: &crate::vault::VaultManager, session: &mut SessionConfig) {
+    let context = approval_context(session);
     if let Some(o) = session.ssh_options.as_mut() {
         let key = manager.approval_key();
         let who = manager.get_user_uuid();
-        o.seal_for(key.as_deref(), who.as_deref(), &session.id);
+        o.seal_for(key.as_deref(), who.as_deref(), &context);
     }
 }
 
@@ -606,5 +635,53 @@ mod unique_tests {
         let listed = unique_sessions(vec![session("a", "v1"), session("b", "v1"), session("a", "v2")]);
         let ids: Vec<_> = listed.iter().map(|s| (s.id.as_str(), s.vault_id.as_deref())).collect();
         assert_eq!(ids, [("a", Some("v1")), ("b", Some("v1"))]);
+    }
+}
+
+#[cfg(test)]
+mod approval_tests {
+    use super::*;
+
+    fn session() -> SessionConfig {
+        serde_json::from_value(serde_json::json!({
+            "id": "s1", "name": "web", "host": "web.example", "port": 22, "username": "u",
+            "auth_method": { "type": "Agent" }, "folder_id": null, "tags": [],
+            "ssh_options": { "lines": ["StrictHostKeyChecking no"] },
+        }))
+        .unwrap()
+    }
+
+    fn mine_after_reading(s: &SessionConfig, key: &[u8; 32]) -> Vec<String> {
+        let mut s = s.clone();
+        let context = approval_context(&s);
+        let o = s.ssh_options.as_mut().unwrap();
+        o.open_for(Some(key), Some("alice"), &context);
+        o.my_accepted_weakenings.clone().unwrap()
+    }
+
+    #[test]
+    fn an_approval_does_not_follow_a_changed_server() {
+        let key = [3u8; 32];
+        let mut s = session();
+        s.ssh_options.as_mut().unwrap().my_accepted_weakenings = Some(vec!["StrictHostKeyChecking no".into()]);
+        let context = approval_context(&s);
+        s.ssh_options.as_mut().unwrap().seal_for(Some(&key), Some("alice"), &context);
+        assert_eq!(mine_after_reading(&s, &key), vec!["StrictHostKeyChecking no"]);
+
+        // Someone points the session at their own server: the approval stays
+        // in the record but counts for nothing.
+        let mut moved = s.clone();
+        moved.host = "attacker.example".into();
+        assert!(mine_after_reading(&moved, &key).is_empty());
+        let mut lines = s.clone();
+        lines.ssh_options.as_mut().unwrap().lines.push("ProxyJump evil".into());
+        assert!(mine_after_reading(&lines, &key).is_empty());
+
+        // Saving a password, a name or a folder changes none of that.
+        let mut renamed = s.clone();
+        renamed.name = "web (prod)".into();
+        renamed.folder_id = Some("f".into());
+        renamed.auth_method = AuthMethod::Password { password: Some("pw".into()) };
+        assert_eq!(mine_after_reading(&renamed, &key), vec!["StrictHostKeyChecking no"]);
     }
 }

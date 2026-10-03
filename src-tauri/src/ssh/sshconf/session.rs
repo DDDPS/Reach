@@ -86,14 +86,15 @@ impl SshOptions {
         }
     }
 
-    /// After reading a session: the approvals `who` really gave for it.
-    /// Whatever a stored record claims in the plain fields is replaced.
-    pub fn open_for(&mut self, key: Option<&[u8; 32]>, who: Option<&str>, session: &str) {
+    /// After reading a session: the approvals `who` really gave for it as it
+    /// now is (`context`). Whatever a stored record claims in the plain
+    /// fields is replaced.
+    pub fn open_for(&mut self, key: Option<&[u8; 32]>, who: Option<&str>, context: &str) {
         use super::approvals::{verified, Kind};
         let (cmds, weak) = match (key, who) {
             (Some(k), Some(w)) => (
-                verified(&self.approved_commands, k, w, Kind::Command, session),
-                verified(&self.accepted_weakenings, k, w, Kind::Weakening, session),
+                verified(&self.approved_commands, k, w, Kind::Command, context),
+                verified(&self.accepted_weakenings, k, w, Kind::Weakening, context),
             ),
             _ => (Vec::new(), Vec::new()),
         };
@@ -103,14 +104,14 @@ impl SshOptions {
 
     /// Before storing a session: `who`'s plain approvals signed into the
     /// lists, other people's kept, the plain fields dropped.
-    pub fn seal_for(&mut self, key: Option<&[u8; 32]>, who: Option<&str>, session: &str) {
+    pub fn seal_for(&mut self, key: Option<&[u8; 32]>, who: Option<&str>, context: &str) {
         use super::approvals::{replace_mine, Kind};
         if let (Some(k), Some(w)) = (key, who) {
             if let Some(m) = self.my_approved_commands.take() {
-                self.approved_commands = replace_mine(&self.approved_commands, &m, k, w, Kind::Command, session);
+                self.approved_commands = replace_mine(&self.approved_commands, &m, k, w, Kind::Command, context);
             }
             if let Some(m) = self.my_accepted_weakenings.take() {
-                self.accepted_weakenings = replace_mine(&self.accepted_weakenings, &m, k, w, Kind::Weakening, session);
+                self.accepted_weakenings = replace_mine(&self.accepted_weakenings, &m, k, w, Kind::Weakening, context);
             }
         }
         self.my_approved_commands = None;
