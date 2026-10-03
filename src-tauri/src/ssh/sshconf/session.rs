@@ -320,6 +320,9 @@ fn x11_config(o: &super::resolve::Options, plan: &super::apply::Plan, approved_c
     }
     let display = match std::env::var("DISPLAY") {
         Ok(d) if !d.is_empty() => d,
+        // Windows has no X server of its own: Reach provides one (an
+        // empty display asks for it, see ssh/xserver.rs).
+        _ if cfg!(windows) => String::new(),
         _ => {
             tracing::warn!("ForwardX11: DISPLAY is not set on this computer; not forwarding X11");
             return None;

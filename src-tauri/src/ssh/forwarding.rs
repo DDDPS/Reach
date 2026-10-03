@@ -75,6 +75,11 @@ impl ForwardTable {
         self.policy.lock().unwrap().clone()
     }
 
+    /// The X11 cookies prepared already (`prepare_x11`), if any.
+    pub fn prepared_x11(&self) -> Option<super::x11::X11Auth> {
+        self.x11.lock().unwrap().clone()
+    }
+
     /// The X11 request for the session channel, when ForwardX11 is on.
     /// A setup failure leaves X11 off and the session going, as with ssh.
     pub async fn prepare_x11(&self) -> Option<super::x11::X11Auth> {

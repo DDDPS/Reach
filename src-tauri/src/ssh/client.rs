@@ -1033,6 +1033,11 @@ impl SshManager {
         if let Some(conn) = shared_session(&info, &opts, cols, rows, shell.as_deref(), &login, &app_handle).await {
             return conn;
         }
+        // X11 first: a first start of Reach's X server (download, unpack,
+        // start) must not count against the connect timeout.
+        if let Some(t) = &opts.forwards {
+            t.prepare_x11().await;
+        }
         let timeout_duration = opts.connect_limit(std::time::Duration::from_secs(15));
         let connect_future = async {
             let handle = Self::handshake_direct(host, port, username, &auth, proxy.as_ref(), app_handle.clone(), &opts, true).await?;
@@ -1225,6 +1230,9 @@ impl SshManager {
             return conn;
         }
 
+        if let Some(t) = &opts.forwards {
+            t.prepare_x11().await;
+        }
         let base = std::time::Duration::from_secs(30);
         let timeout_duration = jump_chain.first().map_or(base, |j| j.opts.connect_limit(base));
         let connect_future = Self::handshake_via_jump(
@@ -2275,7 +2283,10 @@ async fn open_session(
         }
         let channel = handle.channel_open_session().await.map_err(|e| SshError::ChannelError(format!("Failed to open session: {}", e)))?;
         let x11 = match &opts.forwards {
-            Some(t) => t.prepare_x11().await,
+            Some(t) => match t.prepared_x11() {
+                Some(a) => Some(a),
+                None => t.prepare_x11().await,
+            },
             None => None,
         };
         let tty = setup_channel(&channel, p, cols, rows, shell, x11.as_ref()).await.map_err(SshError::ChannelError)?;

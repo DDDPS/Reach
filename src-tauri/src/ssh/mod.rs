@@ -25,3 +25,5 @@ pub mod tun;
 pub mod sk;
 pub mod userauth;
 pub mod x11;
+#[cfg(windows)]
+pub mod xserver;

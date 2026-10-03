@@ -76,7 +76,16 @@ fn display_number(display: &str) -> Option<u32> {
 }
 
 async fn run(cmd: &str, args: &[&str]) -> Option<String> {
+    run_with(cmd, args, None).await
+}
+
+/// `run`, with XAUTHORITY set: how xauth proves itself to a server that
+/// wants a cookie.
+async fn run_with(cmd: &str, args: &[&str], xauthority: Option<&std::path::Path>) -> Option<String> {
     let mut c = tokio::process::Command::new(cmd);
+    if let Some(a) = xauthority {
+        c.env("XAUTHORITY", a);
+    }
     c.args(args).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true);
     #[cfg(windows)]
     c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
@@ -126,6 +135,21 @@ fn parse_list(out: &str) -> Option<(String, Vec<u8>)> {
 /// fake one the server gets. Untrusted forwarding without a cookie from
 /// xauth fails, as with ssh, instead of falling back to trusted.
 pub async fn prepare(cfg: &X11Config) -> Result<X11Auth, String> {
+    // Windows without DISPLAY: an X server already running here, or the
+    // one Reach starts (see `xserver`), as MobaXterm brings its own.
+    #[cfg(windows)]
+    if cfg.display.is_empty() {
+        let d = super::xserver::ensure(|m| tracing::warn!("{m}")).await?;
+        let mut local = cfg.clone();
+        local.display = d.name.clone();
+        if let Some(x) = d.xauth.as_ref().filter(|_| !std::path::Path::new(&cfg.xauth).is_file()) {
+            local.xauth = x.to_string_lossy().into_owned();
+        }
+        if let (Some(cookie), Some(file)) = (d.cookie, d.auth_file) {
+            return prepare_own(&local, cookie, &file).await;
+        }
+        return Box::pin(prepare(&local)).await;
+    }
     if !display_valid(&cfg.display) {
         return Err(format!("DISPLAY \"{}\" invalid; X11 forwarding is off", cfg.display));
     }
@@ -172,6 +196,42 @@ pub async fn prepare(cfg: &X11Config) -> Result<X11Auth, String> {
         fake,
         deadline: if cfg.trusted { None } else { cfg.timeout.map(|t| Instant::now() + t) },
         screen: screen_of(&cfg.display),
+    })
+}
+
+/// For the X server Reach started: the cookie is Reach's own. Trusted
+/// forwarding uses it as the real one; untrusted forwarding has xauth
+/// (proving itself with that cookie) ask the server for a restricted one.
+#[cfg(windows)]
+async fn prepare_own(cfg: &X11Config, cookie: Vec<u8>, auth_file: &std::path::Path) -> Result<X11Auth, String> {
+    let real = if cfg.trusted {
+        cookie
+    } else {
+        let dir = PrivateDir::new().map_err(|e| format!("X11: {e}"))?;
+        let file = dir.0.join("xauthfile");
+        let file = file.to_string_lossy();
+        let mut args = vec!["-f", &file, "generate", &cfg.display, PROTO, "untrusted"];
+        let secs;
+        if let Some(t) = cfg.timeout {
+            secs = t.as_secs().saturating_add(SLACK).min(u32::MAX as u64).to_string();
+            args.extend(["timeout", &secs]);
+        }
+        if run_with(&cfg.xauth, &args, Some(auth_file)).await.is_none() {
+            return Err("untrusted X11 forwarding setup failed: xauth key data not generated".into());
+        }
+        // The file holds just the generated entry.
+        let listed = run_with(&cfg.xauth, &["-f", &file, "list"], Some(auth_file)).await;
+        listed.as_deref().and_then(parse_list).map(|(_, d)| d).ok_or("untrusted X11 forwarding setup failed: xauth key data not generated")?
+    };
+    let mut fake = vec![0u8; real.len()];
+    rand::fill(&mut fake[..]);
+    Ok(X11Auth {
+        display: cfg.display.clone(),
+        proto: PROTO.to_string(),
+        real,
+        fake,
+        deadline: if cfg.trusted { None } else { cfg.timeout.map(|t| Instant::now() + t) },
+        screen: 0,
     })
 }
 
