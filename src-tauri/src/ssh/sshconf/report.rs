@@ -63,7 +63,7 @@ pub fn support(kw: Kw) -> Support {
 /// Keywords that run a program on this machine; they need the user's
 /// approval before Reach runs them.
 pub fn runs_command(kw: Kw) -> bool {
-    matches!(kw, Kw::ProxyCommand | Kw::LocalCommand | Kw::KnownHostsCommand)
+    matches!(kw, Kw::ProxyCommand | Kw::LocalCommand | Kw::KnownHostsCommand | Kw::XAuthLocation)
 }
 
 /// Settings that make the connection less safe than Reach's defaults,

@@ -230,7 +230,7 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
         let key = crate::ssh::session_opts::send_env_key(&r.options);
         let send_env_allowed = opts.accepted_weakenings.contains(&key);
         let mut session = crate::ssh::session_opts::SessionPolicy::from_options(&r.options, local, send_env_allowed);
-        let forwards = forward_policy(&r, &plan);
+        let forwards = forward_policy(&r, &plan, &opts.approved_commands);
         session.agent_forward = forwards.agent.is_some();
         plan.session = Some(session);
         plan.forwards = Some(forwards);
@@ -246,7 +246,7 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
 
 /// Forwards as the config sets them. ForwardAgent applies once approved
 /// (it lets the server use your keys).
-fn forward_policy(r: &Resolved, plan: &super::apply::Plan) -> crate::ssh::forwarding::ForwardPolicy {
+fn forward_policy(r: &Resolved, plan: &super::apply::Plan, approved_commands: &[String]) -> crate::ssh::forwarding::ForwardPolicy {
     use super::keyword::Kw;
     use crate::ssh::userauth::AgentChoice;
     let o = &r.options;
@@ -288,13 +288,13 @@ fn forward_policy(r: &Resolved, plan: &super::apply::Plan) -> crate::ssh::forwar
         bind_unlink: o.first(Kw::StreamLocalBindUnlink) == Some("yes"),
         agent,
         timeouts,
-        x11: x11_config(o, plan),
+        x11: x11_config(o, plan, approved_commands),
     }
 }
 
 /// ForwardX11 with its trust, timeout and xauth, when on and approved and
 /// this machine has a display.
-fn x11_config(o: &super::resolve::Options, plan: &super::apply::Plan) -> Option<crate::ssh::x11::X11Config> {
+fn x11_config(o: &super::resolve::Options, plan: &super::apply::Plan, approved_commands: &[String]) -> Option<crate::ssh::x11::X11Config> {
     use super::keyword::Kw;
     if o.first(Kw::ForwardX11) != Some("yes") {
         return None;
@@ -323,7 +323,17 @@ fn x11_config(o: &super::resolve::Options, plan: &super::apply::Plan) -> Option<
         Some(s) if s > 0 => Some(std::time::Duration::from_secs(s as u64)),
         _ => Some(std::time::Duration::from_secs(1200)),
     };
-    let xauth = o.first(Kw::XAuthLocation).map(str::to_string).unwrap_or_else(default_xauth);
+    // XAuthLocation names a program Reach runs: like the other commands,
+    // it runs only once approved. Without approval X11 still works, with
+    // the usual xauth.
+    let xauth = match o.first(Kw::XAuthLocation) {
+        Some(x) if approved_commands.iter().any(|a| a == x) => x.to_string(),
+        Some(x) => {
+            tracing::warn!("XAuthLocation {x} waits for approval; using the usual xauth");
+            default_xauth()
+        }
+        None => default_xauth(),
+    };
     Some(crate::ssh::x11::X11Config { display, trusted, timeout, xauth })
 }
 
