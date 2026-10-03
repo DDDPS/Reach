@@ -185,6 +185,8 @@ pub fn lookup(word: &str) -> Lookup {
         "dsaauthentication" => return Lookup::Known(Kw::PubkeyAuthentication),
         "identityfile2" => return Lookup::Known(Kw::IdentityFile),
         "keepalive" => return Lookup::Known(Kw::TCPKeepAlive),
+        // Debian's name for it.
+        "protocolkeepalives" => return Lookup::Known(Kw::ServerAliveInterval),
         "hostbasedkeytypes" => return Lookup::Known(Kw::HostbasedAcceptedAlgorithms),
         "pubkeyacceptedkeytypes" => return Lookup::Known(Kw::PubkeyAcceptedAlgorithms),
         "smartcarddevice" => return Lookup::Known(Kw::PKCS11Provider),

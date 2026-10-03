@@ -475,6 +475,11 @@ fn agrees_with_ssh_g() {
                 if line.starts_with("updatehostkeys ") && !text.contains("UpdateHostKeys") {
                     continue;
                 }
+                // Debian's patch: ServerAliveInterval defaults to 300 under
+                // BatchMode. Upstream (and Reach) keep 0.
+                if *line == "serveraliveinterval 300" && text.contains("BatchMode yes") && !text.contains("ServerAliveInterval") {
+                    continue;
+                }
                 if !ours.contains(line) {
                     failures.push(format!("case {i} host {host}: ssh -G has \"{line}\""));
                 }
