@@ -229,7 +229,11 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
             .map(str::to_string);
         let key = crate::ssh::session_opts::send_env_key(&r.options);
         let send_env_allowed = opts.accepted_weakenings.iter().any(|a| *a == key);
-        plan.session = Some(crate::ssh::session_opts::SessionPolicy::from_options(&r.options, local, send_env_allowed));
+        let mut session = crate::ssh::session_opts::SessionPolicy::from_options(&r.options, local, send_env_allowed);
+        let forwards = forward_policy(&r, &plan);
+        session.agent_forward = forwards.agent.is_some();
+        plan.session = Some(session);
+        plan.forwards = Some(forwards);
     }
     for w in &plan.weakenings {
         tracing::warn!("ssh_config for {host}: {} {} weakens the connection: {}", w.keyword, w.value, w.reason);
@@ -238,6 +242,53 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
         tracing::info!("ssh_config for {host}: {} {:?}", kw.name(), u);
     }
     plan
+}
+
+/// Forwards as the config sets them. ForwardAgent applies once approved
+/// (it lets the server use your keys).
+fn forward_policy(r: &Resolved, plan: &super::apply::Plan) -> crate::ssh::forwarding::ForwardPolicy {
+    use super::keyword::Kw;
+    use crate::ssh::userauth::AgentChoice;
+    let o = &r.options;
+    let clear = o.first(Kw::ClearAllForwardings) == Some("yes");
+    let agent = match o.first(Kw::ForwardAgent) {
+        None | Some("no") => None,
+        Some(v) if !plan.approved(o, Kw::ForwardAgent, v) => {
+            tracing::warn!("ForwardAgent {v} waits for approval; not forwarding the agent");
+            None
+        }
+        Some("yes") => Some(AgentChoice::Default),
+        Some(path) => Some(AgentChoice::Socket(path.to_string())),
+    };
+    let permit_remote_open = o.get(Kw::PermitRemoteOpen).map(|s| s.args.clone()).filter(|a| !(a.len() == 1 && a[0].eq_ignore_ascii_case("any")));
+    let bind_mask = o
+        .first(Kw::StreamLocalBindMask)
+        .map(|m| m.trim_start().chars().take_while(|c| ('0'..='7').contains(c)).collect::<String>())
+        .and_then(|d| u32::from_str_radix(&d, 8).ok())
+        .unwrap_or(0o177);
+    let timeouts = o
+        .get(Kw::ChannelTimeout)
+        .filter(|s| !s.args.first().is_some_and(|a| a.eq_ignore_ascii_case("none")))
+        .map(|s| {
+            s.args
+                .iter()
+                .filter_map(|a| a.split_once('='))
+                .filter_map(|(t, d)| super::value::convtime_f(d).map(|x| (t.to_string(), std::time::Duration::from_secs_f64(x))))
+                .filter(|(_, d)| !d.is_zero())
+                .collect()
+        })
+        .unwrap_or_default();
+    crate::ssh::forwarding::ForwardPolicy {
+        local: if clear { Vec::new() } else { o.local_forwards.iter().map(|(f, _)| f.clone()).collect() },
+        remote: if clear { Vec::new() } else { o.remote_forwards.iter().map(|(f, _)| f.clone()).collect() },
+        gateway_ports: o.first(Kw::GatewayPorts) == Some("yes") && plan.approved(o, Kw::GatewayPorts, "yes"),
+        exit_on_failure: o.first(Kw::ExitOnForwardFailure) == Some("yes"),
+        permit_remote_open,
+        bind_mask,
+        bind_unlink: o.first(Kw::StreamLocalBindUnlink) == Some("yes"),
+        agent,
+        timeouts,
+    }
 }
 
 /// The host-key policy. UserKnownHostsFile and RevokedHostKeys come

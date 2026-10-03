@@ -46,12 +46,13 @@ pub fn support(kw: Kw) -> Support {
         // applies to ssh only when it logs to syslog (-y); it never does by
         // its own choice, and Reach does not either.
         RequestTTY | RemoteCommand | SessionType | SetEnv | SendEnv | StdinNull | EscapeChar | ObscureKeystrokeTiming | LocalCommand | PermitLocalCommand | RefuseConnection | ProxyCommand | ProxyUseFdpass | WarnWeakCrypto | ForkAfterAuthentication | SyslogFacility => Support::Yes,
-        ChannelTimeout | ClearAllForwardings | ControlMaster | ControlPath
-        | ControlPersist | DynamicForward | EnableEscapeCommandline | EnableSSHKeysign
-        | ExitOnForwardFailure | ForwardAgent | ForwardX11
-        | ForwardX11Timeout | ForwardX11Trusted | GatewayPorts | GSSAPIAuthentication
-        | GSSAPIDelegateCredentials | HostbasedAcceptedAlgorithms | HostbasedAuthentication | LocalForward | LogLevel | LogVerbose | PermitRemoteOpen
-        | PKCS11Provider | RemoteForward | SecurityKeyProvider | StreamLocalBindMask | StreamLocalBindUnlink | Tunnel
+        // Forwarding (ssh/forwarding.rs).
+        LocalForward | RemoteForward | DynamicForward | ClearAllForwardings | ExitOnForwardFailure | GatewayPorts | PermitRemoteOpen | StreamLocalBindMask | StreamLocalBindUnlink | ChannelTimeout | EnableEscapeCommandline | ForwardAgent => Support::Yes,
+        ControlMaster | ControlPath
+        | ControlPersist | EnableSSHKeysign | ForwardX11
+        | ForwardX11Timeout | ForwardX11Trusted | GSSAPIAuthentication
+        | GSSAPIDelegateCredentials | HostbasedAcceptedAlgorithms | HostbasedAuthentication | LogLevel | LogVerbose
+        | PKCS11Provider | SecurityKeyProvider | Tunnel
         | TunnelDevice | UpdateHostKeys | VerifyHostKeyDNS
         | XAuthLocation | GSSAPIKeyExchange | GSSAPIClientIdentity | GSSAPIServerIdentity | GSSAPIRenewalForcesRekey
         | GSSAPITrustDns | GSSAPIKexAlgorithms => Support::NotYet,

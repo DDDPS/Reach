@@ -45,6 +45,8 @@ pub struct SessionPolicy {
     pub local_command: Option<String>,
     /// ChannelTimeout: (channel type pattern, idle time).
     pub channel_timeouts: Vec<(String, Duration)>,
+    /// ForwardAgent, on and approved: ask for agent forwarding.
+    pub agent_forward: bool,
 }
 
 impl SessionPolicy {
@@ -112,6 +114,7 @@ impl SessionPolicy {
             obscure_ms,
             local_command,
             channel_timeouts,
+            agent_forward: false,
         }
     }
 
@@ -173,6 +176,9 @@ pub async fn setup_channel(
             .map_err(|e| format!("PTY request failed: {e}"))?;
     }
     let _ = channel.set_env(false, "COLORTERM", "truecolor").await;
+    if p.agent_forward {
+        channel.agent_forward(false).await.map_err(|e| format!("Agent forwarding request failed: {e}"))?;
+    }
     for (k, v) in &p.env {
         // Servers accept only what AcceptEnv lists; a refusal is not fatal,
         // as with ssh.

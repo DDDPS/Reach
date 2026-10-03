@@ -402,3 +402,82 @@ async fn live_config_proxycommand() {
     println!("approved: {approved:?}");
     assert!(approved.is_ok(), "{approved:?}");
 }
+
+/// Forwards from ssh_config, end to end: LocalForward to the server's own
+/// sshd (its banner comes back), DynamicForward through SOCKS5 to the same,
+/// RemoteForward from the server to a listener here. REACH_SSH_TEST and
+/// REACH_SSH_KEYS (k_good); the server needs bash.
+#[tokio::test]
+#[ignore = "needs an SSH server"]
+async fn live_config_forwards() {
+    use crate::ssh::sshconf::session::SshOptions;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let a = std::env::var("REACH_SSH_TEST").unwrap();
+    let (host, port) = a.rsplit_once(':').unwrap();
+    let port: u16 = port.parse().unwrap();
+    let key = std::fs::read_to_string(std::path::Path::new(&std::env::var("REACH_SSH_KEYS").unwrap()).join("k_good")).unwrap();
+    let kh = std::env::temp_dir().join(format!("reach-fwd-kh-{}", std::process::id()));
+
+    // Something on this side for the remote forward to reach.
+    let here = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let here_port = here.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = here.accept().await {
+            let _ = s.write_all(b"hello-from-reach\n").await;
+        }
+    });
+
+    let lines: Vec<String> = vec![
+        format!("UserKnownHostsFile {}", kh.display().to_string().replace('\\', "/")),
+        "StrictHostKeyChecking accept-new".into(),
+        "LocalForward 127.0.0.1:15432 127.0.0.1:22".into(),
+        "DynamicForward 127.0.0.1:11080".into(),
+        format!("RemoteForward 127.0.0.1:2290 127.0.0.1:{here_port}"),
+    ];
+    let o = SshOptions { lines, ..Default::default() };
+    let plan = crate::ssh::sshconf::session::plan_for(Some(&o), host, port, "reach", false);
+    let opts: HopOptions = plan.into();
+    let stream = crate::ssh::sshconf::net::connect(host, port, &opts.socket, false).await.unwrap();
+    let handler = SshClientHandler::new(host, port, None).with_hostkeys(opts.hostkeys.clone()).with_forwards(opts.forwards.clone());
+    let mut handle = russh::client::connect_stream(opts.config.clone(), stream, handler).await.unwrap();
+    let auth = AuthParams { key: Some(KeyAuth { source: KeySource::Material(key), passphrase: None }), password: None, allow_agent: false };
+    crate::ssh::client::login(&mut handle, "reach", &auth, &opts, None, host, port).await.unwrap().into_result().unwrap();
+    let shared: SharedHandle = Arc::new(tokio::sync::Mutex::new(handle));
+    let (_fwd, notes) = crate::ssh::forwarding::Forwarder::start(shared.clone(), opts.forwards.clone().unwrap()).await.unwrap();
+    println!("notes: {notes:?}");
+
+    let banner = |mut s: tokio::net::TcpStream| async move {
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), s.read(&mut buf)).await.unwrap().unwrap();
+        String::from_utf8_lossy(&buf[..n]).to_string()
+    };
+    let b = banner(tokio::net::TcpStream::connect("127.0.0.1:15432").await.unwrap()).await;
+    println!("LocalForward: {b:?}");
+    assert!(b.starts_with("SSH-2.0-OpenSSH"), "{b}");
+
+    let mut s = tokio::net::TcpStream::connect("127.0.0.1:11080").await.unwrap();
+    s.write_all(&[5, 1, 0]).await.unwrap();
+    let mut r = [0u8; 2];
+    s.read_exact(&mut r).await.unwrap();
+    s.write_all(&[5, 1, 0, 1, 127, 0, 0, 1, 0, 22]).await.unwrap();
+    let mut r = [0u8; 10];
+    s.read_exact(&mut r).await.unwrap();
+    assert_eq!(r[1], 0, "SOCKS5 reply");
+    let b = banner(s).await;
+    println!("DynamicForward: {b:?}");
+    assert!(b.starts_with("SSH-2.0-OpenSSH"), "{b}");
+
+    let mut ch = shared.lock().await.channel_open_session().await.unwrap();
+    ch.exec(true, "bash -c 'exec 3<>/dev/tcp/127.0.0.1/2290; head -1 <&3'").await.unwrap();
+    let mut out = String::new();
+    while let Ok(Some(msg)) = tokio::time::timeout(std::time::Duration::from_secs(5), ch.wait()).await {
+        match msg {
+            ChannelMsg::Data { data } => out.push_str(&String::from_utf8_lossy(&data)),
+            ChannelMsg::ExitStatus { .. } | ChannelMsg::Eof => break,
+            _ => {}
+        }
+    }
+    println!("RemoteForward: {out:?}");
+    assert!(out.contains("hello-from-reach"), "{out}");
+    std::fs::remove_file(&kh).ok();
+}

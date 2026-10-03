@@ -98,9 +98,9 @@ enum Source {
     Agent(AgentIdentity),
 }
 
-type Agent = AgentClient<Box<dyn AgentStream + Send + Unpin + 'static>>;
+pub(crate) type Agent = AgentClient<Box<dyn AgentStream + Send + Unpin + 'static>>;
 
-async fn connect_agent(choice: &AgentChoice) -> Option<Agent> {
+pub(crate) async fn connect_agent(choice: &AgentChoice) -> Option<Agent> {
     match choice {
         AgentChoice::Off => None,
         AgentChoice::Socket(path) => {
