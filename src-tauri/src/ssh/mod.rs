@@ -1,5 +1,6 @@
 pub mod client;
 pub mod forwarding;
+pub mod hostbased;
 pub mod hostkey_update;
 pub mod hostkeys;
 pub mod knownhosts;
@@ -13,5 +14,6 @@ mod proto_live_tests;
 pub mod proxycmd;
 pub mod session_log;
 pub mod session_opts;
+pub mod tun;
 pub mod userauth;
 pub mod x11;

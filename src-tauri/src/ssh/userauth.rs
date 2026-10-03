@@ -62,6 +62,8 @@ pub struct AuthPolicy {
     pub add_keys_lifetime: Option<u32>,
     pub min_rsa_bits: usize,
     pub use_keychain: bool,
+    /// HostbasedAuthentication (see `hostbased`), when on.
+    pub hostbased: Option<std::sync::Arc<super::hostbased::HostbasedContext>>,
 }
 
 /// Where to ask the user, and about which host.
@@ -572,6 +574,26 @@ pub(crate) async fn authenticate<H: russh::client::Handler>(
                     }
                 }
             }
+            MethodKind::HostBased if p.hostbased.is_some() => {
+                let ctx = p.hostbased.clone().expect("checked");
+                match super::hostbased::next_attempt(handle, user, &ctx).await {
+                    None => {
+                        done.push(method);
+                        continue;
+                    }
+                    Some(Err(e)) => {
+                        tracing::info!("SSH hostbased: {e}");
+                        continue;
+                    }
+                    Some(Ok(r)) => {
+                        let s = step(r);
+                        if matches!(s, Step::Success) {
+                            outcome.by = Some(AuthBy::Key);
+                        }
+                        s
+                    }
+                }
+            }
             MethodKind::GssapiWithMic | MethodKind::HostBased => {
                 tracing::info!("SSH: {} is not available in Reach yet; skipped", <&str>::from(&method));
                 done.push(method);
@@ -725,6 +747,7 @@ impl AuthPolicy {
             add_keys_lifetime,
             min_rsa_bits: o.first(Kw::RequiredRSASize).and_then(|n| n.parse().ok()).unwrap_or(1024),
             use_keychain: flag(Kw::UseKeychain, false),
+            hostbased: None,
         }
     }
 }

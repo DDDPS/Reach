@@ -13,6 +13,8 @@
 #   host keys (hostkeys-prove-00@openssh.com, for UpdateHostKeys),
 #   tun@openssh.com channels (ssh -w), and hostbased authentication
 #   (auth::Method::Hostbased, Handle::authenticate_hostbased_with).
+# - Channel::datagram: one message per datagram, dropped when it does not
+#   fit, as OpenSSH's datagram channels (tun forwarding) send.
 # Tests: tests/test_legacy_algorithms.rs (russh to russh always; against real
 # OpenSSH servers when RUSSH_INTEROP is set) and known answers in the modules.
 # Drop this copy and the [patch.crates-io] entry in ../../Cargo.toml once

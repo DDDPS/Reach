@@ -1086,6 +1086,7 @@ impl SshManager {
             let stream = crate::ssh::sshconf::net::connect(host, port, &opts.socket, interactive)
                 .await
                 .map_err(|e| describe(russh::Error::IO(e)))?;
+            crate::ssh::hostbased::remember_socket(opts.auth.as_ref(), &stream);
             russh::client::connect_stream(config, stream, handler).await.map_err(describe)?
         };
 

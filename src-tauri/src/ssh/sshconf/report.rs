@@ -50,11 +50,14 @@ pub fn support(kw: Kw) -> Support {
         LocalForward | RemoteForward | DynamicForward | ClearAllForwardings | ExitOnForwardFailure | GatewayPorts | PermitRemoteOpen | StreamLocalBindMask | StreamLocalBindUnlink | ChannelTimeout | EnableEscapeCommandline | ForwardAgent => Support::Yes,
         // X11 (ssh/x11.rs).
         ForwardX11 | ForwardX11Trusted | ForwardX11Timeout | XAuthLocation => Support::Yes,
+        // UpdateHostKeys (ssh/hostkey_update.rs), Tunnel (ssh/tun.rs),
+        // hostbased (ssh/hostbased.rs; EnableSSHKeysign is read by
+        // ssh-keysign itself from the system's ssh_config, as with ssh).
+        UpdateHostKeys | Tunnel | TunnelDevice | HostbasedAuthentication | HostbasedAcceptedAlgorithms | EnableSSHKeysign => Support::Yes,
         ControlMaster | ControlPath
-        | ControlPersist | EnableSSHKeysign | GSSAPIAuthentication
-        | GSSAPIDelegateCredentials | HostbasedAcceptedAlgorithms | HostbasedAuthentication | LogLevel | LogVerbose
-        | PKCS11Provider | SecurityKeyProvider | Tunnel
-        | TunnelDevice | UpdateHostKeys | VerifyHostKeyDNS
+        | ControlPersist | GSSAPIAuthentication
+        | GSSAPIDelegateCredentials | LogLevel | LogVerbose
+        | PKCS11Provider | SecurityKeyProvider | VerifyHostKeyDNS
         | GSSAPIKeyExchange | GSSAPIClientIdentity | GSSAPIServerIdentity | GSSAPIRenewalForcesRekey
         | GSSAPITrustDns | GSSAPIKexAlgorithms => Support::NotYet,
     }
@@ -80,6 +83,7 @@ pub fn weakening(kw: Kw, args: &[String]) -> Option<&'static str> {
         (Kw::ForwardX11, "yes") => "lets the server open windows on your display",
         (Kw::GatewayPorts, "yes") => "opens forwarded ports to the whole network, not just this machine",
         (Kw::NoHostAuthenticationForLocalhost, "yes") => "skips the host key check for localhost",
+        (Kw::Tunnel, x) if x != "no" => "joins this computer's network to the server's through a tunnel device",
         (Kw::CheckHostIP, "no") => return None,
         (Kw::PubkeyAcceptedAlgorithms | Kw::CASignatureAlgorithms | Kw::HostbasedAcceptedAlgorithms, x)
             if x.contains("ssh-rsa") || x.contains("ssh-dss") =>

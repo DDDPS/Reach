@@ -35,6 +35,8 @@ pub struct ForwardPolicy {
     pub timeouts: Vec<(String, Duration)>,
     /// ForwardX11, when on and approved.
     pub x11: Option<super::x11::X11Config>,
+    /// Tunnel, when on and approved (see `tun`).
+    pub tun: Option<super::tun::TunConfig>,
 }
 
 impl ForwardPolicy {
@@ -301,6 +303,7 @@ pub struct Forwarder {
     handle: SharedHandle,
     table: Arc<ForwardTable>,
     locals: tokio::sync::Mutex<Vec<LocalForwardTask>>,
+    tun: tokio::sync::Mutex<Option<super::tun::TunTask>>,
 }
 
 impl Forwarder {
@@ -309,7 +312,7 @@ impl Forwarder {
     /// otherwise it is reported and the rest go on.
     pub async fn start(handle: SharedHandle, table: Arc<ForwardTable>) -> Result<(Arc<Forwarder>, Vec<String>), String> {
         let policy = table.policy();
-        let f = Arc::new(Forwarder { handle, table, locals: tokio::sync::Mutex::new(Vec::new()) });
+        let f = Arc::new(Forwarder { handle, table, locals: tokio::sync::Mutex::new(Vec::new()), tun: tokio::sync::Mutex::new(None) });
         let mut notes = Vec::new();
         for fwd in &policy.local {
             match f.add_local(fwd.clone()).await {
@@ -323,6 +326,17 @@ impl Forwarder {
                 Ok(m) => notes.push(m),
                 Err(e) if policy.exit_on_failure => return Err(format!("RemoteForward {}: {e} (ExitOnForwardFailure)", describe(fwd))),
                 Err(e) => notes.push(format!("Warning: RemoteForward {}: {e}", describe(fwd))),
+            }
+        }
+        // Then the tunnel, as ssh_init_forwarding does.
+        if let Some(cfg) = &policy.tun {
+            match super::tun::start(&f.handle, cfg).await {
+                Ok((task, m)) => {
+                    notes.push(m);
+                    *f.tun.lock().await = Some(task);
+                }
+                Err(e) if policy.exit_on_failure => return Err(format!("Tunnel: {e} (ExitOnForwardFailure)")),
+                Err(e) => notes.push(format!("Warning: Tunnel: {e}")),
             }
         }
         Ok((f, notes))

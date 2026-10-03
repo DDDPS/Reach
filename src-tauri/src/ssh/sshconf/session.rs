@@ -289,7 +289,18 @@ fn forward_policy(r: &Resolved, plan: &super::apply::Plan, approved_commands: &[
         agent,
         timeouts,
         x11: x11_config(o, plan, approved_commands),
+        tun: if clear { None } else { crate::ssh::tun::TunConfig::parse(o.first(Kw::Tunnel), o.first(Kw::TunnelDevice)).filter(|_| tunnel_approved(o, plan)) },
     }
+}
+
+/// Tunnel joins this computer's network to the server's: only once approved.
+fn tunnel_approved(o: &super::resolve::Options, plan: &super::apply::Plan) -> bool {
+    let v = o.first(super::keyword::Kw::Tunnel).unwrap_or("no");
+    let ok = plan.approved(o, super::keyword::Kw::Tunnel, v);
+    if !ok {
+        tracing::warn!("Tunnel {v} waits for approval; no tunnel");
+    }
+    ok
 }
 
 /// ForwardX11 with its trust, timeout and xauth, when on and approved and
@@ -424,5 +435,7 @@ fn auth_policy(r: &Resolved, plan: &super::apply::Plan, imported: bool) -> crate
     };
     let ids = paths(&r.options.identity_files);
     let certs = paths(&r.options.certificate_files);
-    crate::ssh::userauth::AuthPolicy::from_options(&r.options, ids, certs, plan.pubkey_algorithms.clone(), imported)
+    let mut p = crate::ssh::userauth::AuthPolicy::from_options(&r.options, ids, certs, plan.pubkey_algorithms.clone(), imported);
+    p.hostbased = crate::ssh::hostbased::HostbasedContext::from_options(&r.options, plan);
+    p
 }
