@@ -89,3 +89,23 @@ export async function sshOptionsReport(host: string, port: number, username: str
 export function weakeningKey(w: Pick<Weakening, 'keyword' | 'value'>): string {
   return `${w.keyword} ${w.value}`;
 }
+
+/** Approvals are stored as "<identity>\t<what>": only the person who gave
+ *  one is covered by it, so a session in a vault others can write to never
+ *  approves anything for you. */
+const APPROVAL_SEP = '\t';
+
+/** This person's approvals out of a stored list. */
+export function myApprovals(list: string[] | undefined, identity: string | null): string[] {
+  if (!identity) return [];
+  const prefix = identity + APPROVAL_SEP;
+  return (list ?? []).filter((a) => a.startsWith(prefix)).map((a) => a.slice(prefix.length));
+}
+
+/** A stored list with this person's approvals replaced by `mine`; other
+ *  people's stay as they are. */
+export function withMyApprovals(list: string[] | undefined, mine: string[], identity: string | null): string[] {
+  const prefix = identity ? identity + APPROVAL_SEP : null;
+  const others = (list ?? []).filter((a) => !prefix || !a.startsWith(prefix));
+  return prefix ? [...others, ...[...new Set(mine)].map((m) => prefix + m)] : others;
+}

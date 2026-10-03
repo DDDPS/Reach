@@ -506,3 +506,35 @@ fn agrees_with_ssh_g() {
 "));
     assert!(checked > 0);
 }
+
+/// Only the connecting person's approvals count, and a stored session's
+/// typed lines need one like anything else.
+#[test]
+fn approvals_belong_to_who_gave_them() {
+    use super::session::{plan_for, SshOptions, APPROVAL_SEP};
+    let tag = |who: &str, what: &str| format!("{who}{APPROVAL_SEP}{what}");
+    let o = SshOptions {
+        lines: vec!["ProxyCommand nc %h %p".into(), "StrictHostKeyChecking no".into()],
+        approved_commands: vec![tag("mallory", "nc %h %p"), "nc %h %p".into()],
+        accepted_weakenings: vec![tag("alice", "StrictHostKeyChecking no")],
+        ..Default::default()
+    };
+    let alice = o.approved_by(Some("alice"));
+    assert!(alice.approved_commands.is_empty(), "someone else's or an untagged approval is not alice's");
+    assert_eq!(alice.accepted_weakenings, vec!["StrictHostKeyChecking no".to_string()]);
+    assert!(alice.untrusted_lines);
+    // The ProxyCommand waits for alice's own approval.
+    let plan = plan_for(Some(&alice), "h", 22, "u", false);
+    assert!(plan.proxy_command.is_none() && plan.refused.is_some());
+    // Nobody signed in: nothing is approved.
+    assert!(o.approved_by(None).accepted_weakenings.is_empty());
+    // Alice's approval turns host-key checking off for alice; for bob the
+    // same typed line counts for nothing.
+    use crate::ssh::hostkeys::Strict;
+    let strict = |opts: &SshOptions| plan_for(Some(opts), "h", 22, "u", false).hostkeys.map(|h| h.strict);
+    assert_eq!(strict(&alice), Some(Strict::No));
+    assert_ne!(strict(&o.approved_by(Some("bob"))), Some(Strict::No));
+    // Options Reach builds itself (tests, the editor's own check) keep the
+    // typed line approved.
+    assert_eq!(strict(&o), Some(Strict::No));
+}

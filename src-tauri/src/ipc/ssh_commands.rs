@@ -103,6 +103,10 @@ pub async fn ssh_connect(
     try_agent_keys: Option<bool>,
     ssh_options: Option<crate::ssh::sshconf::session::SshOptions>,
 ) -> Result<String, String> {
+    // Only the approvals of the person connecting count: a session synced
+    // from a vault others can write to cannot approve its own commands.
+    let me = state.vault_manager.lock().await.get_user_uuid();
+    let ssh_options = ssh_options.map(|o| o.approved_by(me.as_deref()));
     // Nothing is typed into the user's shell unless the caller asks for it
     // (Settings → Appearance): a caller that does not say gets no setup. The
     // login message is shown unless asked otherwise.

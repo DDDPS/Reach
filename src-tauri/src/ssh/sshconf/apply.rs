@@ -98,6 +98,9 @@ pub struct Plan {
     pub proxy_command: Option<crate::ssh::proxycmd::ProxyCommand>,
     /// Forwards and agent forwarding (target only).
     pub forwards: Option<crate::ssh::forwarding::ForwardPolicy>,
+    /// Lines typed into the session count as approved (options built by
+    /// Reach itself); off for stored sessions, see `SshOptions::approved_by`.
+    pub typed_lines_approved: bool,
     /// LogLevel and LogVerbose; set for sessions with ssh_config settings.
     pub log: Option<(Option<String>, Vec<String>)>,
     /// ControlMaster/ControlPath/ControlPersist (target only).
@@ -254,7 +257,7 @@ impl Plan {
     /// weakenings the user approved ("Keyword value"); lines set in Reach
     /// itself count as approved.
     pub fn new(r: &Resolved, base: russh::client::Config, accepted: &[String]) -> Plan {
-        let mut p = Plan { config: base, socket: SocketPlan::default(), weakenings: vec![], uses: vec![], accepted: accepted.to_vec(), pubkey_algorithms: None, auth: None, ca_signature_algorithms: crate::ssh::hostkeys::DEFAULT_CA_SIGALGS.iter().map(|s| s.to_string()).collect(), hostkeys: None, session: None, refused: None, proxy_command: None, forwards: None, log: None, control: None };
+        let mut p = Plan { config: base, socket: SocketPlan::default(), weakenings: vec![], uses: vec![], accepted: accepted.to_vec(), pubkey_algorithms: None, auth: None, ca_signature_algorithms: crate::ssh::hostkeys::DEFAULT_CA_SIGALGS.iter().map(|s| s.to_string()).collect(), hostkeys: None, session: None, refused: None, proxy_command: None, forwards: None, log: None, control: None, typed_lines_approved: true };
         let o = &r.options;
         p.algorithms(o);
         p.transport(o);
@@ -264,7 +267,8 @@ impl Plan {
     /// Whether a weakening value of `kw` may apply: approved by the user, or
     /// written in Reach's own editor (the command line of a session).
     pub fn approved(&self, o: &Options, kw: Kw, value: &str) -> bool {
-        o.get(kw).is_some_and(|s| s.at.file == "command line") || self.accepted.iter().any(|a| *a == weakening_key(kw, value))
+        (self.typed_lines_approved && o.get(kw).is_some_and(|s| s.at.file == "command line"))
+            || self.accepted.iter().any(|a| *a == weakening_key(kw, value))
     }
 
     fn weak(&mut self, kw: Kw, value: &str, reason: &str, accepted: bool) {

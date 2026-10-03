@@ -1067,7 +1067,7 @@ impl SshManager {
 
         let shared: SharedHandle = Arc::new(tokio::sync::Mutex::new(handle));
         if let Some(cp) = &opts.control {
-            crate::ssh::control::register(cp, &shared, &[]);
+            crate::ssh::control::register(cp, &shared, &[], &crate::ssh::control::target(&info.username, &info.host, info.port));
         }
         into_active_connection(channel, shared, info, shell.as_deref(), login, app_handle, Vec::new(), opts.session.clone(), tty, opts.forwards.clone(), opts.connlog.clone()).await
     }
@@ -1283,7 +1283,7 @@ impl SshManager {
 
         let shared: SharedHandle = Arc::new(tokio::sync::Mutex::new(target_handle));
         if let Some(cp) = &opts.control {
-            crate::ssh::control::register(cp, &shared, &jump_handles);
+            crate::ssh::control::register(cp, &shared, &jump_handles, &crate::ssh::control::target(&info.username, &info.host, info.port));
         }
         into_active_connection(channel, shared, info, shell.as_deref(), login, app_handle, jump_handles, opts.session.clone(), tty, opts.forwards.clone(), opts.connlog.clone()).await
     }
@@ -2323,7 +2323,7 @@ async fn shared_session(
     app_handle: &tauri::AppHandle,
 ) -> Option<Result<ActiveConnection, SshError>> {
     let cp = opts.control.as_ref().filter(|c| c.may_use())?;
-    let (shared, jumps, asks) = crate::ssh::control::existing(&cp.path)?;
+    let (shared, jumps, asks) = crate::ssh::control::existing(&cp.path, &crate::ssh::control::target(&info.username, &info.host, info.port))?;
     if asks {
         let title = format!("Allow shared connection to {}?", info.host);
         let yes = crate::ssh::prompt::ask(Some(app_handle), &info.host, info.port, crate::ssh::prompt::Kind::Confirm, &title, "", vec![]).await;

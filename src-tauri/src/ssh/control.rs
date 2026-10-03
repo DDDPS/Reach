@@ -66,6 +66,9 @@ impl ControlPlan {
 }
 
 struct Entry {
+    /// "user@host:port" the master logged in to: a session reuses it only
+    /// for that, never because two hosts' ControlPath happen to match.
+    target: String,
     handle: Weak<tokio::sync::Mutex<russh::client::Handle<super::client::SshClientHandler>>>,
     jumps: Vec<Weak<tokio::sync::Mutex<russh::client::Handle<super::client::SshClientHandler>>>>,
     /// ControlPersist: the master held open while idle.
@@ -83,9 +86,13 @@ fn masters() -> &'static Mutex<HashMap<String, Entry>> {
 
 /// A live master for `path`: its connection, its jump hosts' connections,
 /// and whether it asks before each new session.
-pub fn existing(path: &str) -> Option<(SharedHandle, Vec<SharedHandle>, bool)> {
+pub fn existing(path: &str, target: &str) -> Option<(SharedHandle, Vec<SharedHandle>, bool)> {
     let mut m = masters().lock().unwrap();
     let e = m.get_mut(path)?;
+    if e.target != target {
+        tracing::warn!("ControlPath {path} belongs to a connection to {}, not {target}; connecting on its own", e.target);
+        return None;
+    }
     let Some(h) = e.handle.upgrade() else {
         m.remove(path);
         return None;
@@ -101,7 +108,8 @@ pub fn existing(path: &str) -> Option<(SharedHandle, Vec<SharedHandle>, bool)> {
 
 /// Makes a new connection the master for its ControlPath, unless a live
 /// one is there already (ssh: the socket is in use).
-pub fn register(plan: &ControlPlan, handle: &SharedHandle, jumps: &[SharedHandle]) {
+/// `target` names what the connection logged in to (see `target`).
+pub fn register(plan: &ControlPlan, handle: &SharedHandle, jumps: &[SharedHandle], target: &str) {
     if !plan.may_serve() {
         return;
     }
@@ -113,6 +121,7 @@ pub fn register(plan: &ControlPlan, handle: &SharedHandle, jumps: &[SharedHandle
     m.insert(
         plan.path.clone(),
         Entry {
+            target: target.to_string(),
             handle: Arc::downgrade(handle),
             jumps: jumps.iter().map(Arc::downgrade).collect(),
             keep: plan.persist.map(|_| handle.clone()),
@@ -126,6 +135,11 @@ pub fn register(plan: &ControlPlan, handle: &SharedHandle, jumps: &[SharedHandle
         start_reaper();
     }
     tracing::info!("ControlMaster: sessions to ControlPath {} share this connection", plan.path);
+}
+
+/// What a connection logged in to, as masters are matched by it.
+pub fn target(user: &str, host: &str, port: u16) -> String {
+    format!("{user}@{}:{port}", host.to_ascii_lowercase())
 }
 
 /// Ends persisted masters once idle longer than ControlPersist, and any
@@ -211,8 +225,9 @@ async fn live_control_master() {
     };
     let opts: HopOptions = super::sshconf::session::plan_for(Some(&o), host, port, "reach", false).into();
     let cp = opts.control.clone().unwrap();
+    let me = target("reach", host, port);
     assert!(cp.path.contains("cm-") && !cp.path.contains('%'), "{}", cp.path);
-    assert!(existing(&cp.path).is_none());
+    assert!(existing(&cp.path, &me).is_none());
 
     let stream = super::sshconf::net::connect(host, port, &opts.socket, false).await.unwrap();
     let handler = SshClientHandler::new(host, port, None).with_hostkeys(opts.hostkeys.clone());
@@ -220,12 +235,14 @@ async fn live_control_master() {
     let auth = AuthParams { key: Some(KeyAuth { source: KeySource::Material(key), passphrase: None }), password: None, allow_agent: false };
     super::client::login(&mut handle, "reach", &auth, &opts, None, host, port).await.unwrap().into_result().unwrap();
     let shared: SharedHandle = Arc::new(tokio::sync::Mutex::new(handle));
-    register(&cp, &shared, &[]);
+    register(&cp, &shared, &[], &me);
+    // Another target with the same ControlPath never gets this connection.
+    assert!(existing(&cp.path, &target("reach", "other-host", port)).is_none());
     drop(shared);
 
     // The master outlives its own session under ControlPersist, and a
     // second session runs on it without logging in again.
-    let (h, _, asks) = existing(&cp.path).expect("a master");
+    let (h, _, asks) = existing(&cp.path, &me).expect("a master");
     assert!(!asks);
     let mut ch = h.lock().await.channel_open_session().await.unwrap();
     ch.exec(true, "echo shared-$PPID").await.unwrap();
@@ -250,6 +267,6 @@ async fn live_control_master() {
     assert!(alive(&cp.path), "still within ControlPersist");
     reap(now + Duration::from_secs(31));
     assert!(!alive(&cp.path), "closed after ControlPersist");
-    assert!(existing(&cp.path).is_none());
+    assert!(existing(&cp.path, &me).is_none());
     std::fs::remove_file(&kh).ok();
 }

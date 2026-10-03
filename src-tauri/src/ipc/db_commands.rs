@@ -151,7 +151,10 @@ pub(crate) async fn ssh_for_route(
             Ok(Some((handle, None)))
         }
         Route::Session { session_id } => {
-            let s = crate::ipc::session_commands::session_get(state.clone(), session_id.clone()).await?;
+            let mut s = crate::ipc::session_commands::session_get(state.clone(), session_id.clone()).await?;
+            // Only the approvals of the person connecting count.
+            let me = state.vault_manager.lock().await.get_user_uuid();
+            s.ssh_options = s.ssh_options.map(|o| o.approved_by(me.as_deref()));
             let auth = auth_for(state, &s.auth_method, s.try_agent_keys.unwrap_or(false)).await?;
             let mut jumps = Vec::new();
             for j in s.jump_chain.clone().unwrap_or_default() {

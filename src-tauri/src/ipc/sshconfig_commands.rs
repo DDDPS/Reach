@@ -24,10 +24,20 @@ pub async fn sshconfig_exists() -> Result<bool, String> {
 /// What a session's ssh_config settings do: every line, how it is used,
 /// what weakens the connection, what would run.
 #[tauri::command]
-pub async fn ssh_options_report(host: String, port: u16, username: String, options: SshOptions) -> Result<Report, String> {
+pub async fn ssh_options_report(
+    state: tauri::State<'_, crate::state::AppState>,
+    host: String,
+    port: u16,
+    username: String,
+    options: SshOptions,
+) -> Result<Report, String> {
+    // As a connection would see them: only this person's approvals count.
+    let me = state.vault_manager.lock().await.get_user_uuid();
+    let options = options.approved_by(me.as_deref());
     tokio::task::spawn_blocking(move || {
         let res = resolve_session(&options, &host, port, &username);
-        let plan = crate::ssh::sshconf::apply::Plan::new(&res.resolved, russh::client::Config::default(), &options.accepted_weakenings);
+        let mut plan = crate::ssh::sshconf::apply::Plan::new(&res.resolved, russh::client::Config::default(), &options.accepted_weakenings);
+        plan.typed_lines_approved = !options.untrusted_lines;
         report::build(&res.resolved, &plan, &res.errors, &res.exec_pending)
     })
     .await

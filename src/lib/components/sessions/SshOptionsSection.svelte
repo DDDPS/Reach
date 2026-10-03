@@ -4,7 +4,8 @@
 	 * ~/.ssh/config, a few common ones a click away, the file the session
 	 * came from, and what Reach makes of all of it, checked as you type.
 	 */
-	import { sshOptionsReport, sshconfigScan, weakeningKey, type SshConfigReport } from '$lib/ipc/sshconfig';
+	import { sshOptionsReport, sshconfigScan, weakeningKey, myApprovals, withMyApprovals, type SshConfigReport } from '$lib/ipc/sshconfig';
+	import { vaultState } from '$lib/state/vault.svelte';
 	import type { SshOptions } from '$lib/ipc/sessions';
 	import { t } from '$lib/state/i18n.svelte';
 	import SshOptionsReport from './SshOptionsReport.svelte';
@@ -25,8 +26,10 @@
 	let report = $state<SshConfigReport | null>(null);
 	let checking = $state(false);
 	let rereadError = $state<string | null>(null);
-	let approvedCommands = $state<string[]>(options.approved_commands ?? []);
-	let acceptedWeakenings = $state<string[]>(options.accepted_weakenings ?? []);
+	// This person's approvals; the stored lists keep everyone's, each with
+	// who gave it (see myApprovals).
+	let approvedCommands = $state<string[]>(myApprovals(options.approved_commands, vaultState.userUuid));
+	let acceptedWeakenings = $state<string[]>(myApprovals(options.accepted_weakenings, vaultState.userUuid));
 
 	let hasAny = $derived(!!options.imported || (options.lines ?? []).length > 0);
 	$effect(() => {
@@ -65,7 +68,13 @@
 		const approved = approvedCommands;
 		const accepted = acceptedWeakenings;
 		untrack(() => {
-			options = { ...options, lines, approved_commands: approved, accepted_weakenings: accepted };
+			const me = vaultState.userUuid;
+			options = {
+				...options,
+				lines,
+				approved_commands: withMyApprovals(options.approved_commands, approved, me),
+				accepted_weakenings: withMyApprovals(options.accepted_weakenings, accepted, me)
+			};
 		});
 	});
 

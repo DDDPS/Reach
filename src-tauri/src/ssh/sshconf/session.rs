@@ -58,9 +58,37 @@ pub struct SshOptions {
     /// Weakening settings the user has seen and kept ("Keyword value").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accepted_weakenings: Vec<String>,
+    /// Lines typed into the session do not count as approved by themselves:
+    /// set for every stored session (see `approved_by`), whose lines anyone
+    /// with write access to its vault may have written.
+    #[serde(skip)]
+    pub untrusted_lines: bool,
 }
 
+/// An approval as stored: who gave it, a tab, then what was approved.
+pub const APPROVAL_SEP: char = '\t';
+
 impl SshOptions {
+    /// The options as `identity` may use them. A stored session syncs and
+    /// may sit in a vault other people can write to, so an approval counts
+    /// only when the person connecting gave it: someone else's approval of a
+    /// ProxyCommand must never run it on this machine. Typed lines then need
+    /// an approval like any other weaker setting.
+    pub fn approved_by(&self, identity: Option<&str>) -> SshOptions {
+        let mine = |list: &[String]| -> Vec<String> {
+            let Some(id) = identity else { return Vec::new() };
+            list.iter()
+                .filter_map(|a| a.split_once(APPROVAL_SEP).filter(|(who, _)| *who == id).map(|(_, what)| what.to_string()))
+                .collect()
+        };
+        SshOptions {
+            approved_commands: mine(&self.approved_commands),
+            accepted_weakenings: mine(&self.accepted_weakenings),
+            untrusted_lines: true,
+            ..self.clone()
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.imported.is_none() && self.lines.is_empty()
     }
@@ -183,6 +211,7 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
         tracing::warn!("ssh_config for {host}: {e}");
     }
     let mut plan = super::apply::Plan::new(&r, base, &opts.accepted_weakenings);
+    plan.typed_lines_approved = !opts.untrusted_lines;
     if !jump {
         plan.control = crate::ssh::control::ControlPlan::from(r.options.first(super::keyword::Kw::ControlPath), r.options.first(super::keyword::Kw::ControlMaster), r.options.first(super::keyword::Kw::ControlPersist));
     }

@@ -4,6 +4,8 @@
 	import KeyPicker from './KeyPicker.svelte';
 	import Input from '$lib/components/shared/Input.svelte';
 	import { sessionCreate, sessionList, sessionUpdate, sessionKind, type SessionConfig, type SessionKind, type AuthMethod, type JumpHostConfig, type Folder, type SshOptions } from '$lib/ipc/sessions';
+	import { myApprovals, withMyApprovals } from '$lib/ipc/sshconfig';
+	import { vaultState } from '$lib/state/vault.svelte';
 	import SshOptionsSection from './SshOptionsSection.svelte';
 	import { t } from '$lib/state/i18n.svelte';
 	import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -211,8 +213,9 @@
 
 		// The weakenings in force are stored with the session, those written
 		// here included, so the session list can flag a weaker session.
-		const accepted = [...new Set([...(sshOptions.accepted_weakenings ?? []), ...(sshSection?.acceptedNow() ?? [])])];
-		const finalOptions: SshOptions = { ...sshOptions, accepted_weakenings: accepted };
+		const me = vaultState.userUuid;
+		const mine = [...myApprovals(sshOptions.accepted_weakenings, me), ...(sshSection?.acceptedNow() ?? [])];
+		const finalOptions: SshOptions = { ...sshOptions, accepted_weakenings: withMyApprovals(sshOptions.accepted_weakenings, mine, me) };
 		const hasOptions = !desktop && (!!finalOptions.imported || (finalOptions.lines ?? []).length > 0);
 		const sshOptionsToSave = hasOptions ? finalOptions : null;
 
