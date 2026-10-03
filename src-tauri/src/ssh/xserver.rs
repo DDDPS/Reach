@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 /// without uninstall.exe and plink.exe), with its licence and a note on
 /// where the source is.
 pub const VERSION: &str = "21.1.16.1";
-const URL: &str = "https://github.com/alexandrosnt/Reach/releases/download/vcxsrv-21.1.16.1/vcxsrv-21.1.16.1-x64.zip";
+const URL: &str = "https://github.com/alexandrosnt/Reach/releases/download/tools-vcxsrv-21.1.16.1/vcxsrv-21.1.16.1-x64.zip";
 const SHA256: &str = "2f272a234108595fbe91b0b537fad881c4d11ad52879e1634c844cb9c908ded8";
 /// The zip's size, for the progress bar when the server does not say.
 const ZIP_BYTES: u64 = 51267344;
