@@ -182,6 +182,11 @@ impl ConnLog {
     }
 
     fn wants(&self, meta: &Metadata<'_>) -> bool {
+        // Only the SSH code's own messages: nothing another library logs
+        // while the connection is current reaches the terminal.
+        if !ssh_target(meta.target()) {
+            return false;
+        }
         if meta.target() == BANNER_TARGET {
             return self.shows(LogLevel::Info);
         }
@@ -189,6 +194,7 @@ impl ConnLog {
     }
 
     fn push(&self, line: String) {
+        let line = vis(&line);
         if let Some(tx) = self.sink.lock().unwrap().as_ref() {
             if tx.send(line.clone()).is_ok() {
                 return;
@@ -218,6 +224,30 @@ impl ConnLog {
 pub fn close(log: &ConnLog) {
     logs().lock().unwrap().remove(&log.id);
     refresh_max();
+}
+
+/// Where the messages a connection shows come from.
+fn ssh_target(target: &str) -> bool {
+    target == BANNER_TARGET || target.starts_with(concat!(env!("CARGO_CRATE_NAME"), "::ssh")) || target.starts_with("russh")
+}
+
+/// stravis(VIS_SAFE | VIS_OCTAL | VIS_NOSLASH) as ssh applies it to the
+/// banner and to what it logs: control characters (escape sequences
+/// among them) are shown as octal, so a server cannot drive the terminal
+/// through them. Tabs and printable text, in any script, pass.
+pub fn vis(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c == '\t' || !c.is_control() {
+            out.push(c);
+        } else {
+            let mut b = [0u8; 4];
+            for byte in c.encode_utf8(&mut b).bytes() {
+                out.push_str(&format!("\\{byte:03o}"));
+            }
+        }
+    }
+    out
 }
 
 struct Id(u64);
@@ -330,6 +360,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_characters_are_shown_not_obeyed() {
+        assert_eq!(vis("Welcome\x1b]0;owned\x07 to h\u{e9}llo\tok"), "Welcome\\033]0;owned\\007 to h\u{e9}llo\tok");
+        assert_eq!(vis("a\u{9b}2Jb"), "a\\302\\2332Jb");
+    }
 
     #[test]
     fn levels() {
