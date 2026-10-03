@@ -18,6 +18,7 @@
 mod curve25519;
 pub mod dh;
 mod ecdh_nistp;
+pub mod gss;
 mod hybrid_mlkem;
 mod hybrid_sntrup;
 mod none;
@@ -133,6 +134,8 @@ pub(crate) enum KexProgress<T> {
         /// question unasked.
         server_host_certificate: Option<Certificate>,
         newkeys: NewKeys,
+        /// The context of a GSS-API key exchange, for `gssapi-keyex`.
+        gss_context: Option<gss::KexContext>,
     },
 }
 
@@ -236,7 +239,12 @@ impl Encode for Name {
 impl TryFrom<&str> for Name {
     type Error = ();
     fn try_from(s: &str) -> Result<Name, ()> {
-        KEXES.keys().find(|x| x.0 == s).map(|x| **x).ok_or(())
+        KEXES
+            .keys()
+            .map(|x| **x)
+            .chain(GSS_KEX_ALGORITHMS.iter().map(|(_, n)| *n))
+            .find(|x| x.0 == s)
+            .ok_or(())
     }
 }
 
@@ -277,6 +285,49 @@ pub const ECDH_SHA2_NISTP384: Name = Name("ecdh-sha2-nistp384");
 pub const ECDH_SHA2_NISTP521: Name = Name("ecdh-sha2-nistp521");
 /// `none`
 pub const NONE: Name = Name("none");
+/// `gss-gex-sha1-` with Kerberos v5 (RFC 4462 section 2.2)
+pub const GSS_GEX_SHA1: Name = Name("gss-gex-sha1-toWM5Slw5Ew8Mqkay+al2g==");
+/// `gss-group1-sha1-` with Kerberos v5 (RFC 4462 section 2.3)
+pub const GSS_G1_SHA1: Name = Name("gss-group1-sha1-toWM5Slw5Ew8Mqkay+al2g==");
+/// `gss-group14-sha1-` with Kerberos v5 (RFC 4462 section 2.4)
+pub const GSS_G14_SHA1: Name = Name("gss-group14-sha1-toWM5Slw5Ew8Mqkay+al2g==");
+/// `gss-group14-sha256-` with Kerberos v5 (RFC 8732)
+pub const GSS_G14_SHA256: Name = Name("gss-group14-sha256-toWM5Slw5Ew8Mqkay+al2g==");
+/// `gss-group16-sha512-` with Kerberos v5 (RFC 8732)
+pub const GSS_G16_SHA512: Name = Name("gss-group16-sha512-toWM5Slw5Ew8Mqkay+al2g==");
+/// `gss-nistp256-sha256-` with Kerberos v5 (RFC 8732)
+pub const GSS_NISTP256_SHA256: Name = Name("gss-nistp256-sha256-toWM5Slw5Ew8Mqkay+al2g==");
+/// `gss-curve25519-sha256-` with Kerberos v5 (RFC 8732)
+pub const GSS_CURVE25519_SHA256: Name = Name("gss-curve25519-sha256-toWM5Slw5Ew8Mqkay+al2g==");
+
+/// The GSS-API key exchange methods with Kerberos v5, by the name prefix
+/// GSSAPIKexAlgorithms uses, in the GSSAPI patch's table order.
+pub const GSS_KEX_ALGORITHMS: &[(&str, Name)] = &[
+    ("gss-gex-sha1-", GSS_GEX_SHA1),
+    ("gss-group1-sha1-", GSS_G1_SHA1),
+    ("gss-group14-sha1-", GSS_G14_SHA1),
+    ("gss-group14-sha256-", GSS_G14_SHA256),
+    ("gss-group16-sha512-", GSS_G16_SHA512),
+    ("gss-nistp256-sha256-", GSS_NISTP256_SHA256),
+    ("gss-curve25519-sha256-", GSS_CURVE25519_SHA256),
+];
+
+/// The exchange under a GSS-API method: the same groups and curves, and
+/// hashes, as the plain methods, with the GSS messages around them.
+pub(crate) fn gss_kex(name: &Name) -> Option<(KexAlgorithm, gss::GssKexKind)> {
+    use gss::GssKexKind::{Fixed, GroupExchange};
+    let (t, kind): (&dyn KexType, _) = match *name {
+        GSS_GEX_SHA1 => (&_DH_GEX_SHA1, GroupExchange),
+        GSS_G1_SHA1 => (&_DH_G1_SHA1, Fixed),
+        GSS_G14_SHA1 => (&_DH_G14_SHA1, Fixed),
+        GSS_G14_SHA256 => (&_DH_G14_SHA256, Fixed),
+        GSS_G16_SHA512 => (&_DH_G16_SHA512, Fixed),
+        GSS_NISTP256_SHA256 => (&_ECDH_SHA2_NISTP256, Fixed),
+        GSS_CURVE25519_SHA256 => (&_CURVE25519, Fixed),
+        _ => return None,
+    };
+    Some((t.make(), kind))
+}
 /// `ext-info-c`
 pub const EXTENSION_SUPPORT_AS_CLIENT: Name = Name("ext-info-c");
 /// `ext-info-s`

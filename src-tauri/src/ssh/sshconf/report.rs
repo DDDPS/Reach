@@ -39,6 +39,8 @@ pub fn support(kw: Kw) -> Support {
         // Kerberos (ssh/gssapi.rs), with the Debian/Fedora patch's options.
         GSSAPIAuthentication | GSSAPIDelegateCredentials | GSSAPIClientIdentity | GSSAPIServerIdentity
         | GSSAPITrustDns => Support::Yes,
+        // GSS-API key exchange (russh's kex/gss.rs, ssh/gssapi.rs).
+        GSSAPIKeyExchange | GSSAPIKexAlgorithms | GSSAPIRenewalForcesRekey => Support::Yes,
         // Token and security key libraries (ssh/pkcs11.rs, ssh/sk.rs).
         PKCS11Provider | SecurityKeyProvider => Support::Yes,
         // Host keys (ssh/hostkeys.rs).
@@ -63,7 +65,6 @@ pub fn support(kw: Kw) -> Support {
         // hostbased (ssh/hostbased.rs; EnableSSHKeysign is read by
         // ssh-keysign itself from the system's ssh_config, as with ssh).
         UpdateHostKeys | Tunnel | TunnelDevice | HostbasedAuthentication | HostbasedAcceptedAlgorithms | EnableSSHKeysign => Support::Yes,
-        GSSAPIKeyExchange | GSSAPIRenewalForcesRekey | GSSAPIKexAlgorithms => Support::NotYet,
     }
 }
 
@@ -88,6 +89,9 @@ pub fn weakening(kw: Kw, args: &[String]) -> Option<&'static str> {
         }
         (Kw::ForwardAgent, x) if x != "no" => "lets the server use your keys while you are connected",
         (Kw::GSSAPIDelegateCredentials, "yes") => "gives the server your Kerberos credentials",
+        (Kw::GSSAPIKexAlgorithms, x) if x.split(',').any(|a| a == "gss-group1-sha1-") => {
+            "offers the 1024-bit Diffie-Hellman group, within reach of a well-funded attacker"
+        }
         (Kw::ForwardX11Trusted, "yes") => "gives the server full access to your display",
         (Kw::ForwardX11, "yes") => "lets the server open windows on your display",
         (Kw::GatewayPorts, "yes") => "opens forwarded ports to the whole network, not just this machine",

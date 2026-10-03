@@ -239,6 +239,10 @@ pub enum Error {
     #[error("Invalid config: {0}")]
     InvalidConfig(String),
 
+    /// A GSS-API key exchange failed (RFC 4462 section 2).
+    #[error("GSS-API key exchange: {0}")]
+    GssKex(String),
+
     /// This error occurs when the channel is closed and there are no remaining messages in the channel buffer.
     /// This is common in SSH-Agent, for example when the Agent client directly rejects an authorization request.
     #[error("Unable to receive more messages from the channel")]

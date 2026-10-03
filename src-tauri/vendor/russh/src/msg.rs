@@ -41,6 +41,16 @@ pub const KEX_DH_GEX_GROUP: u8 = 31;
 pub const KEX_DH_GEX_INIT: u8 = 32;
 pub const KEX_DH_GEX_REPLY: u8 = 33;
 
+// GSS-API key exchange, https://tools.ietf.org/html/rfc4462#section-2,
+// with the group exchange messages of the OpenSSH GSSAPI patch.
+pub const KEXGSS_INIT: u8 = 30;
+pub const KEXGSS_CONTINUE: u8 = 31;
+pub const KEXGSS_COMPLETE: u8 = 32;
+pub const KEXGSS_HOSTKEY: u8 = 33;
+pub const KEXGSS_ERROR: u8 = 34;
+pub const KEXGSS_GROUPREQ: u8 = 40;
+pub const KEXGSS_GROUP: u8 = 41;
+
 // PQ/T Hybrid Key Exchange with ML-KEM
 // https://datatracker.ietf.org/doc/draft-ietf-sshm-mlkem-hybrid-kex/
 pub const KEX_HYBRID_INIT: u8 = 30;
@@ -162,8 +172,23 @@ const ALL_KEX_MESSAGES: &[u8] = &[
     KEX_DH_GEX_INIT,
     KEX_DH_GEX_REPLY,
     KEX_DH_GEX_REQUEST,
+    KEXGSS_GROUPREQ,
+    KEXGSS_GROUP,
     NEWKEYS,
 ];
+
+/// Strict kex for a GSS-API key exchange, whose number of rounds the
+/// mechanism decides: until NEWKEYS only key exchange messages.
+pub(crate) fn validate_server_msg_strict_kex_gss(msg_type: u8, seqno: usize) -> Result<(), Error> {
+    let ok = match seqno {
+        0 => msg_type == KEXINIT,
+        _ => msg_type == NEWKEYS || (30..=49).contains(&msg_type),
+    };
+    if !ok {
+        return Err(strict_kex_violation(msg_type, seqno));
+    }
+    Ok(())
+}
 
 pub(crate) fn is_kex_msg(msg: u8) -> bool {
     ALL_KEX_MESSAGES.contains(&msg)

@@ -449,10 +449,24 @@ fn auth_policy(r: &Resolved, plan: &super::apply::Plan, imported: bool, approved
     let mut p = crate::ssh::userauth::AuthPolicy::from_options(&r.options, ids, certs, plan.pubkey_algorithms.clone(), imported);
     // GSSAPIDelegateCredentials hands the server your Kerberos credentials:
     // only once approved.
+    let delegate_ok = plan.approved(&r.options, super::keyword::Kw::GSSAPIDelegateCredentials, "yes");
     if let Some(g) = p.gssapi.as_mut().filter(|g| g.delegate) {
-        if !plan.approved(&r.options, super::keyword::Kw::GSSAPIDelegateCredentials, "yes") {
+        if !delegate_ok {
             tracing::warn!("GSSAPIDelegateCredentials yes waits for approval; not delegating");
             g.delegate = false;
+        }
+    }
+    if let Some(k) = p.gss_kex.as_mut() {
+        if k.gss.delegate && !delegate_ok {
+            k.gss.delegate = false;
+        }
+        // The 1024-bit group only once approved, as other weak algorithms.
+        if k.algorithms.contains(&russh::kex::GSS_G1_SHA1) {
+            let list = r.options.first(super::keyword::Kw::GSSAPIKexAlgorithms).unwrap_or_default();
+            if !plan.approved(&r.options, super::keyword::Kw::GSSAPIKexAlgorithms, list) {
+                tracing::warn!("GSSAPIKexAlgorithms: gss-group1-sha1- waits for approval; not offered");
+                k.algorithms.retain(|n| *n != russh::kex::GSS_G1_SHA1);
+            }
         }
     }
     p.hostbased = crate::ssh::hostbased::HostbasedContext::from_options(&r.options, plan);
