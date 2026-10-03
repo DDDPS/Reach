@@ -66,9 +66,16 @@ pub async fn ensure(progress: impl Fn(&str)) -> Result<Display, String> {
         }
         *st = None;
     }
-    // Someone else's X server (MobaXterm, VcXsrv, X410, Xming) on :0.
+    // Someone else's X server on :0, only when what listens there is one
+    // (MobaXterm, VcXsrv, X410, Xming, Cygwin/X): another program on that
+    // port would see every window and keystroke.
     if port_open(6000) {
-        return Ok(Display { name: "localhost:0".into(), cookie: None, auth_file: None, xauth: None });
+        match listener_owners(6000).as_deref() {
+            Some([pid]) if process_image(*pid).as_deref().is_some_and(is_x_server) => {
+                return Ok(Display { name: "127.0.0.1:0".into(), cookie: None, auth_file: None, xauth: None });
+            }
+            _ => tracing::warn!("X11: something that is not a known X server listens on display :0; Reach starts its own"),
+        }
     }
     let dir = root();
     let exe = dir.join("vcxsrv.exe");
@@ -184,6 +191,13 @@ async fn start(dir: &Path) -> Result<Running, String> {
     // OpenGL setup alone takes seconds on a first start.
     for _ in 0..300 {
         if port_open(6000 + n) {
+            // The port must be the server's alone: a program that took it
+            // first (or listens on 127.0.0.1 beside it) would receive the
+            // real cookie.
+            if listener_owners(6000 + n).as_deref() != Some(&[child.id()][..]) {
+                let _ = child.kill();
+                return Err(format!("another program listens on X display :{n}; not forwarding X11 to it"));
+            }
             // A server that lets a client in without the cookie (it could
             // not read the file) is not one to forward to.
             if !refuses_without_cookie(6000 + n) {
@@ -191,7 +205,8 @@ async fn start(dir: &Path) -> Result<Running, String> {
                 return Err(format!("the X server accepts connections without its cookie; not using it (see {})", log.display()));
             }
             let display = Display {
-                name: format!("localhost:{n}"),
+                // By address: "localhost" could reach a listener on ::1.
+                name: format!("127.0.0.1:{n}"),
                 cookie: Some(cookie.to_vec()),
                 auth_file: Some(auth_file),
                 xauth: Some(dir.join("xauth.exe")).filter(|p| p.is_file()),
@@ -206,6 +221,58 @@ async fn start(dir: &Path) -> Result<Running, String> {
     }
     let _ = child.kill();
     Err(format!("the X server did not start listening; see {}", log.display()))
+}
+
+/// The processes listening for IPv4 connections to 127.0.0.1 on `port`
+/// (bound to it or to every address), each once; `None` if the table
+/// cannot be read.
+fn listener_owners(port: u16) -> Option<Vec<u32>> {
+    use windows::Win32::NetworkManagement::IpHelper::{GetExtendedTcpTable, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER};
+    use windows::Win32::Networking::WinSock::AF_INET;
+    let mut size = 0u32;
+    // SAFETY: a size query with no buffer.
+    unsafe { GetExtendedTcpTable(None, &mut size, false, AF_INET.0 as u32, TCP_TABLE_OWNER_PID_LISTENER, 0) };
+    // u32s, so the table is aligned as Windows lays it out.
+    let mut buf = vec![0u32; (size as usize).div_ceil(4) + 64];
+    size = (buf.len() * 4) as u32;
+    // SAFETY: `buf` holds `size` bytes.
+    let r = unsafe { GetExtendedTcpTable(Some(buf.as_mut_ptr().cast()), &mut size, false, AF_INET.0 as u32, TCP_TABLE_OWNER_PID_LISTENER, 0) };
+    if r != 0 {
+        return None;
+    }
+    let table = buf.as_ptr() as *const MIB_TCPTABLE_OWNER_PID;
+    // SAFETY: Windows filled a MIB_TCPTABLE_OWNER_PID with dwNumEntries rows.
+    let rows = unsafe { std::slice::from_raw_parts((*table).table.as_ptr(), (*table).dwNumEntries as usize) };
+    let loopback = u32::from_ne_bytes([127, 0, 0, 1]);
+    let mut pids: Vec<u32> = rows
+        .iter()
+        .filter(|r| u16::from_be(r.dwLocalPort as u16) == port && (r.dwLocalAddr == 0 || r.dwLocalAddr == loopback))
+        .map(|r| r.dwOwningPid)
+        .collect();
+    pids.sort_unstable();
+    pids.dedup();
+    Some(pids)
+}
+
+/// The executable a process runs.
+fn process_image(pid: u32) -> Option<String> {
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+    let mut buf = [0u16; 1024];
+    let mut len = buf.len() as u32;
+    // SAFETY: the handle is closed below; `buf` holds `len` UTF-16 units.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let r = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len);
+        let _ = windows::Win32::Foundation::CloseHandle(h);
+        r.ok()?;
+    }
+    Some(String::from_utf16_lossy(&buf[..len as usize]))
+}
+
+/// The X servers people run on Windows.
+fn is_x_server(image: &str) -> bool {
+    let name = image.rsplit(['\\', '/']).next().unwrap_or(image).to_ascii_lowercase();
+    matches!(name.as_str(), "vcxsrv.exe" | "xwin.exe" | "xwin_mobax.exe" | "mobaxterm.exe" | "x410.exe" | "xming.exe")
 }
 
 /// Connects with no authorization and reads the answer: 0 is "Failed".
@@ -283,6 +350,22 @@ mod tests {
         assert_eq!(&a[10..28], b"MIT-MAGIC-COOKIE-1");
         assert_eq!(&a[28..30], &[0, 16]);
         assert_eq!(&a[30..], &[7; 16]);
+    }
+
+    #[test]
+    fn known_x_servers() {
+        assert!(is_x_server(r"C:\Program Files\VcXsrv\vcxsrv.exe"));
+        assert!(is_x_server(r"C:\Users\u\AppData\Local\Temp\Mxt\bin\XWin_MobaX.exe"));
+        assert!(!is_x_server(r"C:\evil\listener.exe"));
+    }
+
+    #[test]
+    fn finds_who_listens() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert_eq!(listener_owners(port), Some(vec![std::process::id()]));
+        let me = process_image(std::process::id()).unwrap();
+        assert!(me.to_ascii_lowercase().ends_with(".exe"), "{me}");
     }
 
     #[test]

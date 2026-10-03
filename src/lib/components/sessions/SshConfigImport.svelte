@@ -69,10 +69,13 @@
 	let fileErrors = $derived([...new Set(hosts.flatMap((h) => h.report.errors))]);
 
 	function isAlreadyImported(host: HostImport): boolean {
-		return existingSessions.some(
-			(s) =>
-				s.ssh_options?.imported?.alias === host.alias ||
-				(s.host === host.hostname && s.port === host.port && s.username === host.user)
+		// An imported session knows its Host alias: two Host blocks for the
+		// same machine (different options) are different sessions. Only a
+		// session saved without one is matched by address.
+		return existingSessions.some((s) =>
+			s.ssh_options?.imported
+				? s.ssh_options.imported.alias === host.alias
+				: s.host === host.hostname && s.port === host.port && s.username === host.user
 		);
 	}
 
