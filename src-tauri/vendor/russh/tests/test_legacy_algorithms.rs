@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-//! The older MACs, end to end.
+//! The older MACs and sntrup761x25519-sha512, end to end.
 //!
 //! Always run: a russh client against a russh server for every one of them,
 //! with the algorithm as the only one either side allows, moving small and
@@ -39,6 +39,11 @@ const NEW_MACS: &[mac::Name] = &[
     mac::HMAC_RIPEMD160,
     mac::HMAC_RIPEMD160_OPENSSH,
     mac::HMAC_RIPEMD160_ETM,
+];
+
+const NEW_KEXES: &[kex::Name] = &[
+    kex::SNTRUP761X25519_SHA512,
+    kex::SNTRUP761X25519_SHA512_OPENSSH,
 ];
 
 /// The negotiated (kex, cipher, client-to-server MAC, server-to-client MAC).
@@ -350,10 +355,22 @@ async fn russh_to_russh_every_new_mac() {
     }
 }
 
+#[tokio::test]
+async fn russh_to_russh_sntrup761x25519() {
+    for &k in NEW_KEXES {
+        russh_round_trip(Some(k), None).await;
+        // and with one of the new MACs on top
+        russh_round_trip(Some(k), Some(mac::UMAC_64_ETM)).await;
+    }
+}
+
 #[test]
 fn none_of_them_is_offered_by_default() {
     let p = Preferred::default();
     for m in NEW_MACS {
         assert!(!p.mac.contains(m), "{m:?}");
+    }
+    for k in NEW_KEXES {
+        assert!(!p.kex.contains(k), "{k:?}");
     }
 }

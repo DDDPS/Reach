@@ -5,6 +5,9 @@
 #   hmac-ripemd160@openssh.com, their -etm@openssh.com forms, and
 #   umac-64/umac-128 (and -etm) @openssh.com, UMAC being RFC 4418 ported from
 #   OpenSSH's umac.c (src/mac/umac.rs). New dependencies md-5 and ripemd.
+# - Key exchange sntrup761x25519-sha512 (and @openssh.com), src/kex/
+#   hybrid_sntrup.rs, with sntrup761 ported from OpenSSH's sntrup761.c
+#   (src/kex/sntrup761.rs).
 # Tests: tests/test_legacy_algorithms.rs (russh to russh always; against real
 # OpenSSH servers when RUSSH_INTEROP is set) and known answers in the modules.
 # Drop this copy and the [patch.crates-io] entry in ../../Cargo.toml once
