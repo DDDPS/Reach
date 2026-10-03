@@ -395,6 +395,12 @@ fn hostkey_policy(r: &Resolved, plan: &super::apply::Plan, opts: &SshOptions) ->
         proxied: o.first(Kw::ProxyJump).is_some_and(|j| j != "none") || o.first(Kw::ProxyCommand).is_some_and(|c| c != "none"),
         tokens: r.tokens(&sys),
         warn_weak_crypto: o.first(Kw::WarnWeakCrypto) != Some("no"),
+        update_host_keys: crate::ssh::hostkey_update::UpdateHostKeys::from_config(
+            o.first(Kw::UpdateHostKeys),
+            o.first(Kw::VerifyHostKeyDNS),
+            crate::ssh::hostkey_update::raw_user_files(r).as_deref(),
+        ),
+        host_key_algorithms: plan.config.preferred.key.iter().map(|a| a.as_str().to_string()).collect(),
     }
 }
 

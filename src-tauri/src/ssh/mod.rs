@@ -1,5 +1,6 @@
 pub mod client;
 pub mod forwarding;
+pub mod hostkey_update;
 pub mod hostkeys;
 pub mod knownhosts;
 pub mod sshconf;
@@ -7,6 +8,8 @@ pub mod keyfile;
 pub mod keystore;
 pub mod netdiag;
 pub mod prompt;
+#[cfg(test)]
+mod proto_live_tests;
 pub mod proxycmd;
 pub mod session_log;
 pub mod session_opts;

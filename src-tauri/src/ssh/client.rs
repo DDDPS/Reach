@@ -1892,11 +1892,12 @@ pub struct SshClientHandler {
     app_handle: Option<tauri::AppHandle>,
     hostkeys: Option<Arc<crate::ssh::hostkeys::HostKeyPolicy>>,
     forwards: Option<Arc<crate::ssh::forwarding::ForwardTable>>,
+    hostkey_update: crate::ssh::hostkey_update::UpdateState,
 }
 
 impl SshClientHandler {
     pub fn new(host: impl Into<String>, port: u16, app_handle: Option<tauri::AppHandle>) -> Self {
-        Self { host: host.into(), port, app_handle, hostkeys: None, forwards: None }
+        Self { host: host.into(), port, app_handle, hostkeys: None, forwards: None, hostkey_update: Default::default() }
     }
 
     /// Answer channels the server opens for forwards (see `forwarding`).
@@ -2078,7 +2079,9 @@ impl russh::client::Handler for SshClientHandler {
         }
         // A few small files, and KnownHostsCommand when the user allowed it.
         let verdict = policy.verify(&self.host, self.port, server_public_key);
-        Ok(match verdict {
+        // UpdateHostKeys needs a key known or confirmed, not just added.
+        let (asked, added) = (matches!(verdict, Verdict::Ask { .. }), verdict == Verdict::AddAndAccept);
+        let ok = match verdict {
             Verdict::Accept => true,
             Verdict::AddAndAccept => {
                 policy.record(&self.host, self.port, server_public_key);
@@ -2096,7 +2099,23 @@ impl russh::client::Handler for SshClientHandler {
                 self.refused(&r);
                 false
             }
-        })
+        };
+        if ok && !added {
+            self.hostkey_update.after_check(&policy, &self.host, self.port, server_public_key, asked);
+        }
+        Ok(ok)
+    }
+
+    /// UpdateHostKeys: the server's announcement of all its host keys.
+    async fn openssh_ext_host_keys_announced(
+        &mut self,
+        keys: Vec<russh::keys::PublicKey>,
+        session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        match self.hostkeys.clone() {
+            Some(policy) => self.hostkey_update.announced(policy, &self.host, self.port, keys, session, self.app_handle.clone()),
+            None => Ok(()),
+        }
     }
 }
 

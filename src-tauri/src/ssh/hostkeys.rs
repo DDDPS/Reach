@@ -54,6 +54,10 @@ pub struct HostKeyPolicy {
     pub tokens: crate::ssh::sshconf::expand::Tokens,
     /// WarnWeakCrypto: say so when the key exchange is not post-quantum.
     pub warn_weak_crypto: bool,
+    /// UpdateHostKeys (see `hostkey_update`).
+    pub update_host_keys: super::hostkey_update::UpdateHostKeys,
+    /// HostKeyAlgorithms as offered, which announced keys must be in.
+    pub host_key_algorithms: Vec<String>,
 }
 
 /// OpenSSH's default CASignatureAlgorithms (SSH_ALLOWED_CA_SIGALGS).
@@ -335,6 +339,8 @@ mod tests {
             proxied: false,
             tokens: Default::default(),
             warn_weak_crypto: false,
+            update_host_keys: Default::default(),
+            host_key_algorithms: vec![],
         }
     }
 
