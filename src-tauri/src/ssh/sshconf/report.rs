@@ -39,7 +39,7 @@ pub fn support(kw: Kw) -> Support {
         // Host keys (ssh/hostkeys.rs).
         StrictHostKeyChecking | UserKnownHostsFile | GlobalKnownHostsFile | HostKeyAlias | CheckHostIP
         | HashKnownHosts | NoHostAuthenticationForLocalhost | RevokedHostKeys | KnownHostsCommand | VisualHostKey
-        | FingerprintHash | RequiredRSASize | CASignatureAlgorithms => Support::Yes,
+        | FingerprintHash | RequiredRSASize | CASignatureAlgorithms | VerifyHostKeyDNS => Support::Yes,
         // The session (ssh/session_opts.rs), ProxyCommand (ssh/proxycmd.rs).
         // ForkAfterAuthentication backgrounds ssh before the session: a
         // Reach connection already runs in the background. SyslogFacility
@@ -54,7 +54,7 @@ pub fn support(kw: Kw) -> Support {
         | ControlPersist | EnableSSHKeysign | GSSAPIAuthentication
         | GSSAPIDelegateCredentials | HostbasedAcceptedAlgorithms | HostbasedAuthentication | LogLevel | LogVerbose
         | PKCS11Provider | SecurityKeyProvider | Tunnel
-        | TunnelDevice | UpdateHostKeys | VerifyHostKeyDNS
+        | TunnelDevice | UpdateHostKeys
         | GSSAPIKeyExchange | GSSAPIClientIdentity | GSSAPIServerIdentity | GSSAPIRenewalForcesRekey
         | GSSAPITrustDns | GSSAPIKexAlgorithms => Support::NotYet,
     }

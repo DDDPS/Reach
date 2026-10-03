@@ -1883,6 +1883,9 @@ struct HostKeyPrompt {
     /// VisualHostKey: the key's randomart.
     #[serde(skip_serializing_if = "Option::is_none")]
     randomart: Option<String>,
+    /// VerifyHostKeyDNS: whether a matching SSHFP record was found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dns_match: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -1892,11 +1895,13 @@ pub struct SshClientHandler {
     app_handle: Option<tauri::AppHandle>,
     hostkeys: Option<Arc<crate::ssh::hostkeys::HostKeyPolicy>>,
     forwards: Option<Arc<crate::ssh::forwarding::ForwardTable>>,
+    /// VerifyHostKeyDNS's finding for the host-key question.
+    dns_match: Option<bool>,
 }
 
 impl SshClientHandler {
     pub fn new(host: impl Into<String>, port: u16, app_handle: Option<tauri::AppHandle>) -> Self {
-        Self { host: host.into(), port, app_handle, hostkeys: None, forwards: None }
+        Self { host: host.into(), port, app_handle, hostkeys: None, forwards: None, dns_match: None }
     }
 
     /// Answer channels the server opens for forwards (see `forwarding`).
@@ -1962,6 +1967,7 @@ impl SshClientHandler {
             changed,
             old_fingerprint,
             randomart,
+            dns_match: self.dns_match,
         };
         if app.emit("ssh-hostkey-prompt", &payload).is_err() {
             return false;
@@ -2063,6 +2069,22 @@ impl russh::client::Handler for SshClientHandler {
             return Ok(verify_host_identity(self.app_handle.clone(), &self.host, self.port, &host_id, &fingerprint, &key_type).await);
         };
         use crate::ssh::hostkeys::{Strict, Verdict};
+        // VerifyHostKeyDNS, after the revocation checks and before
+        // known_hosts, as sshconnect.c verify_host_key. Certificates are
+        // checked by their plain key.
+        if policy.verify_dns != 0 && policy.pre_check(&self.host, server_public_key).is_none() {
+            let dns = crate::ssh::dnsfp::check(&self.host, &key).await;
+            if let Some(d) = dns.filter(|d| d.found) {
+                if policy.verify_dns == 1 && d.matched && d.secure {
+                    tracing::info!("Host key for {} verified by DNSSEC-secured SSHFP records", self.host);
+                    return Ok(true);
+                }
+                if !d.matched {
+                    tracing::warn!("The host key for {} does not match its SSHFP records in DNS; update the SSHFP RR with the new host key", self.host);
+                }
+            }
+            self.dns_match = Some(dns.is_some_and(|d| d.found && d.matched));
+        }
         if !policy.use_files {
             // Reach's own store, with what ssh_config says on top.
             if let Some(v) = policy.pre_check(&self.host, server_public_key) {

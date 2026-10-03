@@ -2193,6 +2193,8 @@
   "authprompt.yes": "Ajouter",
   "authprompt.no": "Pas maintenant",
   "authprompt.host_hint": "Demandé pendant la connexion à {{host}}. Rien de ce que vous tapez ici n’est enregistré.",
+  "hostkey.dns_match": "Empreinte de clé d’hôte correspondante trouvée dans le DNS.",
+  "hostkey.dns_nomatch": "Aucune empreinte de clé d’hôte correspondante trouvée dans le DNS.",
   "hostkey.refused": "Clé d’hôte de {{host}} refusée : {{reason}}",
   "ssh.weak_kex": "{{host}} n’utilise pas d’échange de clés post-quantique ({{kex}}) : la session pourrait être enregistrée maintenant et déchiffrée plus tard. Mettre le serveur à jour corrige cela."
 }

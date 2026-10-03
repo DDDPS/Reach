@@ -42,6 +42,7 @@ ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption"] }
 # zeroize: wipe the hashing blocks and the keys ciphers hold when they drop.
 argon2 = { version = "0.6", features = ["zeroize"] }
 rand = "0.10"
+hickory-resolver = { version = "0.26", features = ["dnssec-ring"] }
 # Locking key material into RAM (VirtualLock / mlock); see src/vault/shield.rs.
 memsec = { version = "0.7", default-features = false, features = ["use_os"] }
 zeroize = { version = "1", features = ["derive"] }

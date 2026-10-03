@@ -54,6 +54,8 @@ pub struct HostKeyPolicy {
     pub tokens: crate::ssh::sshconf::expand::Tokens,
     /// WarnWeakCrypto: say so when the key exchange is not post-quantum.
     pub warn_weak_crypto: bool,
+    /// VerifyHostKeyDNS: 0 no, 1 yes, 2 ask.
+    pub verify_dns: u8,
 }
 
 /// OpenSSH's default CASignatureAlgorithms (SSH_ALLOWED_CA_SIGALGS).
@@ -335,6 +337,7 @@ mod tests {
             proxied: false,
             tokens: Default::default(),
             warn_weak_crypto: false,
+            verify_dns: 0,
         }
     }
 

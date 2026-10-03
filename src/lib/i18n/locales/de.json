@@ -2193,6 +2193,8 @@
   "authprompt.yes": "Hinzufügen",
   "authprompt.no": "Nicht jetzt",
   "authprompt.host_hint": "Gefragt bei der Anmeldung an {{host}}. Was Sie hier eingeben, wird nicht gespeichert.",
+  "hostkey.dns_match": "Passender Hostschlüssel-Fingerabdruck im DNS gefunden.",
+  "hostkey.dns_nomatch": "Kein passender Hostschlüssel-Fingerabdruck im DNS gefunden.",
   "hostkey.refused": "Hostschlüssel von {{host}} abgelehnt: {{reason}}",
   "ssh.weak_kex": "{{host}} verwendet keinen Post-Quanten-Schlüsselaustausch ({{kex}}): Die Sitzung könnte jetzt aufgezeichnet und später entschlüsselt werden. Ein Server-Update behebt das."
 }

@@ -395,6 +395,11 @@ fn hostkey_policy(r: &Resolved, plan: &super::apply::Plan, opts: &SshOptions) ->
         proxied: o.first(Kw::ProxyJump).is_some_and(|j| j != "none") || o.first(Kw::ProxyCommand).is_some_and(|c| c != "none"),
         tokens: r.tokens(&sys),
         warn_weak_crypto: o.first(Kw::WarnWeakCrypto) != Some("no"),
+        verify_dns: match o.first(Kw::VerifyHostKeyDNS) {
+            Some("yes" | "true") => 1,
+            Some("ask") => 2,
+            _ => 0,
+        },
     }
 }
 

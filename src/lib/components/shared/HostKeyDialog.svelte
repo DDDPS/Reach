@@ -70,6 +70,9 @@
 		{#if current.randomart}
 			<pre class="randomart">{current.randomart}</pre>
 		{/if}
+		{#if current.dnsMatch != null}
+			<p class="msg">{t(current.dnsMatch ? 'hostkey.dns_match' : 'hostkey.dns_nomatch')}</p>
+		{/if}
 
 		{#snippet actions()}
 			<Button variant="secondary" onclick={() => respond(false)}>{t('hostkey.reject')}</Button>

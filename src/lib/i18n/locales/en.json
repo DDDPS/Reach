@@ -2193,6 +2193,8 @@
   "authprompt.yes": "Add",
   "authprompt.no": "Not now",
   "authprompt.host_hint": "Asked while logging in to {{host}}. Nothing you type here is saved.",
+  "hostkey.dns_match": "Matching host key fingerprint found in DNS.",
+  "hostkey.dns_nomatch": "No matching host key fingerprint found in DNS.",
   "hostkey.refused": "Refused the host key of {{host}}: {{reason}}",
   "ssh.weak_kex": "{{host}} is not using a post-quantum key exchange ({{kex}}): the session could be recorded now and decrypted later. Upgrading the server fixes it."
 }

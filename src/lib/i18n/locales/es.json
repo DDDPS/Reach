@@ -2193,6 +2193,8 @@
   "authprompt.yes": "Añadir",
   "authprompt.no": "Ahora no",
   "authprompt.host_hint": "Se pregunta al iniciar sesión en {{host}}. Nada de lo que escriba aquí se guarda.",
+  "hostkey.dns_match": "Se encontró en DNS una huella de clave de host coincidente.",
+  "hostkey.dns_nomatch": "No se encontró en DNS ninguna huella de clave de host coincidente.",
   "hostkey.refused": "Clave de host de {{host}} rechazada: {{reason}}",
   "ssh.weak_kex": "{{host}} no usa un intercambio de claves poscuántico ({{kex}}): la sesión podría grabarse ahora y descifrarse más tarde. Actualizar el servidor lo soluciona."
 }

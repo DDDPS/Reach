@@ -1,4 +1,5 @@
 pub mod client;
+pub mod dnsfp;
 pub mod forwarding;
 pub mod hostkeys;
 pub mod knownhosts;

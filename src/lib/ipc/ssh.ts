@@ -118,6 +118,8 @@ export interface HostKeyPrompt {
   oldFingerprint?: string | null;
   /** VisualHostKey: the key's randomart. */
   randomart?: string | null;
+  /** VerifyHostKeyDNS: whether a matching SSHFP record was found. */
+  dnsMatch?: boolean | null;
 }
 
 /** Report the user's accept/reject decision for a host-key prompt. */
