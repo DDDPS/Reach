@@ -26,7 +26,6 @@ use crate::auth::AuthRequest;
 use crate::cert::PublicKeyOrCertificate;
 use crate::client::{ChannelOpenHandle, Handler, Msg, Prompt, Reply, Session};
 use crate::helpers::{AlgorithmExt, EncodedExt, NameList, sign_with_hash_alg};
-use crate::keys::key::parse_public_key;
 use crate::parsing::{ChannelOpenConfirmation, ChannelType, OpenChannelMessage, ensure_end};
 use crate::session::{Encrypted, EncryptedState, GlobalRequestResponse};
 use crate::{
@@ -746,13 +745,8 @@ impl Session {
                         let mut keys = vec![];
                         while !r.is_empty() {
                             let key_blob = map_err!(Bytes::decode(&mut r))?;
-                            match parse_public_key(&key_blob) {
-                                Ok(key) => keys.push(key),
-                                Err(ref err) => {
-                                    debug!(
-                                        "failed to parse announced host key {key_blob:?}: {err:?}",
-                                    )
-                                }
+                            if let Some(key) = super::openssh_ext::announced_host_key(&key_blob) {
+                                keys.push(key);
                             }
                         }
                         map_err!(ensure_end(&r))?;

@@ -23,6 +23,29 @@ pub enum HostKeyProof {
     Disregarded,
 }
 
+/// One key of a hostkeys-00@openssh.com announcement, kept only when it is
+/// a key type russh knows (OpenSSH skips unknown types) and re-encodes to
+/// exactly the bytes the server sent, so the key proven and recorded is the
+/// one announced, byte for byte.
+pub(crate) fn announced_host_key(blob: &[u8]) -> Option<PublicKey> {
+    let key = match crate::keys::key::parse_public_key(blob) {
+        Ok(k) => k,
+        Err(e) => {
+            log::debug!("announced host key not understood: {e:?}");
+            return None;
+        }
+    };
+    if matches!(key.algorithm(), Algorithm::Other(_)) {
+        log::debug!("announced host key of unknown type {}", key.algorithm());
+        return None;
+    }
+    if key.to_bytes().ok().as_deref() != Some(blob) {
+        log::debug!("announced {} host key is not in canonical form, skipped", key.algorithm());
+        return None;
+    }
+    Some(key)
+}
+
 /// The RSA signature algorithms OpenSSH accepts for a proof when the key
 /// exchange did not use an RSA host key (HOSTKEY_PROOF_RSA_ALGS).
 fn trusted_rsa_proof(alg: &Algorithm) -> bool {
@@ -309,6 +332,24 @@ mod tests {
         assert!(check_proofs(&sid, None, &keys, &mut &short[..]).is_err());
         let long = reply(&[sig(&a, &sid), sig(&b, &sid), sig(&b, &sid)]);
         assert!(check_proofs(&sid, None, &keys, &mut &long[..]).is_err());
+    }
+
+    #[test]
+    fn announced_keys_must_be_canonical_and_known() {
+        let k = ed25519(3);
+        let blob = k.public_key().to_bytes().unwrap();
+        assert!(announced_host_key(&blob).is_some());
+        // Trailing bytes after a valid key: the bytes would differ from
+        // what is proven and recorded, so the key is left out.
+        let mut extra = blob.clone();
+        extra.extend_from_slice(&[0, 0, 0, 1, 7]);
+        assert!(announced_host_key(&extra).is_none());
+        // A type russh does not know (a certificate, say) is skipped.
+        let mut cert = Vec::new();
+        "ssh-ed25519-cert-v01@openssh.com".encode(&mut cert).unwrap();
+        b"nonce".as_slice().encode(&mut cert).unwrap();
+        assert!(announced_host_key(&cert).is_none());
+        assert!(announced_host_key(b"junk").is_none());
     }
 
     #[test]

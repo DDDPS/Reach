@@ -116,24 +116,18 @@ fn is_complex(hosts: &Hosts) -> bool {
     }
 }
 
-/// The names ssh updates under: the host (or HostKeyAlias) with its port,
-/// and with CheckHostIP the address (get_hostfile_hostname_ipaddr).
+/// The names ssh updates under: exactly those the host key was checked
+/// under (the host or HostKeyAlias with its port, and with CheckHostIP the
+/// address), so no other host's lines are touched. ssh turns CheckHostIP
+/// off for localhost and through a proxy (sshconnect.c), so there is no
+/// address then.
 fn names(policy: &HostKeyPolicy, host: &str, port: u16) -> (String, Option<String>) {
-    let label = knownhosts::host_label(&policy.alias.clone().unwrap_or_else(|| host.to_ascii_lowercase()), port);
-    if !policy.check_host_ip {
-        return (label, None);
-    }
-    if policy.proxied {
-        return (label, Some("<no hostip for proxy command>".into()));
-    }
-    let ip = match host.parse::<std::net::IpAddr>() {
-        Ok(ip) => Some(ip),
-        Err(_) => {
-            use std::net::ToSocketAddrs;
-            (host, port).to_socket_addrs().ok().and_then(|mut a| a.next()).map(|a| a.ip())
-        }
+    let (label, ip) = policy.names(host, port);
+    let local = |l: &str| {
+        let bare = l.strip_prefix('[').and_then(|r| r.rsplit_once("]:")).map_or(l, |(h, _)| h);
+        bare.parse::<std::net::IpAddr>().is_ok_and(|a| a.is_loopback())
     };
-    let ip = ip.map(|ip| knownhosts::host_label(&ip.to_string(), port)).filter(|i| *i != label);
+    let ip = ip.filter(|i| *i != label && !local(i));
     (label, ip)
 }
 
@@ -255,6 +249,10 @@ impl Plan {
 pub(crate) fn plan_update(policy: &HostKeyPolicy, host: &str, port: u16, offered: Vec<PublicKey>) -> Option<Plan> {
     let mut keys: Vec<PublicKey> = Vec::new();
     for k in offered {
+        // Unknown types and certificates are skipped, as ssh does.
+        if matches!(k.algorithm(), Algorithm::Other(_)) || k.algorithm().as_str().contains("-cert-") {
+            continue;
+        }
         if !accepted_by_hostkeyalgs(&k, &policy.host_key_algorithms) {
             tracing::debug!("{} key not permitted by HostkeyAlgorithms", k.algorithm());
             continue;
@@ -495,6 +493,43 @@ mod tests {
         // Duplicated keys in the announcement stop it.
         std::fs::write(dir.join("known_hosts"), line("[web]:2250", &a)).unwrap();
         assert!(plan_update(&p, "web", 2250, vec![b.public_key().clone(), b.public_key().clone()]).is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn only_the_checked_names_are_rewritten() {
+        let dir = std::env::temp_dir().join(format!("reach-hku4-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b, c) = (key(1), key(2), key(3));
+        // The host under its alias, the real name and another host.
+        let text = line("[web]:2250", &a) + &line("[10.0.0.5]:2250", &c) + &line("db", &c);
+        std::fs::write(dir.join("known_hosts"), &text).unwrap();
+        let mut p = policy(&dir);
+        p.alias = Some("web".into());
+        p.check_host_ip = true;
+        let plan = plan_update(&p, "10.0.0.5", 2250, vec![a.public_key().clone(), b.public_key().clone()]).unwrap();
+        assert_eq!(plan.label, "[web]:2250");
+        assert_eq!(plan.ip, None, "the address is not a name the key was checked under");
+        assert!(plan.old.is_empty(), "lines of other names are not this host's");
+        let names: Vec<String> = std::iter::once(plan.label.clone()).chain(plan.ip.clone()).collect();
+        let keep = vec![("ssh-ed25519".to_string(), blob(a.public_key())), ("ssh-ed25519".to_string(), blob(b.public_key()))];
+        replace_in_file(&dir.join("known_hosts"), &names, &keep, false).unwrap();
+        let after = std::fs::read_to_string(dir.join("known_hosts")).unwrap();
+        assert!(after.contains(&line("[10.0.0.5]:2250", &c)) && after.contains(&line("db", &c)), "{after}");
+        assert!(after.contains(&line("[web]:2250", &b)));
+        // Under CheckHostIP the loopback address is not used (ssh turns it off).
+        let mut q = policy(&dir);
+        q.check_host_ip = true;
+        assert_eq!(super::names(&q, "localhost", 2250).1, None);
+        // An unknown key type in the announcement is skipped.
+        let other = PublicKey::new(
+            russh::keys::ssh_key::public::KeyData::Other(russh::keys::ssh_key::public::OpaquePublicKey::new(vec![1, 2, 3], Algorithm::new("x-unknown@example.com").unwrap())),
+            "",
+        );
+        let mut p2 = policy(&dir);
+        p2.host_key_algorithms.push("x-unknown@example.com".into());
+        std::fs::write(dir.join("known_hosts"), line("[web]:2250", &a)).unwrap();
+        assert!(plan_update(&p2, "web", 2250, vec![a.public_key().clone(), other]).is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 
