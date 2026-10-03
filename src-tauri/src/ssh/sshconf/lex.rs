@@ -45,6 +45,15 @@ pub fn split_keyword(raw: &str) -> Option<Line> {
 
 /// OpenSSH's `argv_split(s, …, terminate_on_comment = 1)`.
 pub fn argv_split(s: &str) -> Result<Vec<String>, String> {
+    split(s, true)
+}
+
+/// `argv_split(s, …, terminate_on_comment = 0)`, as commands are split.
+pub fn argv_split_keep_comments(s: &str) -> Result<Vec<String>, String> {
+    split(s, false)
+}
+
+fn split(s: &str, comments: bool) -> Result<Vec<String>, String> {
     let chars: Vec<char> = s.chars().collect();
     let mut args = Vec::new();
     let mut i = 0;
@@ -53,7 +62,7 @@ pub fn argv_split(s: &str) -> Result<Vec<String>, String> {
             i += 1;
             continue;
         }
-        if chars[i] == '#' {
+        if comments && chars[i] == '#' {
             break;
         }
         let mut quote: Option<char> = None;

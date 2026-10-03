@@ -50,6 +50,8 @@ pub struct HostKeyPolicy {
     pub ca_signature_algorithms: Vec<String>,
     /// A proxy or jump host stands between: CheckHostIP has no address to check.
     pub proxied: bool,
+    /// The connection's `%` tokens, for KnownHostsCommand.
+    pub tokens: crate::ssh::sshconf::expand::Tokens,
 }
 
 /// OpenSSH's default CASignatureAlgorithms (SSH_ALLOWED_CA_SIGALGS).
@@ -108,21 +110,41 @@ impl HostKeyPolicy {
         (label, ip)
     }
 
-    /// Entries from the files and, when approved, KnownHostsCommand.
-    fn entries(&self, host: &str, port: u16, key_type: &str, key_b64: &str, fp: &str) -> Vec<Entry> {
+    /// Entries from the files and, when approved, KnownHostsCommand, run
+    /// once per name looked up (`%I` is HOSTNAME or ADDRESS) as
+    /// load_hostkeys_command does: split into arguments, tokens expanded in
+    /// the arguments after the program only, no shell.
+    fn entries(&self, names: &[(String, &str)], key_type: &str, key_b64: &str, fp: &str) -> Vec<Entry> {
         let mut out = read_entries(&self.user_files);
         out.extend(read_entries(&self.global_files));
-        if let Some(cmd) = &self.command {
-            let cmd = cmd
-                .replace("%H", &self.alias.clone().unwrap_or_else(|| host.to_string()))
-                .replace("%I", "ADDRESS")
-                .replace("%K", key_b64)
-                .replace("%f", fp)
-                .replace("%t", key_type)
-                .replace("%p", &port.to_string())
-                .replace("%h", host)
-                .replace("%%", "%");
-            match run_capture(&cmd) {
+        let Some(cmd) = &self.command else { return out };
+        let argv = match crate::ssh::sshconf::lex::argv_split_keep_comments(cmd) {
+            Ok(a) if !a.is_empty() => a,
+            _ => {
+                tracing::warn!("KnownHostsCommand \"{cmd}\" contains invalid quotes or nothing to run");
+                return out;
+            }
+        };
+        for (name, invocation) in names {
+            let mut tokens = self.tokens.clone();
+            tokens.known_hosts = Some(crate::ssh::sshconf::expand::KnownHostsTokens {
+                fingerprint: fp.to_string(),
+                hostname_or_alias: name.clone(),
+                reason: invocation.to_string(),
+                key_base64: key_b64.to_string(),
+                key_type: key_type.to_string(),
+            });
+            let mut args = Vec::new();
+            for a in &argv[1..] {
+                match crate::ssh::sshconf::expand::expand(a, &tokens, crate::ssh::sshconf::expand::TokenSet::KnownHosts, true, &|n| std::env::var(n).ok()) {
+                    Ok(x) => args.push(x),
+                    Err(e) => {
+                        tracing::warn!("KnownHostsCommand: {e}");
+                        return out;
+                    }
+                }
+            }
+            match run_capture(&argv[0], &args) {
                 Ok(text) => out.extend(knownhosts::parse(&text, "KnownHostsCommand").entries),
                 Err(e) => tracing::warn!("KnownHostsCommand: {e}"),
             }
@@ -171,7 +193,11 @@ impl HostKeyPolicy {
         let (label, ip) = self.names(host, port);
         let fp = knownhosts::fingerprint(&key_blob, &self.fingerprint_hash);
         let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &key_blob);
-        let entries = self.entries(host, port, &key_type, &b64, &fp);
+        let mut lookups = vec![(label.clone(), "HOSTNAME")];
+        if let Some(ip) = &ip {
+            lookups.push((ip.clone(), "ADDRESS"));
+        }
+        let entries = self.entries(&lookups, &key_type, &b64, &fp);
         let mut names = vec![label.clone()];
         names.extend(ip.clone());
 
@@ -189,7 +215,12 @@ impl HostKeyPolicy {
                     if now < info.valid_after || now >= info.valid_before {
                         return Verdict::Refuse("The server's host certificate is not valid now".into());
                     }
-                    if !info.principals.is_empty() && !info.principals.iter().any(|p| p.eq_ignore_ascii_case(&principal)) {
+                    // sshkey_cert_check_host: a principal list is required,
+                    // and one entry must match the name (patterns allowed).
+                    if info.principals.is_empty() {
+                        return Verdict::Refuse("The server's host certificate lists no principals".into());
+                    }
+                    if !info.principals.iter().any(|p| crate::ssh::sshconf::pattern::match_pattern(&principal, p)) {
                         return Verdict::Refuse(format!("The server's host certificate is not for {principal}"));
                     }
                     if !self.ca_signature_algorithms.iter().any(|a| *a == sig_alg) {
@@ -252,13 +283,14 @@ impl HostKeyPolicy {
     }
 }
 
+/// Run a program with its arguments, no shell, and take its output.
 #[cfg(not(target_os = "android"))]
-fn run_capture(cmd: &str) -> Result<String, String> {
-    #[cfg(windows)]
-    let out = std::process::Command::new("cmd").args(["/C", cmd]).output();
-    #[cfg(not(windows))]
-    let out = std::process::Command::new("/bin/sh").args(["-c", cmd]).stdin(std::process::Stdio::null()).output();
-    let out = out.map_err(|e| e.to_string())?;
+fn run_capture(program: &str, args: &[String]) -> Result<String, String> {
+    let out = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("{program}: {e}"))?;
     if !out.status.success() {
         return Err(format!("exited with {}", out.status));
     }
@@ -266,8 +298,8 @@ fn run_capture(cmd: &str) -> Result<String, String> {
 }
 
 #[cfg(target_os = "android")]
-fn run_capture(cmd: &str) -> Result<String, String> {
-    Err(format!("A phone cannot run \"{cmd}\""))
+fn run_capture(program: &str, _args: &[String]) -> Result<String, String> {
+    Err(format!("A phone cannot run \"{program}\""))
 }
 
 #[cfg(test)]
@@ -299,6 +331,7 @@ mod tests {
             min_rsa_bits: 1024,
             ca_signature_algorithms: DEFAULT_CA_SIGALGS.iter().map(|s| s.to_string()).collect(),
             proxied: false,
+            tokens: Default::default(),
         }
     }
 
@@ -331,6 +364,26 @@ mod tests {
         let text = std::fs::read_to_string(dir.join("known_hosts")).unwrap();
         assert!(text.lines().last().unwrap().starts_with("|1|"));
         assert_eq!(h.verify("db", 22, &presented(&k2)), Verdict::Accept);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn known_hosts_command_runs_without_a_shell() {
+        // A host name full of shell syntax reaches the program as one
+        // argument; nothing is run but the program itself.
+        let dir = std::env::temp_dir().join(format!("reach-hk3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("pwned");
+        let mut p = policy(&dir, Strict::Yes);
+        #[cfg(windows)]
+        let echo = "cmd.exe /C echo";
+        #[cfg(not(windows))]
+        let echo = "echo";
+        p.command = Some(format!("{echo} %H"));
+        let evil = format!("x;touch {}&&echo", marker.display());
+        let names = vec![(evil.clone(), "HOSTNAME")];
+        let _ = p.entries(&names, "ssh-ed25519", "AAAA", "SHA256:x");
+        assert!(!marker.exists(), "the host name was run as a command");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -256,6 +256,13 @@ async fn live_config_hostkeys() {
 
     std::fs::write(dir.join("ca"), format!("@cert-authority [127.0.0.1]:{p2} {ca}\n")).unwrap();
     expect("host certificate trusted through @cert-authority, strict", connect(&h2, p2, &key, kh("ca", "yes")).await, true);
+    // The CA is trusted for "other", but the certificate only names
+    // 127.0.0.1: the principal check must refuse it.
+    std::fs::write(dir.join("alias"), format!("@cert-authority [other]:{p2} {ca}
+")).unwrap();
+    let mut lines = kh("alias", "yes");
+    lines.push("HostKeyAlias other".into());
+    expect("certificate not naming the alias: refused", connect(&h2, p2, &key, lines).await, false);
     std::fs::write(dir.join("wrongca"), format!("@cert-authority [127.0.0.1]:{p2} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n")).unwrap();
     expect("another CA, strict: refused", connect(&h2, p2, &key, kh("wrongca", "yes")).await, false);
     expect("unknown host, strict: refused", connect(&h1, p1, &key, kh("empty", "yes")).await, false);
