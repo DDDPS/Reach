@@ -480,11 +480,19 @@ fn agrees_with_ssh_g() {
                 if *line == "serveraliveinterval 300" && text.contains("BatchMode yes") && !text.contains("ServerAliveInterval") {
                     continue;
                 }
+                // An ssh built without zlib (Apple's) prints "compression
+                // UNKNOWN" for Compression yes; Reach has compression.
+                if *line == "compression UNKNOWN" {
+                    continue;
+                }
                 if !ours.contains(line) {
                     failures.push(format!("case {i} host {host}: ssh -G has \"{line}\""));
                 }
             }
             for line in &ours {
+                if line == "compression yes" && theirs.iter().any(|l| l == "compression UNKNOWN") {
+                    continue;
+                }
                 if !theirs.contains(line) {
                     failures.push(format!("case {i} host {host}: Reach has \"{line}\""));
                 }
