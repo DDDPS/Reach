@@ -184,6 +184,21 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
     }
     let mut plan = super::apply::Plan::new(&r, base, &opts.accepted_weakenings);
     plan.auth = Some(auth_policy(&r, &plan, opts.imported.is_some()));
+    let hk = hostkey_policy(&r, &plan, opts);
+    if hk.use_files {
+        // Ask for host certificates too: they are checked against
+        // @cert-authority lines, and fall back to the plain key.
+        use russh::keys::{Algorithm, EcdsaCurve, HashAlg};
+        plan.config.preferred.host_key_certificates = std::borrow::Cow::Owned(vec![
+            Algorithm::Ed25519,
+            Algorithm::Ecdsa { curve: EcdsaCurve::NistP256 },
+            Algorithm::Ecdsa { curve: EcdsaCurve::NistP384 },
+            Algorithm::Ecdsa { curve: EcdsaCurve::NistP521 },
+            Algorithm::Rsa { hash: Some(HashAlg::Sha512) },
+            Algorithm::Rsa { hash: Some(HashAlg::Sha256) },
+        ]);
+    }
+    plan.hostkeys = Some(hk);
     for w in &plan.weakenings {
         tracing::warn!("ssh_config for {host}: {} {} weakens the connection: {}", w.keyword, w.value, w.reason);
     }
@@ -191,6 +206,55 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
         tracing::info!("ssh_config for {host}: {} {:?}", kw.name(), u);
     }
     plan
+}
+
+/// The host-key policy. UserKnownHostsFile and RevokedHostKeys come
+/// expanded from `finish`; the defaults are OpenSSH's.
+fn hostkey_policy(r: &Resolved, plan: &super::apply::Plan, opts: &SshOptions) -> crate::ssh::hostkeys::HostKeyPolicy {
+    use super::keyword::Kw;
+    use crate::ssh::hostkeys::{HostKeyPolicy, Strict};
+    let o = &r.options;
+    let sys = SystemEnv::new(ExecPolicy::Never);
+    let home = sys.home();
+    let list = |kw: Kw, default: &[String]| -> Vec<std::path::PathBuf> {
+        let args: Vec<String> = o.get(kw).map(|s| s.args.clone()).unwrap_or_else(|| default.to_vec());
+        if args.first().is_some_and(|a| a.eq_ignore_ascii_case("none")) {
+            return Vec::new();
+        }
+        args.iter().map(|a| std::path::PathBuf::from(super::expand::tilde(a, &home))).collect()
+    };
+    let sys_dir = sys.system_dir();
+    let user_default = vec!["~/.ssh/known_hosts".to_string(), "~/.ssh/known_hosts2".to_string()];
+    let global_default = vec![format!("{sys_dir}/ssh_known_hosts"), format!("{sys_dir}/ssh_known_hosts2")];
+    let flag = |kw: Kw, default: bool| o.first(kw).map_or(default, |v| v != "no");
+    let command = o
+        .first(Kw::KnownHostsCommand)
+        .filter(|c| !c.eq_ignore_ascii_case("none"))
+        .filter(|c| opts.approved_commands.iter().any(|a| a == c))
+        .map(str::to_string);
+    let strict = match o.first(Kw::StrictHostKeyChecking) {
+        Some("yes") => Strict::Yes,
+        Some("accept-new") => Strict::AcceptNew,
+        Some("no") if plan.approved(o, Kw::StrictHostKeyChecking, "no") => Strict::No,
+        _ => Strict::Ask,
+    };
+    HostKeyPolicy {
+        strict,
+        use_files: opts.imported.is_some() || o.get(Kw::UserKnownHostsFile).is_some() || o.get(Kw::GlobalKnownHostsFile).is_some(),
+        user_files: list(Kw::UserKnownHostsFile, &user_default),
+        global_files: list(Kw::GlobalKnownHostsFile, &global_default),
+        alias: o.first(Kw::HostKeyAlias).map(|a| a.to_ascii_lowercase()),
+        check_host_ip: flag(Kw::CheckHostIP, false),
+        hash: flag(Kw::HashKnownHosts, false),
+        no_auth_localhost: flag(Kw::NoHostAuthenticationForLocalhost, false) && plan.approved(o, Kw::NoHostAuthenticationForLocalhost, "yes"),
+        revoked: list(Kw::RevokedHostKeys, &[]),
+        command,
+        visual: flag(Kw::VisualHostKey, false),
+        fingerprint_hash: o.first(Kw::FingerprintHash).unwrap_or("sha256").to_string(),
+        min_rsa_bits: o.first(Kw::RequiredRSASize).and_then(|n| n.parse().ok()).unwrap_or(1024),
+        ca_signature_algorithms: plan.ca_signature_algorithms.clone(),
+        proxied: o.first(Kw::ProxyJump).is_some_and(|j| j != "none") || o.first(Kw::ProxyCommand).is_some_and(|c| c != "none"),
+    }
 }
 
 /// The login policy: IdentityFile and CertificateFile expanded as ssh

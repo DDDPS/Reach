@@ -2192,5 +2192,6 @@
   "authprompt.continue": "Продолжить",
   "authprompt.yes": "Добавить",
   "authprompt.no": "Не сейчас",
-  "authprompt.host_hint": "Запрошено при входе на {{host}}. Введённое здесь не сохраняется."
+  "authprompt.host_hint": "Запрошено при входе на {{host}}. Введённое здесь не сохраняется.",
+  "hostkey.refused": "Ключ хоста {{host}} отклонён: {{reason}}"
 }

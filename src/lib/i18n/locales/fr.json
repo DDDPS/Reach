@@ -2192,5 +2192,6 @@
   "authprompt.continue": "Continuer",
   "authprompt.yes": "Ajouter",
   "authprompt.no": "Pas maintenant",
-  "authprompt.host_hint": "Demandé pendant la connexion à {{host}}. Rien de ce que vous tapez ici n’est enregistré."
+  "authprompt.host_hint": "Demandé pendant la connexion à {{host}}. Rien de ce que vous tapez ici n’est enregistré.",
+  "hostkey.refused": "Clé d’hôte de {{host}} refusée : {{reason}}"
 }

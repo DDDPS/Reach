@@ -2192,5 +2192,6 @@
   "authprompt.continue": "Continue",
   "authprompt.yes": "Add",
   "authprompt.no": "Not now",
-  "authprompt.host_hint": "Asked while logging in to {{host}}. Nothing you type here is saved."
+  "authprompt.host_hint": "Asked while logging in to {{host}}. Nothing you type here is saved.",
+  "hostkey.refused": "Refused the host key of {{host}}: {{reason}}"
 }

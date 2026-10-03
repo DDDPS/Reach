@@ -85,6 +85,10 @@ pub struct Plan {
     pub pubkey_algorithms: Option<Vec<String>>,
     /// How to log in; set for sessions with ssh_config settings.
     pub auth: Option<crate::ssh::userauth::AuthPolicy>,
+    /// CASignatureAlgorithms, assembled.
+    pub ca_signature_algorithms: Vec<String>,
+    /// How to check the host key; set for sessions with ssh_config settings.
+    pub hostkeys: Option<crate::ssh::hostkeys::HostKeyPolicy>,
 }
 
 /// OpenSSH's default PubkeyAcceptedAlgorithms (KEX_DEFAULT_PK_ALG).
@@ -237,7 +241,7 @@ impl Plan {
     /// weakenings the user approved ("Keyword value"); lines set in Reach
     /// itself count as approved.
     pub fn new(r: &Resolved, base: russh::client::Config, accepted: &[String]) -> Plan {
-        let mut p = Plan { config: base, socket: SocketPlan::default(), weakenings: vec![], uses: vec![], accepted: accepted.to_vec(), pubkey_algorithms: None, auth: None };
+        let mut p = Plan { config: base, socket: SocketPlan::default(), weakenings: vec![], uses: vec![], accepted: accepted.to_vec(), pubkey_algorithms: None, auth: None, ca_signature_algorithms: crate::ssh::hostkeys::DEFAULT_CA_SIGALGS.iter().map(|s| s.to_string()).collect(), hostkeys: None };
         let o = &r.options;
         p.algorithms(o);
         p.transport(o);
@@ -333,6 +337,10 @@ impl Plan {
             let table: Vec<(&str, String)> = super::value::algos::KEYS.iter().map(|n| (*n, n.to_string())).collect();
             if let Some(v) = self.pick(o, Kw::PubkeyAcceptedAlgorithms, &table, DEFAULT_PUBKEY_ALGORITHMS) {
                 self.pubkey_algorithms = Some(v);
+            }
+            let table: Vec<(&str, String)> = super::value::algos::CA_SIGS.iter().map(|n| (*n, n.to_string())).collect();
+            if let Some(v) = self.pick(o, Kw::CASignatureAlgorithms, &table, crate::ssh::hostkeys::DEFAULT_CA_SIGALGS) {
+                self.ca_signature_algorithms = v;
             }
         }
         if let Some(c) = o.first(Kw::Compression) {

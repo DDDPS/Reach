@@ -2192,5 +2192,6 @@
   "authprompt.continue": "Continua",
   "authprompt.yes": "Aggiungi",
   "authprompt.no": "Non ora",
-  "authprompt.host_hint": "Richiesto durante l’accesso a {{host}}. Niente di ciò che digiti qui viene salvato."
+  "authprompt.host_hint": "Richiesto durante l’accesso a {{host}}. Niente di ciò che digiti qui viene salvato.",
+  "hostkey.refused": "Chiave host di {{host}} rifiutata: {{reason}}"
 }

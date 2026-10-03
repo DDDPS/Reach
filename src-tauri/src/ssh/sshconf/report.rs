@@ -36,17 +36,19 @@ pub fn support(kw: Kw) -> Support {
         IdentityFile | IdentitiesOnly | IdentityAgent | CertificateFile | AddKeysToAgent | BatchMode
         | KbdInteractiveAuthentication | KbdInteractiveDevices | NumberOfPasswordPrompts | PasswordAuthentication
         | PreferredAuthentications | PubkeyAcceptedAlgorithms | PubkeyAuthentication | UseKeychain => Support::Yes,
-        CASignatureAlgorithms | ChannelTimeout | CheckHostIP | ClearAllForwardings | ControlMaster | ControlPath
+        // Host keys (ssh/hostkeys.rs).
+        StrictHostKeyChecking | UserKnownHostsFile | GlobalKnownHostsFile | HostKeyAlias | CheckHostIP
+        | HashKnownHosts | NoHostAuthenticationForLocalhost | RevokedHostKeys | KnownHostsCommand | VisualHostKey
+        | FingerprintHash | RequiredRSASize | CASignatureAlgorithms => Support::Yes,
+        ChannelTimeout | ClearAllForwardings | ControlMaster | ControlPath
         | ControlPersist | DynamicForward | EnableEscapeCommandline | EnableSSHKeysign | EscapeChar
-        | ExitOnForwardFailure | FingerprintHash | ForkAfterAuthentication | ForwardAgent | ForwardX11
-        | ForwardX11Timeout | ForwardX11Trusted | GatewayPorts | GlobalKnownHostsFile | GSSAPIAuthentication
-        | GSSAPIDelegateCredentials | HashKnownHosts | HostbasedAcceptedAlgorithms | HostbasedAuthentication
-        | HostKeyAlias | KnownHostsCommand | LocalCommand | LocalForward | LogLevel | LogVerbose
-        | NoHostAuthenticationForLocalhost | ObscureKeystrokeTiming | PermitLocalCommand | PermitRemoteOpen
+        | ExitOnForwardFailure | ForkAfterAuthentication | ForwardAgent | ForwardX11
+        | ForwardX11Timeout | ForwardX11Trusted | GatewayPorts | GSSAPIAuthentication
+        | GSSAPIDelegateCredentials | HostbasedAcceptedAlgorithms | HostbasedAuthentication | LocalCommand | LocalForward | LogLevel | LogVerbose | ObscureKeystrokeTiming | PermitLocalCommand | PermitRemoteOpen
         | PKCS11Provider | ProxyCommand | ProxyUseFdpass | RefuseConnection | RemoteCommand | RemoteForward
-        | RequestTTY | RequiredRSASize | RevokedHostKeys | SecurityKeyProvider | SendEnv | SessionType | SetEnv
-        | StdinNull | StreamLocalBindMask | StreamLocalBindUnlink | StrictHostKeyChecking | SyslogFacility | Tunnel
-        | TunnelDevice | UpdateHostKeys | UserKnownHostsFile | VerifyHostKeyDNS | VisualHostKey | WarnWeakCrypto
+        | RequestTTY | SecurityKeyProvider | SendEnv | SessionType | SetEnv
+        | StdinNull | StreamLocalBindMask | StreamLocalBindUnlink | SyslogFacility | Tunnel
+        | TunnelDevice | UpdateHostKeys | VerifyHostKeyDNS | WarnWeakCrypto
         | XAuthLocation | GSSAPIKeyExchange | GSSAPIClientIdentity | GSSAPIServerIdentity | GSSAPIRenewalForcesRekey
         | GSSAPITrustDns | GSSAPIKexAlgorithms => Support::NotYet,
     }

@@ -116,6 +116,8 @@ export interface HostKeyPrompt {
   /** true = the stored key changed (possible MITM); false = unknown host (TOFU). */
   changed: boolean;
   oldFingerprint?: string | null;
+  /** VisualHostKey: the key's randomart. */
+  randomart?: string | null;
 }
 
 /** Report the user's accept/reject decision for a host-key prompt. */

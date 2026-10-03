@@ -2192,5 +2192,6 @@
   "authprompt.continue": "Weiter",
   "authprompt.yes": "Hinzufügen",
   "authprompt.no": "Nicht jetzt",
-  "authprompt.host_hint": "Gefragt bei der Anmeldung an {{host}}. Was Sie hier eingeben, wird nicht gespeichert."
+  "authprompt.host_hint": "Gefragt bei der Anmeldung an {{host}}. Was Sie hier eingeben, wird nicht gespeichert.",
+  "hostkey.refused": "Hostschlüssel von {{host}} abgelehnt: {{reason}}"
 }

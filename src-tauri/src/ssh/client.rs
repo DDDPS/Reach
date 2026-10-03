@@ -912,17 +912,20 @@ pub struct HopOptions {
     pub socket: crate::ssh::sshconf::apply::SocketPlan,
     /// How to log in, when ssh_config says; `None` keeps Reach's own login.
     pub auth: Option<crate::ssh::userauth::AuthPolicy>,
+    /// How to check the host key, when ssh_config says; `None` keeps
+    /// Reach's own store and question.
+    pub hostkeys: Option<Arc<crate::ssh::hostkeys::HostKeyPolicy>>,
 }
 
 impl Default for HopOptions {
     fn default() -> Self {
-        Self { config: Arc::new(russh::client::Config::default()), socket: Default::default(), auth: None }
+        Self { config: Arc::new(russh::client::Config::default()), socket: Default::default(), auth: None, hostkeys: None }
     }
 }
 
 impl From<crate::ssh::sshconf::apply::Plan> for HopOptions {
     fn from(p: crate::ssh::sshconf::apply::Plan) -> Self {
-        Self { config: Arc::new(p.config), socket: p.socket, auth: p.auth }
+        Self { config: Arc::new(p.config), socket: p.socket, auth: p.auth, hostkeys: p.hostkeys.map(Arc::new) }
     }
 }
 
@@ -1049,7 +1052,7 @@ impl SshManager {
         interactive: bool,
     ) -> Result<russh::client::Handle<SshClientHandler>, SshError> {
         let config = opts.config.clone();
-        let handler = SshClientHandler::new(host, port, Some(app_handle.clone()));
+        let handler = SshClientHandler::new(host, port, Some(app_handle.clone())).with_hostkeys(opts.hostkeys.clone());
 
         let mut handle = if let Some(proxy) = proxy {
             tracing::info!("SSH connecting via {} proxy {}:{}", proxy.proxy_type, proxy.host, proxy.port);
@@ -1245,7 +1248,7 @@ impl SshManager {
         // Step 1: Connect to the first jump host directly
         let first_jump = &jump_chain[0];
         let config = first_jump.opts.config.clone();
-        let handler = SshClientHandler::new(first_jump.host.as_str(), first_jump.port, Some(app_handle.clone()));
+        let handler = SshClientHandler::new(first_jump.host.as_str(), first_jump.port, Some(app_handle.clone())).with_hostkeys(first_jump.opts.hostkeys.clone());
 
         let failed = |e: String| SshError::ConnectionFailed(format!("Jump host {} connection failed: {}", first_jump.host, e));
         let stream = crate::ssh::sshconf::net::connect(&first_jump.host, first_jump.port, &first_jump.opts.socket, false)
@@ -1291,7 +1294,7 @@ impl SshManager {
 
                 let stream = channel.into_stream();
                 let config = next_jump.opts.config.clone();
-                let handler = SshClientHandler::new(next_jump.host.as_str(), next_jump.port, Some(app_handle.clone()));
+                let handler = SshClientHandler::new(next_jump.host.as_str(), next_jump.port, Some(app_handle.clone())).with_hostkeys(next_jump.opts.hostkeys.clone());
 
                 let mut next_handle =
                     russh::client::connect_stream(config, stream, handler)
@@ -1342,7 +1345,7 @@ impl SshManager {
 
             let stream = channel.into_stream();
             let config = target_opts.config.clone();
-            let handler = SshClientHandler::new(target_host, target_port, Some(app_handle.clone()));
+            let handler = SshClientHandler::new(target_host, target_port, Some(app_handle.clone())).with_hostkeys(target_opts.hostkeys.clone());
 
             let mut target_handle =
                 russh::client::connect_stream(config, stream, handler)
@@ -1391,7 +1394,7 @@ impl SshManager {
 
             let stream = channel.into_stream();
             let config = target_opts.config.clone();
-            let handler = SshClientHandler::new(target_host, target_port, Some(app_handle.clone()));
+            let handler = SshClientHandler::new(target_host, target_port, Some(app_handle.clone())).with_hostkeys(target_opts.hostkeys.clone());
 
             let mut target_handle =
                 russh::client::connect_stream(config, stream, handler)
@@ -1857,6 +1860,9 @@ struct HostKeyPrompt {
     /// brand-new (unknown) host being trusted on first use (TOFU).
     changed: bool,
     old_fingerprint: Option<String>,
+    /// VisualHostKey: the key's randomart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    randomart: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1864,11 +1870,27 @@ pub struct SshClientHandler {
     host: String,
     port: u16,
     app_handle: Option<tauri::AppHandle>,
+    hostkeys: Option<Arc<crate::ssh::hostkeys::HostKeyPolicy>>,
 }
 
 impl SshClientHandler {
     pub fn new(host: impl Into<String>, port: u16, app_handle: Option<tauri::AppHandle>) -> Self {
-        Self { host: host.into(), port, app_handle }
+        Self { host: host.into(), port, app_handle, hostkeys: None }
+    }
+
+    /// Check host keys under ssh_config settings (see `hostkeys`).
+    pub fn with_hostkeys(mut self, policy: Option<Arc<crate::ssh::hostkeys::HostKeyPolicy>>) -> Self {
+        self.hostkeys = policy;
+        self
+    }
+
+    /// Tell the user why a host key was refused; the connection error alone
+    /// would only say the key was not accepted.
+    fn refused(&self, reason: &str) {
+        tracing::warn!("Host key for {}:{} refused: {reason}", self.host, self.port);
+        if let Some(app) = &self.app_handle {
+            let _ = app.emit("ssh-hostkey-refused", serde_json::json!({ "host": self.host, "port": self.port, "reason": reason }));
+        }
     }
 
     fn known_hosts_path() -> std::path::PathBuf {
@@ -1886,6 +1908,7 @@ impl SshClientHandler {
         key_type: &str,
         changed: bool,
         old_fingerprint: Option<String>,
+        randomart: Option<String>,
     ) -> bool {
         let Some(app) = self.app_handle.clone() else {
             tracing::warn!(
@@ -1911,6 +1934,7 @@ impl SshClientHandler {
             key_type: key_type.to_string(),
             changed,
             old_fingerprint,
+            randomart,
         };
         if app.emit("ssh-hostkey-prompt", &payload).is_err() {
             return false;
@@ -1938,7 +1962,44 @@ impl russh::client::Handler for SshClientHandler {
         let fingerprint = host_key_fingerprint(&key);
         let key_type = key.algorithm().to_string();
 
-        Ok(verify_host_identity(self.app_handle.clone(), &self.host, self.port, &host_id, &fingerprint, &key_type).await)
+        let Some(policy) = self.hostkeys.clone() else {
+            return Ok(verify_host_identity(self.app_handle.clone(), &self.host, self.port, &host_id, &fingerprint, &key_type).await);
+        };
+        use crate::ssh::hostkeys::{Strict, Verdict};
+        if !policy.use_files {
+            // Reach's own store, with what ssh_config says on top.
+            if let Some(v) = policy.pre_check(&self.host, server_public_key) {
+                return Ok(match v {
+                    Verdict::Refuse(r) => {
+                        self.refused(&r);
+                        false
+                    }
+                    _ => true,
+                });
+            }
+            return Ok(verify_host_identity_with(self.app_handle.clone(), &self.host, self.port, &host_id, &fingerprint, &key_type, policy.strict).await);
+        }
+        // A few small files, and KnownHostsCommand when the user allowed it.
+        let verdict = policy.verify(&self.host, self.port, server_public_key);
+        Ok(match verdict {
+            Verdict::Accept => true,
+            Verdict::AddAndAccept => {
+                policy.record(&self.host, self.port, server_public_key);
+                true
+            }
+            Verdict::Ask { fingerprint, randomart } => {
+                let _ = Strict::Ask;
+                let yes = self.prompt_hostkey(&fingerprint, &key_type, false, None, randomart).await;
+                if yes {
+                    policy.record(&self.host, self.port, server_public_key);
+                }
+                yes
+            }
+            Verdict::Refuse(r) => {
+                self.refused(&r);
+                false
+            }
+        })
     }
 }
 
@@ -1962,6 +2023,20 @@ pub(crate) async fn verify_host_identity(
     fingerprint: &str,
     key_type: &str,
 ) -> bool {
+    verify_host_identity_with(app_handle, host, port, host_id, fingerprint, key_type, crate::ssh::hostkeys::Strict::Ask).await
+}
+
+/// The same, under a StrictHostKeyChecking setting.
+pub(crate) async fn verify_host_identity_with(
+    app_handle: Option<tauri::AppHandle>,
+    host: &str,
+    port: u16,
+    host_id: &str,
+    fingerprint: &str,
+    key_type: &str,
+    strict: crate::ssh::hostkeys::Strict,
+) -> bool {
+    use crate::ssh::hostkeys::Strict;
     let path = SshClientHandler::known_hosts_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -1991,9 +2066,19 @@ pub(crate) async fn verify_host_identity(
     };
 
     let handler = SshClientHandler::new(host, port, app_handle);
-    let accepted = handler
-        .prompt_hostkey(fingerprint, key_type, changed, old_fingerprint)
-        .await;
+    let accepted = match strict {
+        Strict::Ask => handler.prompt_hostkey(fingerprint, key_type, changed, old_fingerprint, None).await,
+        // A changed key: only StrictHostKeyChecking no lets it through.
+        _ if changed && strict != Strict::No => {
+            handler.refused(&format!("The host key for {host_id} has CHANGED and StrictHostKeyChecking does not allow asking"));
+            false
+        }
+        Strict::Yes => {
+            handler.refused(&format!("No host key is known for {host_id} and StrictHostKeyChecking is on"));
+            false
+        }
+        Strict::AcceptNew | Strict::No => true,
+    };
 
     if accepted {
         known.entries.insert(host_id.to_string(), fingerprint.to_string());

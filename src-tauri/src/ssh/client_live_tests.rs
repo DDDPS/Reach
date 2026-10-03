@@ -210,3 +210,73 @@ async fn live_config_login() {
     let failed: Vec<_> = results.iter().filter(|(_, ok)| !ok).map(|(n, _)| n.clone()).collect();
     assert!(failed.is_empty(), "failed: {failed:?}");
 }
+
+/// Host keys under ssh_config settings, through Reach's handshake. Run with
+/// `REACH_SSH_HOSTCERT=127.0.0.1:2227` (a server presenting a host
+/// certificate for 127.0.0.1), `REACH_SSH_TEST=127.0.0.1:2222` (plain host
+/// key), REACH_SSH_KEYS holding k_good and hostca.out (the CA's public key on
+/// its last line).
+#[tokio::test]
+#[ignore = "needs the SSH test servers"]
+async fn live_config_hostkeys() {
+    use crate::ssh::sshconf::session::SshOptions;
+    let addr = |var: &str| -> (String, u16) {
+        let a = std::env::var(var).unwrap_or_else(|_| panic!("{var}"));
+        let (h, p) = a.rsplit_once(':').unwrap();
+        (h.to_string(), p.parse().unwrap())
+    };
+    let (h1, p1) = addr("REACH_SSH_TEST");
+    let (h2, p2) = addr("REACH_SSH_HOSTCERT");
+    let keys = std::path::PathBuf::from(std::env::var("REACH_SSH_KEYS").unwrap());
+    let key = std::fs::read_to_string(keys.join("k_good")).unwrap();
+    let ca = std::fs::read_to_string(keys.join("hostca.out")).unwrap().lines().last().unwrap().to_string();
+    let dir = std::env::temp_dir().join(format!("reach-live-hk-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |n: &str| dir.join(n).display().to_string().replace('\\', "/");
+
+    async fn connect(host: &str, port: u16, key: &str, lines: Vec<String>) -> Result<(), String> {
+        let o = SshOptions { lines, ..Default::default() };
+        let plan = crate::ssh::sshconf::session::plan_for(Some(&o), host, port, "reach", false);
+        let opts: HopOptions = plan.into();
+        let stream = crate::ssh::sshconf::net::connect(host, port, &opts.socket, false).await.map_err(|e| e.to_string())?;
+        let handler = SshClientHandler::new(host, port, None).with_hostkeys(opts.hostkeys.clone());
+        let mut handle = russh::client::connect_stream(opts.config.clone(), stream, handler).await.map_err(|e| e.to_string())?;
+        let auth = AuthParams { key: Some(KeyAuth { source: KeySource::Material(key.to_string()), passphrase: None }), password: None, allow_agent: false };
+        crate::ssh::client::login(&mut handle, "reach", &auth, &opts, None, host, port).await.map_err(|e| e.to_string())?.into_result().map(|_| ()).map_err(|e| e.to_string())
+    }
+    let kh = |file: &str, strict: &str| vec![format!("UserKnownHostsFile {}", path(file)), "GlobalKnownHostsFile none".into(), format!("StrictHostKeyChecking {strict}")];
+
+    let mut failed = Vec::new();
+    let mut expect = |name: &str, r: Result<(), String>, ok: bool| {
+        println!("{name}: {r:?}");
+        if r.is_ok() != ok {
+            failed.push(name.to_string());
+        }
+    };
+
+    std::fs::write(dir.join("ca"), format!("@cert-authority [127.0.0.1]:{p2} {ca}\n")).unwrap();
+    expect("host certificate trusted through @cert-authority, strict", connect(&h2, p2, &key, kh("ca", "yes")).await, true);
+    std::fs::write(dir.join("wrongca"), format!("@cert-authority [127.0.0.1]:{p2} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n")).unwrap();
+    expect("another CA, strict: refused", connect(&h2, p2, &key, kh("wrongca", "yes")).await, false);
+    expect("unknown host, strict: refused", connect(&h1, p1, &key, kh("empty", "yes")).await, false);
+    expect("unknown host, accept-new: recorded", connect(&h1, p1, &key, kh("new", "accept-new")).await, true);
+    let recorded = std::fs::read_to_string(dir.join("new")).unwrap_or_default();
+    println!("recorded: {}", recorded.trim());
+    expect("recorded key now known, strict", connect(&h1, p1, &key, kh("new", "yes")).await, true);
+    let mut lines = kh("hashed", "accept-new");
+    lines.push("HashKnownHosts yes".into());
+    expect("accept-new, hashed", connect(&h1, p1, &key, lines).await, true);
+    let hashed = std::fs::read_to_string(dir.join("hashed")).unwrap_or_default();
+    expect("hashed line written", if hashed.starts_with("|1|") { Ok(()) } else { Err(hashed.clone()) }, true);
+    // Another key on record for this host: a changed key.
+    std::fs::write(dir.join("changed"), format!("[127.0.0.1]:{p1} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+")).unwrap();
+    expect("changed key, accept-new: refused", connect(&h1, p1, &key, kh("changed", "accept-new")).await, false);
+    let mut lines = kh("new", "yes");
+    let pubkey = recorded.split_whitespace().skip(1).take(2).collect::<Vec<_>>().join(" ");
+    std::fs::write(dir.join("revoked"), format!("{pubkey}\n")).unwrap();
+    lines.push(format!("RevokedHostKeys {}", path("revoked")));
+    expect("revoked host key: refused", connect(&h1, p1, &key, lines).await, false);
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(failed.is_empty(), "failed: {failed:?}");
+}

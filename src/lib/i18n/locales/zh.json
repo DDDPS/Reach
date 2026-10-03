@@ -2192,5 +2192,6 @@
   "authprompt.continue": "继续",
   "authprompt.yes": "添加",
   "authprompt.no": "暂不",
-  "authprompt.host_hint": "登录 {{host}} 时询问。您在此输入的内容不会被保存。"
+  "authprompt.host_hint": "登录 {{host}} 时询问。您在此输入的内容不会被保存。",
+  "hostkey.refused": "已拒绝 {{host}} 的主机密钥：{{reason}}"
 }

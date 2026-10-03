@@ -67,6 +67,9 @@
 				<dd class="mono old">{current.oldFingerprint}</dd>
 			{/if}
 		</dl>
+		{#if current.randomart}
+			<pre class="randomart">{current.randomart}</pre>
+		{/if}
 
 		{#snippet actions()}
 			<Button variant="secondary" onclick={() => respond(false)}>{t('hostkey.reject')}</Button>
@@ -78,6 +81,14 @@
 {/if}
 
 <style>
+	.randomart {
+		margin: 8px 0 0;
+		font-family: var(--font-mono);
+		font-size: 0.75rem;
+		line-height: 1.15;
+		color: var(--color-text-secondary);
+	}
+
 	.msg {
 		margin: 0 0 12px;
 		font-size: 0.875rem;

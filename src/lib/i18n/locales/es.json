@@ -2192,5 +2192,6 @@
   "authprompt.continue": "Continuar",
   "authprompt.yes": "Añadir",
   "authprompt.no": "Ahora no",
-  "authprompt.host_hint": "Se pregunta al iniciar sesión en {{host}}. Nada de lo que escriba aquí se guarda."
+  "authprompt.host_hint": "Se pregunta al iniciar sesión en {{host}}. Nada de lo que escriba aquí se guarda.",
+  "hostkey.refused": "Clave de host de {{host}} rechazada: {{reason}}"
 }
