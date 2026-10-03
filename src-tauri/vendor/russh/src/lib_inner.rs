@@ -294,7 +294,8 @@ impl Default for Limits {
 }
 
 pub use auth::{
-    AgentAuthError, GssapiAuthenticator, GssapiError, GssapiStep, MethodKind, MethodSet, Signer,
+    AgentAuthError, GssapiAuthenticator, GssapiError, GssapiStep, HostbasedSigner, MethodKind,
+    MethodSet, Signer,
 };
 
 /// A reason for disconnection.

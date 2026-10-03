@@ -830,6 +830,12 @@ pub(crate) enum GlobalRequestResponse {
     /// request was for StreamLocalForward, sends true for success or false for failure
     StreamLocalForward(oneshot::Sender<bool>),
     CancelStreamLocalForward(oneshot::Sender<bool>),
+    /// hostkeys-prove-00@openssh.com: the keys asked about, and where their
+    /// checked proofs go (client only).
+    HostKeysProve(
+        Vec<ssh_key::PublicKey>,
+        oneshot::Sender<Result<Vec<crate::client::HostKeyProof>, crate::Error>>,
+    ),
 }
 
 #[cfg(test)]

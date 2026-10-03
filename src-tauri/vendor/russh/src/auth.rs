@@ -246,6 +246,20 @@ pub trait GssapiAuthenticator: Sized {
     }
 }
 
+/// Signs hostbased authentication data (RFC 4252 section 9) with a host
+/// key, as OpenSSH's ssh does through ssh-keysign.
+#[cfg_attr(feature = "async-trait", async_trait::async_trait)]
+pub trait HostbasedSigner: Sized {
+    type Error: From<crate::SendError>;
+
+    /// Return the signature blob (algorithm name, then signature) over
+    /// `data`, which russh builds as the RFC says.
+    fn sign_hostbased(
+        &mut self,
+        data: Vec<u8>,
+    ) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + Send;
+}
+
 #[derive(Debug, Error)]
 pub enum AgentAuthError {
     #[error(transparent)]
@@ -304,7 +318,15 @@ pub enum Method {
     GssapiWithMic {
         mechanism_oids: Vec<Vec<u8>>,
     },
-    // Hostbased,
+    /// RFC 4252 section 9, sent whole: the signature is made before the
+    /// request, there is no probe.
+    Hostbased {
+        algorithm: String,
+        key_blob: Vec<u8>,
+        client_host: String,
+        client_user: String,
+        signature: Vec<u8>,
+    },
 }
 
 impl Drop for Method {
@@ -346,6 +368,17 @@ impl std::fmt::Debug for Method {
             Method::GssapiWithMic { mechanism_oids } => f
                 .debug_struct("GssapiWithMic")
                 .field("mechanism_oids", mechanism_oids)
+                .finish(),
+            Method::Hostbased {
+                algorithm,
+                client_host,
+                client_user,
+                ..
+            } => f
+                .debug_struct("Hostbased")
+                .field("algorithm", algorithm)
+                .field("client_host", client_host)
+                .field("client_user", client_user)
                 .finish(),
         }
     }

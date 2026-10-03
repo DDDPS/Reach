@@ -970,6 +970,9 @@ impl Session {
                         map_err!(ensure_end(&r))?;
                         let _ = return_channel.send(true);
                     }
+                    Some(GlobalRequestResponse::HostKeysProve(keys, return_channel)) => {
+                        let _ = return_channel.send(self.check_host_key_proofs(&keys, &mut r));
+                    }
                     None => {
                         error!("Received global request failure for unknown request!")
                     }
@@ -1000,6 +1003,9 @@ impl Session {
                     }
                     Some(GlobalRequestResponse::CancelStreamLocalForward(return_channel)) => {
                         let _ = return_channel.send(false);
+                    }
+                    Some(GlobalRequestResponse::HostKeysProve(_, return_channel)) => {
+                        let _ = return_channel.send(Err(Error::RequestDenied));
                     }
                     None => {
                         error!("Received global request failure for unknown request!")
@@ -1409,6 +1415,23 @@ impl Encrypted {
                     for oid in mechanism_oids {
                         oid.as_slice().encode(&mut self.write)?;
                     }
+                    true
+                }
+                auth::Method::Hostbased {
+                    ref algorithm,
+                    ref key_blob,
+                    ref client_host,
+                    ref client_user,
+                    ref signature,
+                } => {
+                    user.as_bytes().encode(&mut self.write)?;
+                    "ssh-connection".encode(&mut self.write)?;
+                    "hostbased".encode(&mut self.write)?;
+                    algorithm.as_str().encode(&mut self.write)?;
+                    key_blob.as_slice().encode(&mut self.write)?;
+                    client_host.as_str().encode(&mut self.write)?;
+                    client_user.as_str().encode(&mut self.write)?;
+                    signature.as_slice().encode(&mut self.write)?;
                     true
                 }
             }

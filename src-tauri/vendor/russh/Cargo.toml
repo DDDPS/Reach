@@ -9,6 +9,10 @@
 #   hybrid_sntrup.rs, with sntrup761 ported from OpenSSH's sntrup761.c
 #   (src/kex/sntrup761.rs).
 # - Channel::send_break: RFC 4335 "break" requests from the client (ssh's ~B).
+# - OpenSSH client extensions, src/client/openssh_ext.rs: proving announced
+#   host keys (hostkeys-prove-00@openssh.com, for UpdateHostKeys),
+#   tun@openssh.com channels (ssh -w), and hostbased authentication
+#   (auth::Method::Hostbased, Handle::authenticate_hostbased_with).
 # Tests: tests/test_legacy_algorithms.rs (russh to russh always; against real
 # OpenSSH servers when RUSSH_INTEROP is set) and known answers in the modules.
 # Drop this copy and the [patch.crates-io] entry in ../../Cargo.toml once

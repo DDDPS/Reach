@@ -99,6 +99,16 @@ impl Session {
         })
     }
 
+    /// tun@openssh.com: `mode` 1 is point-to-point (layer 3), 2 ethernet
+    /// (layer 2); `remote_unit` 0x7fffffff lets the server choose.
+    pub fn channel_open_tun(&mut self, mode: u32, remote_unit: u32) -> Result<ChannelId, crate::Error> {
+        self.channel_open_generic(b"tun@openssh.com", |write| {
+            mode.encode(write)?;
+            remote_unit.encode(write)?;
+            Ok(())
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn request_pty(
         &mut self,
