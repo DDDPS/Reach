@@ -82,7 +82,10 @@ pub async fn check(host: &str, key: &russh::keys::PublicKey) -> Option<DnsVerdic
     };
     builder.options_mut().validate = true;
     let resolver = builder.build().ok()?;
-    let lookup = match tokio::time::timeout(Duration::from_secs(10), resolver.lookup(host, RecordType::SSHFP)).await {
+    // The name as given, never through the search list (ssh's
+    // getrrsetbyname uses res_query): a search domain must not answer for it.
+    let fqdn = if host.ends_with('.') { host.to_string() } else { format!("{host}.") };
+    let lookup = match tokio::time::timeout(Duration::from_secs(10), resolver.lookup(fqdn.as_str(), RecordType::SSHFP)).await {
         Ok(Ok(l)) => l,
         Ok(Err(e)) if e.is_no_records_found() => return judge(key, &[], false),
         Ok(Err(e)) => {
@@ -97,8 +100,10 @@ pub async fn check(host: &str, key: &russh::keys::PublicKey) -> Option<DnsVerdic
     let mut records = Vec::new();
     let mut secure = true;
     for r in lookup.answers() {
+        // Every record on the way counts, CNAMEs too: an unsigned alias
+        // into a signed zone proves nothing about this host.
+        secure &= r.proof == Proof::Secure;
         if let RData::SSHFP(s) = &r.data {
-            secure &= r.proof == Proof::Secure;
             records.push((u8::from(s.algorithm), u8::from(s.fingerprint_type), s.fingerprint.clone()));
         }
     }
