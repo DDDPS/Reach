@@ -240,6 +240,9 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_Security_Authentication_Identity",
+    "Win32_Security_Credentials",
+    "Win32_Networking_WinSock",
     "Win32_System_Threading",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_RemoteDesktop",
@@ -319,6 +322,11 @@ ironrdp-connector = { path = "vendor/ironrdp-connector" }
 # Free space of the volume a shared RDP folder is on.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# The system's GSSAPI library for Kerberos logins, loaded when first used
+# (see src/ssh/gssapi.rs), so Reach starts without one.
+[target.'cfg(all(unix, not(target_os = "android")))'.dependencies]
+libloading = "0.8"
 
 # Root certificates for HTTPS on Android; see src/http.rs.
 [target.'cfg(target_os = "android")'.dependencies]
