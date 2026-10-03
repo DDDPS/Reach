@@ -33,6 +33,8 @@ pub struct ForwardPolicy {
     pub agent: Option<AgentChoice>,
     /// ChannelTimeout entries, (type pattern, idle time).
     pub timeouts: Vec<(String, Duration)>,
+    /// ForwardX11, when on and approved.
+    pub x11: Option<super::x11::X11Config>,
 }
 
 impl ForwardPolicy {
@@ -57,15 +59,34 @@ struct RemoteEntry {
 pub struct ForwardTable {
     remote: Mutex<Vec<RemoteEntry>>,
     policy: Mutex<ForwardPolicy>,
+    /// The X11 cookies the session asked for; X11 channels are refused
+    /// without them.
+    x11: Mutex<Option<super::x11::X11Auth>>,
 }
 
 impl ForwardTable {
     pub fn new(policy: ForwardPolicy) -> Arc<Self> {
-        Arc::new(ForwardTable { remote: Mutex::new(Vec::new()), policy: Mutex::new(policy) })
+        Arc::new(ForwardTable { remote: Mutex::new(Vec::new()), policy: Mutex::new(policy), x11: Mutex::new(None) })
     }
 
     fn policy(&self) -> ForwardPolicy {
         self.policy.lock().unwrap().clone()
+    }
+
+    /// The X11 request for the session channel, when ForwardX11 is on.
+    /// A setup failure leaves X11 off and the session going, as with ssh.
+    pub async fn prepare_x11(&self) -> Option<super::x11::X11Auth> {
+        let cfg = self.policy().x11?;
+        match super::x11::prepare(&cfg).await {
+            Ok(a) => {
+                *self.x11.lock().unwrap() = Some(a.clone());
+                Some(a)
+            }
+            Err(e) => {
+                tracing::warn!("X11 forwarding: {e}");
+                None
+            }
+        }
     }
 }
 
@@ -104,7 +125,7 @@ fn bind_addrs(host: Option<&str>, port: u16, gateway_ports: bool) -> Vec<SocketA
 
 /// Copy both ways until either side ends, closing early when idle longer
 /// than `idle` (ChannelTimeout).
-async fn relay<A, B>(a: A, b: B, idle: Option<Duration>)
+pub(crate) async fn relay<A, B>(a: A, b: B, idle: Option<Duration>)
 where
     A: AsyncRead + AsyncWrite + Unpin + Send,
     B: AsyncRead + AsyncWrite + Unpin + Send,
@@ -347,13 +368,7 @@ impl Forwarder {
             End::Socket { path } => {
                 #[cfg(unix)]
                 {
-                    if policy.bind_unlink {
-                        let _ = std::fs::remove_file(path);
-                    }
-                    let l = tokio::net::UnixListener::bind(path).map_err(|e| format!("cannot listen on {path}: {e}"))?;
-                    // StreamLocalBindMask, as umask: 0177 leaves 0600.
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777 & !policy.bind_mask));
+                    let l = bind_socket(path, policy.bind_mask, policy.bind_unlink)?;
                     let handle = self.handle.clone();
                     let target = fwd.connect.clone();
                     let mut rx = rx.clone();
@@ -611,6 +626,61 @@ pub fn on_agent(table: Arc<ForwardTable>, channel: Channel<Msg>) -> bool {
         }
     });
     true
+}
+
+/// An X11 channel from the server: refused unless the session asked for
+/// X11 forwarding.
+pub fn on_x11(table: Arc<ForwardTable>, channel: Channel<Msg>) -> bool {
+    let Some(auth) = table.x11.lock().unwrap().clone() else {
+        tracing::warn!("The server opened an X11 channel, but X11 forwarding is off; refused");
+        return false;
+    };
+    let idle = table.policy().timeout_for("x11-connection");
+    tokio::spawn(super::x11::serve(channel.into_stream(), auth, idle));
+    true
+}
+
+/// Listens on a unix socket with StreamLocalBindMask's mode from the first
+/// moment: it is bound in a fresh private directory, given its mode there,
+/// then moved into place, so no other user can connect in between.
+/// Without StreamLocalBindUnlink an existing file is left alone, as ssh's
+/// bind would.
+#[cfg(unix)]
+fn bind_socket(path: &str, mask: u32, unlink: bool) -> Result<tokio::net::UnixListener, String> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let target = std::path::Path::new(path);
+    let parent = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    let fail = |e: std::io::Error| format!("cannot listen on {path}: {e}");
+    let mut dir = None;
+    for _ in 0..8 {
+        let d = parent.join(format!(".reach-{:08x}", rand::random::<u32>()));
+        match std::fs::DirBuilder::new().mode(0o700).create(&d) {
+            Ok(()) => {
+                dir = Some(d);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(fail(e)),
+        }
+    }
+    let dir = dir.ok_or_else(|| format!("cannot listen on {path}: no private directory"))?;
+    let tmp = dir.join("s");
+    let result = (|| {
+        let l = tokio::net::UnixListener::bind(&tmp).map_err(fail)?;
+        // StreamLocalBindMask, as umask: 0177 leaves 0600.
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o777 & !mask)).map_err(fail)?;
+        if unlink {
+            std::fs::rename(&tmp, target).map_err(fail)?;
+        } else {
+            // A hard link never replaces an existing file.
+            std::fs::hard_link(&tmp, target).map_err(fail)?;
+            let _ = std::fs::remove_file(&tmp);
+        }
+        Ok(l)
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    let _ = std::fs::remove_dir(&dir);
+    result
 }
 
 #[cfg(test)]

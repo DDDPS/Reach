@@ -228,7 +228,7 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
             .filter(|c| opts.approved_commands.iter().any(|a| a == c))
             .map(str::to_string);
         let key = crate::ssh::session_opts::send_env_key(&r.options);
-        let send_env_allowed = opts.accepted_weakenings.iter().any(|a| *a == key);
+        let send_env_allowed = opts.accepted_weakenings.contains(&key);
         let mut session = crate::ssh::session_opts::SessionPolicy::from_options(&r.options, local, send_env_allowed);
         let forwards = forward_policy(&r, &plan);
         session.agent_forward = forwards.agent.is_some();
@@ -288,7 +288,53 @@ fn forward_policy(r: &Resolved, plan: &super::apply::Plan) -> crate::ssh::forwar
         bind_unlink: o.first(Kw::StreamLocalBindUnlink) == Some("yes"),
         agent,
         timeouts,
+        x11: x11_config(o, plan),
     }
+}
+
+/// ForwardX11 with its trust, timeout and xauth, when on and approved and
+/// this machine has a display.
+fn x11_config(o: &super::resolve::Options, plan: &super::apply::Plan) -> Option<crate::ssh::x11::X11Config> {
+    use super::keyword::Kw;
+    if o.first(Kw::ForwardX11) != Some("yes") {
+        return None;
+    }
+    if !plan.approved(o, Kw::ForwardX11, "yes") {
+        tracing::warn!("ForwardX11 yes waits for approval; not forwarding X11");
+        return None;
+    }
+    let display = match std::env::var("DISPLAY") {
+        Ok(d) if !d.is_empty() => d,
+        _ => {
+            tracing::warn!("ForwardX11: DISPLAY is not set on this computer; not forwarding X11");
+            return None;
+        }
+    };
+    let trusted = o.first(Kw::ForwardX11Trusted) == Some("yes");
+    let trusted = if trusted && !plan.approved(o, Kw::ForwardX11Trusted, "yes") {
+        tracing::warn!("ForwardX11Trusted yes waits for approval; forwarding X11 untrusted");
+        false
+    } else {
+        trusted
+    };
+    // ForwardX11Timeout: 20 minutes by default, 0 never expires.
+    let timeout = match o.first(Kw::ForwardX11Timeout).and_then(super::value::convtime) {
+        Some(0) => None,
+        Some(s) if s > 0 => Some(std::time::Duration::from_secs(s as u64)),
+        _ => Some(std::time::Duration::from_secs(1200)),
+    };
+    let xauth = o.first(Kw::XAuthLocation).map(str::to_string).unwrap_or_else(default_xauth);
+    Some(crate::ssh::x11::X11Config { display, trusted, timeout, xauth })
+}
+
+/// _PATH_XAUTH as the usual builds set it, plus XQuartz and VcXsrv.
+fn default_xauth() -> String {
+    let candidates: &[&str] = if cfg!(windows) {
+        &[r"C:\Program Files\VcXsrv\xauth.exe", r"C:\Program Files (x86)\Xming\xauth.exe"]
+    } else {
+        &["/usr/bin/xauth", "/opt/X11/bin/xauth", "/usr/X11R6/bin/xauth", "/usr/local/bin/xauth", "/usr/openwin/bin/xauth"]
+    };
+    candidates.iter().find(|p| std::path::Path::new(p).exists()).unwrap_or(&candidates[0]).to_string()
 }
 
 /// The host-key policy. UserKnownHostsFile and RevokedHostKeys come

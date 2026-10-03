@@ -1441,6 +1441,7 @@ impl SshManager {
     /// An authenticated connection with no shell, for callers that only need
     /// channels — a database reached through a saved session, for one. Uses
     /// the same handshake, host-key check and jump chain as the terminal.
+    #[expect(clippy::too_many_arguments, reason = "one connection's settings, passed through as they are")]
     pub(crate) async fn open_headless(
         host: &str,
         port: u16,
@@ -1471,7 +1472,6 @@ impl SshManager {
     /// Authenticate on a russh handle by cascading through the configured
     /// methods. Used by jump hosts; the direct connect path uses the same
     /// `cascade_authenticate` free function.
-    #[expect(clippy::too_many_arguments, reason = "one hop's login settings, passed through as they are")]
     async fn authenticate_handle(
         handle: &mut russh::client::Handle<SshClientHandler>,
         username: &str,
@@ -2018,6 +2018,19 @@ impl russh::client::Handler for SshClientHandler {
         Ok(())
     }
 
+    async fn server_channel_open_x11(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        let ok = self.forwards.clone().is_some_and(|t| crate::ssh::forwarding::on_x11(t, channel));
+        if ok { reply.accept().await } else { reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await }
+        Ok(())
+    }
+
     /// WarnWeakCrypto, as OpenSSH 10.1+ warns: a key exchange that is not
     /// post-quantum could be recorded now and broken later.
     async fn kex_done(
@@ -2195,7 +2208,11 @@ async fn open_session(
             return Ok((None, false));
         }
         let channel = handle.channel_open_session().await.map_err(|e| SshError::ChannelError(format!("Failed to open session: {}", e)))?;
-        let tty = setup_channel(&channel, p, cols, rows, shell).await.map_err(SshError::ChannelError)?;
+        let x11 = match &opts.forwards {
+            Some(t) => t.prepare_x11().await,
+            None => None,
+        };
+        let tty = setup_channel(&channel, p, cols, rows, shell, x11.as_ref()).await.map_err(SshError::ChannelError)?;
         return Ok((Some(channel), tty));
     }
     let channel = handle.channel_open_session().await.map_err(|e| SshError::ChannelError(format!("Failed to open session: {}", e)))?;

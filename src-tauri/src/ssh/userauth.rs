@@ -95,7 +95,7 @@ enum Source {
     /// An IdentityFile.
     File(PathBuf),
     /// A key the agent holds.
-    Agent(AgentIdentity),
+    Agent(Box<AgentIdentity>),
 }
 
 pub(crate) type Agent = AgentClient<Box<dyn AgentStream + Send + Unpin + 'static>>;
@@ -242,7 +242,7 @@ async fn prepare(auth: &AuthParams, p: &AuthPolicy, agent: &mut Option<Agent>) -
                     let public = aid.public_key().into_owned();
                     if let Some(i) = ids.iter_mut().find(|i| i.public.as_ref().is_some_and(|p| same_key(p, &public)) && i.cert.is_none()) {
                         // The agent holds this key: it signs, no passphrase asked.
-                        i.source = Source::Agent(aid);
+                        i.source = Source::Agent(Box::new(aid));
                         continue;
                     }
                     if !p.identities_only {
@@ -255,7 +255,7 @@ async fn prepare(auth: &AuthParams, p: &AuthPolicy, agent: &mut Option<Agent>) -
                             AgentIdentity::Certificate { certificate, .. } => Some(certificate.clone()),
                             _ => None,
                         };
-                        ids.push(Identity { public: Some(public), cert, source: Source::Agent(aid), label });
+                        ids.push(Identity { public: Some(public), cert, source: Source::Agent(Box::new(aid)), label });
                     }
                 }
             }
@@ -459,10 +459,7 @@ pub(crate) async fn authenticate<H: russh::client::Handler>(
     let mut kbd_tried = 0u32;
     let mut stored_password = auth.password.clone();
     let mut done: Vec<MethodKind> = Vec::new();
-    loop {
-        let Some(method) = p.methods.iter().copied().find(|m| methods.contains(m) && !done.contains(m)) else {
-            break;
-        };
+    while let Some(method) = p.methods.iter().copied().find(|m| methods.contains(m) && !done.contains(m)) {
         let result = match method {
             MethodKind::PublicKey => {
                 if identities.is_none() {

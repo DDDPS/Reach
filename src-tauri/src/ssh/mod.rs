@@ -11,3 +11,4 @@ pub mod proxycmd;
 pub mod session_log;
 pub mod session_opts;
 pub mod userauth;
+pub mod x11;

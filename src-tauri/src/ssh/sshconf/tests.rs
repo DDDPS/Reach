@@ -69,7 +69,7 @@ fn run(env: &Fake, text: &str, host: &str) -> Resolved {
     resolve(&[src], &Query { host: host.into(), ..Default::default() }, env)
 }
 
-fn first<'a>(r: &'a Resolved, kw: Kw) -> Option<&'a str> {
+fn first(r: &Resolved, kw: Kw) -> Option<&str> {
     r.options.first(kw)
 }
 

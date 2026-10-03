@@ -318,7 +318,7 @@ async fn live_config_session() {
         crate::ssh::client::login(&mut handle, "reach", &auth, &opts, None, host, port).await.map_err(|e| e.to_string())?.into_result().map_err(|e| e.to_string())?;
         let mut ch = handle.channel_open_session().await.map_err(|e| e.to_string())?;
         let p = opts.session.clone().unwrap();
-        let tty = crate::ssh::session_opts::setup_channel(&ch, &p, 80, 24, None).await?;
+        let tty = crate::ssh::session_opts::setup_channel(&ch, &p, 80, 24, None, None).await?;
         let mut out = format!("tty={tty} ");
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, ch.wait()).await {
@@ -479,5 +479,100 @@ async fn live_config_forwards() {
     }
     println!("RemoteForward: {out:?}");
     assert!(out.contains("hello-from-reach"), "{out}");
+    std::fs::remove_file(&kh).ok();
+}
+
+/// X11 forwarding: the server gets a fake cookie, and only a connection
+/// that presents it reaches the display, with the real cookie swapped in.
+/// A fake X server on this side stands in for the display. Needs
+/// REACH_SSH_TEST with X11Forwarding yes and xauth on the server, and
+/// REACH_SSH_KEYS (k_good).
+#[tokio::test]
+#[ignore = "needs an SSH server"]
+async fn live_config_x11() {
+    use crate::ssh::sshconf::session::SshOptions;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let a = std::env::var("REACH_SSH_TEST").unwrap();
+    let (host, port) = a.rsplit_once(':').unwrap();
+    let port: u16 = port.parse().unwrap();
+    let key = std::fs::read_to_string(std::path::Path::new(&std::env::var("REACH_SSH_KEYS").unwrap()).join("k_good")).unwrap();
+    let kh = std::env::temp_dir().join(format!("reach-x11-kh-{}", std::process::id()));
+
+    // The display: what each connection sent first.
+    let display = tokio::net::TcpListener::bind("127.0.0.1:6037").await.unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = display.accept().await {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 48];
+                if s.read_exact(&mut buf).await.is_ok() {
+                    let _ = tx.send(buf);
+                    let _ = s.write_all(b"X11-OK\n").await;
+                }
+            });
+        }
+    });
+    // SAFETY: this test is the only one reading DISPLAY.
+    unsafe { std::env::set_var("DISPLAY", "127.0.0.1:37") };
+
+    let lines: Vec<String> = vec![
+        format!("UserKnownHostsFile {}", kh.display().to_string().replace('\\', "/")),
+        "StrictHostKeyChecking accept-new".into(),
+        "ForwardX11 yes".into(),
+        "ForwardX11Trusted yes".into(),
+        "XAuthLocation /nonexistent/xauth".into(),
+    ];
+    let o = SshOptions { lines, ..Default::default() };
+    let plan = crate::ssh::sshconf::session::plan_for(Some(&o), host, port, "reach", false);
+    let opts: HopOptions = plan.into();
+    assert!(opts.session.is_some());
+    let stream = crate::ssh::sshconf::net::connect(host, port, &opts.socket, false).await.unwrap();
+    let handler = SshClientHandler::new(host, port, None).with_hostkeys(opts.hostkeys.clone()).with_forwards(opts.forwards.clone());
+    let mut handle = russh::client::connect_stream(opts.config.clone(), stream, handler).await.unwrap();
+    let auth = AuthParams { key: Some(KeyAuth { source: KeySource::Material(key), passphrase: None }), password: None, allow_agent: false };
+    crate::ssh::client::login(&mut handle, "reach", &auth, &opts, None, host, port).await.unwrap().into_result().unwrap();
+
+    let table = opts.forwards.clone().unwrap();
+    let x11 = table.prepare_x11().await.expect("X11 prepared");
+    let mut p = (*opts.session.clone().unwrap()).clone();
+    p.remote_command = None;
+    let ch = handle.channel_open_session().await.unwrap();
+    // One connection with the cookie the server was given, then one with
+    // a wrong cookie.
+    let script = r#"
+n=${DISPLAY#*:}; n=${n%.*}; port=$((6000+n))
+echo "DISPLAY=$DISPLAY"
+c=$(xauth list "$DISPLAY" | awk '{print $3}')
+echo "COOKIE=$c"
+send() { exec 3<>/dev/tcp/127.0.0.1/$port; printf '\x6c\x00\x0b\x00\x00\x00\x12\x00\x10\x00\x00\x00MIT-MAGIC-COOKIE-1\x00\x00'"$(echo "$1" | sed 's/../\\x&/g')" >&3; timeout 3 head -1 <&3; exec 3<&-; }
+echo "GOOD=$(send "$c")"
+echo "BAD=$(send 00112233445566778899aabbccddeeff)"
+exit
+"#;
+    let tty = crate::ssh::session_opts::setup_channel(&ch, &p, 80, 24, Some("bash -s"), Some(&x11)).await.unwrap();
+    assert!(!tty);
+    ch.data(script.as_bytes()).await.unwrap();
+    ch.eof().await.unwrap();
+    let mut ch = ch;
+    let mut out = String::new();
+    while let Ok(Some(msg)) = tokio::time::timeout(std::time::Duration::from_secs(15), ch.wait()).await {
+        match msg {
+            ChannelMsg::Data { data } => out.push_str(&String::from_utf8_lossy(&data)),
+            ChannelMsg::ExtendedData { data, .. } => out.push_str(&String::from_utf8_lossy(&data)),
+            ChannelMsg::ExitStatus { .. } => break,
+            _ => {}
+        }
+    }
+    println!("{out}");
+    assert!(out.contains("GOOD=X11-OK"), "{out}");
+    assert!(out.contains("BAD=\n") || out.trim_end().ends_with("BAD="), "{out}");
+    let cookie = out.lines().find_map(|l| l.strip_prefix("COOKIE=")).unwrap().to_string();
+    assert_eq!(cookie, x11.fake_hex(), "the server holds only the fake cookie");
+    let got = rx.recv().await.unwrap();
+    assert_eq!(&got[12..30], b"MIT-MAGIC-COOKIE-1");
+    let sent: String = got[32..48].iter().map(|b| format!("{b:02x}")).collect();
+    assert_ne!(sent, cookie, "the display got the real cookie, not the fake one");
+    assert!(rx.try_recv().is_err(), "the wrong cookie never reached the display");
     std::fs::remove_file(&kh).ok();
 }

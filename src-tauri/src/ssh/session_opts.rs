@@ -165,6 +165,7 @@ pub async fn setup_channel(
     cols: u16,
     rows: u16,
     reach_shell: Option<&str>,
+    x11: Option<&crate::ssh::x11::X11Auth>,
 ) -> Result<bool, String> {
     let shell = reach_shell.map(str::trim).filter(|s| !s.is_empty());
     let command = shell.map(|s| if s.split_whitespace().nth(1).is_some() { format!("exec {s}") } else { format!("exec {s} -l") }).or(p.remote_command.clone());
@@ -178,6 +179,12 @@ pub async fn setup_channel(
     let _ = channel.set_env(false, "COLORTERM", "truecolor").await;
     if p.agent_forward {
         channel.agent_forward(false).await.map_err(|e| format!("Agent forwarding request failed: {e}"))?;
+    }
+    if let Some(a) = x11 {
+        // A refusal is not fatal, as with ssh.
+        if let Err(e) = channel.request_x11(false, false, a.proto.as_str(), a.fake_hex(), a.screen).await {
+            tracing::warn!("X11 forwarding request failed: {e}");
+        }
     }
     for (k, v) in &p.env {
         // Servers accept only what AcceptEnv lists; a refusal is not fatal,
@@ -432,8 +439,7 @@ mod tests {
 
     #[test]
     fn send_env_sends_nothing_until_approved() {
-        let mut o = Options::default();
-        o.send_env = vec!["PATH".into()];
+        let o = Options { send_env: vec!["PATH".into()], ..Default::default() };
         assert!(SessionPolicy::from_options(&o, None, false).env.is_empty());
         let allowed = SessionPolicy::from_options(&o, None, true);
         assert!(allowed.env.iter().any(|(k, _)| k.eq_ignore_ascii_case("path")) || std::env::var("PATH").is_err());

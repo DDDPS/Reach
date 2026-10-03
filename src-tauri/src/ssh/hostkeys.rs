@@ -225,7 +225,7 @@ impl HostKeyPolicy {
                     if !info.principals.iter().any(|p| crate::ssh::sshconf::pattern::match_pattern(&principal, p)) {
                         return Verdict::Refuse(format!("The server's host certificate is not for {principal}"));
                     }
-                    if !self.ca_signature_algorithms.iter().any(|a| *a == sig_alg) {
+                    if !self.ca_signature_algorithms.contains(&sig_alg) {
                         return Verdict::Refuse(format!("The host certificate is signed with {sig_alg}, not in CASignatureAlgorithms"));
                     }
                     if matches!(knownhosts::check(&entries, &names, &info.key_type, &info.key_blob), Check::Revoked(_)) {

@@ -48,13 +48,14 @@ pub fn support(kw: Kw) -> Support {
         RequestTTY | RemoteCommand | SessionType | SetEnv | SendEnv | StdinNull | EscapeChar | ObscureKeystrokeTiming | LocalCommand | PermitLocalCommand | RefuseConnection | ProxyCommand | ProxyUseFdpass | WarnWeakCrypto | ForkAfterAuthentication | SyslogFacility => Support::Yes,
         // Forwarding (ssh/forwarding.rs).
         LocalForward | RemoteForward | DynamicForward | ClearAllForwardings | ExitOnForwardFailure | GatewayPorts | PermitRemoteOpen | StreamLocalBindMask | StreamLocalBindUnlink | ChannelTimeout | EnableEscapeCommandline | ForwardAgent => Support::Yes,
+        // X11 (ssh/x11.rs).
+        ForwardX11 | ForwardX11Trusted | ForwardX11Timeout | XAuthLocation => Support::Yes,
         ControlMaster | ControlPath
-        | ControlPersist | EnableSSHKeysign | ForwardX11
-        | ForwardX11Timeout | ForwardX11Trusted | GSSAPIAuthentication
+        | ControlPersist | EnableSSHKeysign | GSSAPIAuthentication
         | GSSAPIDelegateCredentials | HostbasedAcceptedAlgorithms | HostbasedAuthentication | LogLevel | LogVerbose
         | PKCS11Provider | SecurityKeyProvider | Tunnel
         | TunnelDevice | UpdateHostKeys | VerifyHostKeyDNS
-        | XAuthLocation | GSSAPIKeyExchange | GSSAPIClientIdentity | GSSAPIServerIdentity | GSSAPIRenewalForcesRekey
+        | GSSAPIKeyExchange | GSSAPIClientIdentity | GSSAPIServerIdentity | GSSAPIRenewalForcesRekey
         | GSSAPITrustDns | GSSAPIKexAlgorithms => Support::NotYet,
     }
 }
@@ -76,6 +77,7 @@ pub fn weakening(kw: Kw, args: &[String]) -> Option<&'static str> {
         }
         (Kw::ForwardAgent, x) if x != "no" => "lets the server use your keys while you are connected",
         (Kw::ForwardX11Trusted, "yes") => "gives the server full access to your display",
+        (Kw::ForwardX11, "yes") => "lets the server open windows on your display",
         (Kw::GatewayPorts, "yes") => "opens forwarded ports to the whole network, not just this machine",
         (Kw::NoHostAuthenticationForLocalhost, "yes") => "skips the host key check for localhost",
         (Kw::CheckHostIP, "no") => return None,
@@ -177,7 +179,7 @@ pub fn build(r: &Resolved, plan: &Plan, finish_errors: &[String], exec_asked: &[
             keyword: "SendEnv".into(),
             value: r.options.send_env.join(" "),
             reason: format!("sends this computer's environment variables to the server; would send: {shown}"),
-            accepted: plan.accepted.iter().any(|a| *a == key),
+            accepted: plan.accepted.contains(&key),
         });
     }
     let mut errors: Vec<String> = r
