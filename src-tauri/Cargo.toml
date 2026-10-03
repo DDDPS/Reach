@@ -329,6 +329,9 @@ kube = { version = "4.2", default-features = false, features = ["webpki-roots"] 
 # vendor/libsql/Cargo.toml.
 [patch.crates-io]
 libsql = { path = "vendor/libsql" }
+# russh with the older MACs and sntrup761x25519-sha512 an ssh_config may ask
+# for, none of them offered by default; see the header of vendor/russh/Cargo.toml.
+russh = { path = "vendor/russh" }
 
 [dev-dependencies]
 # Tests keep keychain entries in memory, never in the OS keychain.
