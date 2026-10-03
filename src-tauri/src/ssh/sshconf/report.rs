@@ -167,6 +167,18 @@ pub fn build(r: &Resolved, plan: &Plan, finish_errors: &[String], exec_asked: &[
         }
         lines.push(line);
     }
+    // SendEnv: the local variables it would share, by name, for approval.
+    if !r.options.send_env.is_empty() {
+        let names = crate::ssh::session_opts::send_env_names(&r.options);
+        let key = crate::ssh::session_opts::send_env_key(&r.options);
+        let shown = if names.is_empty() { "none right now".to_string() } else { names.join(", ") };
+        weakenings.push(Weakening {
+            keyword: "SendEnv".into(),
+            value: r.options.send_env.join(" "),
+            reason: format!("sends this computer's environment variables to the server; would send: {shown}"),
+            accepted: plan.accepted.iter().any(|a| *a == key),
+        });
+    }
     let mut errors: Vec<String> = r
         .notes
         .iter()

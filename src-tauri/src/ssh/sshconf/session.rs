@@ -227,7 +227,9 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
             .filter(|_| r.options.first(Kw::PermitLocalCommand) == Some("yes"))
             .filter(|c| opts.approved_commands.iter().any(|a| a == c))
             .map(str::to_string);
-        plan.session = Some(crate::ssh::session_opts::SessionPolicy::from_options(&r.options, local));
+        let key = crate::ssh::session_opts::send_env_key(&r.options);
+        let send_env_allowed = opts.accepted_weakenings.iter().any(|a| *a == key);
+        plan.session = Some(crate::ssh::session_opts::SessionPolicy::from_options(&r.options, local, send_env_allowed));
     }
     for w in &plan.weakenings {
         tracing::warn!("ssh_config for {host}: {} {} weakens the connection: {}", w.keyword, w.value, w.reason);

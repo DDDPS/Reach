@@ -48,7 +48,9 @@ pub struct SessionPolicy {
 }
 
 impl SessionPolicy {
-    pub fn from_options(o: &Options, local_command: Option<String>) -> SessionPolicy {
+    /// `send_env_allowed`: SendEnv shares this computer's environment with
+    /// the server, so it applies only once the user approved it.
+    pub fn from_options(o: &Options, local_command: Option<String>, send_env_allowed: bool) -> SessionPolicy {
         let tty = match o.first(Kw::RequestTTY) {
             Some("yes") => Tty::Yes,
             Some("no") => Tty::No,
@@ -66,12 +68,12 @@ impl SessionPolicy {
             .unwrap_or_default();
         // SendEnv: local variables whose names match, as ssh's
         // env_permitted; SetEnv wins for a name it already set.
-        if !o.send_env.is_empty() {
-            for (k, v) in std::env::vars() {
+        if send_env_allowed {
+            for k in send_env_names(o) {
                 if env.iter().any(|(n, _)| *n == k) {
                     continue;
                 }
-                if o.send_env.iter().any(|p| pattern::match_pattern(&k, p)) {
+                if let Ok(v) = std::env::var(&k) {
                     env.push((k, v));
                 }
             }
@@ -131,6 +133,24 @@ impl SessionPolicy {
             .find(|(p, _)| p == "global" || pattern::match_pattern(channel_type, p))
             .map(|(_, d)| *d)
     }
+}
+
+/// The local environment variables SendEnv would send, by name, sorted.
+pub fn send_env_names(o: &Options) -> Vec<String> {
+    if o.send_env.is_empty() {
+        return Vec::new();
+    }
+    let mut names: Vec<String> = std::env::vars()
+        .map(|(k, _)| k)
+        .filter(|k| o.send_env.iter().any(|p| pattern::match_pattern(k, p)))
+        .collect();
+    names.sort();
+    names
+}
+
+/// How an approval of SendEnv is stored: the patterns, as one weakening.
+pub fn send_env_key(o: &Options) -> String {
+    super::sshconf::apply::weakening_key(Kw::SendEnv, &o.send_env.join(" "))
 }
 
 /// Open the session as the policy says. `reach_shell` is the session's own
@@ -405,13 +425,23 @@ mod tests {
     }
 
     #[test]
+    fn send_env_sends_nothing_until_approved() {
+        let mut o = Options::default();
+        o.send_env = vec!["PATH".into()];
+        assert!(SessionPolicy::from_options(&o, None, false).env.is_empty());
+        let allowed = SessionPolicy::from_options(&o, None, true);
+        assert!(allowed.env.iter().any(|(k, _)| k.eq_ignore_ascii_case("path")) || std::env::var("PATH").is_err());
+        assert_eq!(send_env_key(&o), "SendEnv PATH");
+    }
+
+    #[test]
     fn tty_choice_follows_ssh() {
         let mut o = Options::default();
         let at = super::super::sshconf::resolve::At { file: "f".into(), line: 1 };
-        let p = SessionPolicy::from_options(&o, None);
+        let p = SessionPolicy::from_options(&o, None, false);
         assert!(p.wants_tty(false));
         assert!(!p.wants_tty(true));
         o.single.insert(Kw::RequestTTY, super::super::sshconf::resolve::Setting { args: vec!["force".into()], at });
-        assert!(SessionPolicy::from_options(&o, None).wants_tty(true));
+        assert!(SessionPolicy::from_options(&o, None, false).wants_tty(true));
     }
 }

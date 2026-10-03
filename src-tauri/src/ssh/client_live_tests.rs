@@ -302,7 +302,14 @@ async fn live_config_session() {
     let key = std::fs::read_to_string(std::path::Path::new(&std::env::var("REACH_SSH_KEYS").unwrap()).join("k_good")).unwrap();
 
     async fn run(host: &str, port: u16, key: &str, lines: &[&str]) -> Result<String, String> {
-        let o = SshOptions { lines: lines.iter().map(|l| l.to_string()).collect(), ..Default::default() };
+        run_with(host, port, key, lines, &[]).await
+    }
+    async fn run_with(host: &str, port: u16, key: &str, lines: &[&str], accepted: &[&str]) -> Result<String, String> {
+        let o = SshOptions {
+            lines: lines.iter().map(|l| l.to_string()).collect(),
+            accepted_weakenings: accepted.iter().map(|l| l.to_string()).collect(),
+            ..Default::default()
+        };
         let plan = crate::ssh::sshconf::session::plan_for(Some(&o), host, port, "reach", false);
         let opts: HopOptions = plan.into();
         let stream = crate::ssh::sshconf::net::connect(host, port, &opts.socket, false).await.map_err(|e| e.to_string())?;
@@ -335,6 +342,15 @@ async fn live_config_session() {
     let r = run(host, port, &key, &["SetEnv LC_REACH=from-setenv", "RemoteCommand echo env=$LC_REACH"]).await.unwrap();
     println!("SetEnv: {r:?}");
     assert!(r.contains("env=from-setenv"), "{r}");
+    // SendEnv shares nothing until approved.
+    std::env::set_var("LC_REACHSEND", "from-sendenv");
+    let lines = ["SendEnv LC_REACHSEND", "RemoteCommand echo send=[$LC_REACHSEND]"];
+    let r = run(host, port, &key, &lines).await.unwrap();
+    println!("SendEnv, not approved: {r:?}");
+    assert!(r.contains("send=[]"), "{r}");
+    let r = run_with(host, port, &key, &lines, &["SendEnv LC_REACHSEND"]).await.unwrap();
+    println!("SendEnv, approved: {r:?}");
+    assert!(r.contains("send=[from-sendenv]"), "{r}");
     let r = run(host, port, &key, &["RequestTTY force", "RemoteCommand tty"]).await.unwrap();
     println!("RequestTTY force: {r:?}");
     assert!(r.starts_with("tty=true") && r.contains("/dev/pts/"), "{r}");
