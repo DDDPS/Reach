@@ -323,6 +323,10 @@ fn x11_config(o: &super::resolve::Options, plan: &super::apply::Plan, approved_c
         // Windows has no X server of its own: Reach provides one (an
         // empty display asks for it, see ssh/xserver.rs).
         _ if cfg!(windows) => String::new(),
+        _ if cfg!(target_os = "macos") => {
+            tracing::warn!("ForwardX11: no X server on this Mac; install XQuartz (xquartz.org), log out and in, and connect again");
+            return None;
+        }
         _ => {
             tracing::warn!("ForwardX11: DISPLAY is not set on this computer; not forwarding X11");
             return None;
