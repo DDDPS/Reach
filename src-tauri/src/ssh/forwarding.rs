@@ -64,11 +64,13 @@ pub struct ForwardTable {
     /// The X11 cookies the session asked for; X11 channels are refused
     /// without them.
     x11: Mutex<Option<super::x11::X11Auth>>,
+    /// X11 was set up (or tried and failed) for this connection already.
+    x11_tried: std::sync::atomic::AtomicBool,
 }
 
 impl ForwardTable {
     pub fn new(policy: ForwardPolicy) -> Arc<Self> {
-        Arc::new(ForwardTable { remote: Mutex::new(Vec::new()), policy: Mutex::new(policy), x11: Mutex::new(None) })
+        Arc::new(ForwardTable { remote: Mutex::new(Vec::new()), policy: Mutex::new(policy), x11: Mutex::new(None), x11_tried: Default::default() })
     }
 
     fn policy(&self) -> ForwardPolicy {
@@ -84,6 +86,10 @@ impl ForwardTable {
     /// A setup failure leaves X11 off and the session going, as with ssh.
     pub async fn prepare_x11(&self) -> Option<super::x11::X11Auth> {
         let cfg = self.policy().x11?;
+        if self.x11_tried.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            // Once per connection: a failure says so once, not per step.
+            return self.prepared_x11();
+        }
         match super::x11::prepare(&cfg).await {
             Ok(a) => {
                 *self.x11.lock().unwrap() = Some(a.clone());

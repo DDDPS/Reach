@@ -11,6 +11,7 @@
 	import { COMMUNITY } from '$lib/data/community';
 	import LanguageSelect from '$lib/components/shared/LanguageSelect.svelte';
 	import Toggle from '$lib/components/shared/Toggle.svelte';
+	import X11ServerSetting from './X11ServerSetting.svelte';
 	import { getSettings, updateSetting, syncTraySettings } from '$lib/state/settings.svelte';
 	import { effectiveThreshold, MIN_PASTE_THRESHOLD } from '$lib/terminal/paste';
 	import { t, changeLocale } from '$lib/state/i18n.svelte';
@@ -173,6 +174,8 @@
 				/>
 			</div>
 		</div>
+
+		<X11ServerSetting />
 	{/if}
 
 	<!-- The permanent route to the community. The launch prompt can be

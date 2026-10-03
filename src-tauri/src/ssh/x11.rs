@@ -139,7 +139,7 @@ pub async fn prepare(cfg: &X11Config) -> Result<X11Auth, String> {
     // one Reach starts (see `xserver`), as MobaXterm brings its own.
     #[cfg(windows)]
     if cfg.display.is_empty() {
-        let d = super::xserver::ensure(|m| tracing::warn!("{m}")).await?;
+        let d = super::xserver::ensure().await?;
         let mut local = cfg.clone();
         local.display = d.name.clone();
         if let Some(x) = d.xauth.as_ref().filter(|_| !std::path::Path::new(&cfg.xauth).is_file()) {

@@ -1,8 +1,9 @@
 //! An X server for X11 forwarding on Windows, the way MobaXterm brings its
 //! own: when nothing has set DISPLAY, Reach uses an X server already
-//! running on this machine, or starts VcXsrv. VcXsrv is downloaded the
-//! first time it is needed (the installer stays small), checked against a
-//! SHA-256 pinned here, and kept under the tools folder.
+//! running on this machine, or starts VcXsrv. VcXsrv is not in the
+//! installer: the user turns it on in Settings, which downloads it once,
+//! checks it against a SHA-256 pinned here and keeps it under the tools
+//! folder. Nothing is downloaded without that.
 //!
 //! The server is started with a random MIT-MAGIC-COOKIE-1 of Reach's own
 //! (`-auth`), never with access control off: nothing on this machine or
@@ -10,6 +11,7 @@
 //! with Reach (the SSH server gets a fake one, see `x11`).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
@@ -18,14 +20,16 @@ use sha2::{Digest, Sha256};
 /// vcxsrv-64.21.1.16.1.installer.noadmin.exe, SHA-256 dea6c7d6…d620,
 /// without uninstall.exe and plink.exe), with its licence and a note on
 /// where the source is.
-const VERSION: &str = "21.1.16.1";
+pub const VERSION: &str = "21.1.16.1";
 const URL: &str = "https://github.com/alexandrosnt/Reach/releases/download/vcxsrv-21.1.16.1/vcxsrv-21.1.16.1-x64.zip";
 const SHA256: &str = "2f272a234108595fbe91b0b537fad881c4d11ad52879e1634c844cb9c908ded8";
+/// The zip's size, for the progress bar when the server does not say.
+const ZIP_BYTES: u64 = 51267344;
 
 /// A display Reach can forward to.
 #[derive(Debug, Clone)]
 pub struct Display {
-    /// "localhost:N".
+    /// "127.0.0.1:N".
     pub name: String,
     /// The server's cookie, when Reach started it; `None` for a server
     /// someone else runs (its own access control applies).
@@ -52,13 +56,18 @@ fn root() -> PathBuf {
     crate::app_data_dir().join("tools").join("vcxsrv").join(VERSION)
 }
 
+/// Whether the X server is set up (turned on in Settings).
+pub fn installed() -> bool {
+    root().join("vcxsrv.exe").is_file()
+}
+
 fn port_open(port: u16) -> bool {
     std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(300)).is_ok()
 }
 
-/// The display to forward to: an X server already running here, Reach's
-/// own if it started one, or a new one.
-pub async fn ensure(progress: impl Fn(&str)) -> Result<Display, String> {
+/// The display to forward to: an X server already running here, or Reach's
+/// own when it is turned on in Settings.
+pub async fn ensure() -> Result<Display, String> {
     let mut st = state().lock().await;
     if let Some(r) = st.as_mut() {
         if r.child.try_wait().ok().flatten().is_none() {
@@ -77,70 +86,134 @@ pub async fn ensure(progress: impl Fn(&str)) -> Result<Display, String> {
             _ => tracing::warn!("X11: something that is not a known X server listens on display :0; Reach starts its own"),
         }
     }
-    let dir = root();
-    let exe = dir.join("vcxsrv.exe");
-    if !exe.is_file() {
-        install(&dir, &progress).await?;
+    if !installed() {
+        return Err("no X server on this computer: turn on the X11 server in Settings, General".into());
     }
-    let running = start(&dir).await?;
+    let running = start(&root()).await?;
     let display = running.display.clone();
     *st = Some(running);
     Ok(display)
 }
 
-async fn install(dir: &Path, progress: &impl Fn(&str)) -> Result<(), String> {
-    progress(&format!("X11: downloading the X server (VcXsrv {VERSION}, about 48 MB), once…"));
-    let bytes = fetch().await?;
+/// Where an install is: bytes downloaded, then files unpacked.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Progress {
+    pub stage: &'static str,
+    pub done: u64,
+    pub total: u64,
+}
+
+/// Downloads, checks and unpacks the X server. `cancel` stops it at the
+/// next chunk or file; a stopped or failed install leaves nothing behind.
+pub async fn install(cancel: &AtomicBool, progress: impl Fn(Progress)) -> Result<(), String> {
+    let dir = root();
+    let bytes = fetch(cancel, &progress).await?;
+    progress(Progress { stage: "verify", done: 0, total: 1 });
     let got: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
     if got != SHA256 {
-        return Err(format!("the X server download does not match its pinned SHA-256 (got {got}); nothing was installed"));
+        return Err(format!("the download does not match the X server's pinned SHA-256 (got {got}); nothing was installed"));
     }
-    progress("X11: unpacking the X server…");
     let staging = dir.with_extension("partial");
     let _ = std::fs::remove_dir_all(&staging);
-    let staged = staging.clone();
-    tokio::task::spawn_blocking(move || unpack(&bytes, &staged))
-        .await
-        .map_err(|e| e.to_string())??;
-    let _ = std::fs::remove_dir_all(dir);
+    // Thousands of small files: blocking work, off the async workers.
+    let result = tokio::task::block_in_place(|| unpack(&bytes, &staging, cancel, &progress));
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(e);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
     // Only a complete, verified tree takes the final name.
-    std::fs::rename(staging.join("vcxsrv"), dir).map_err(|e| format!("X server: {e}"))?;
+    std::fs::rename(staging.join("vcxsrv"), &dir).map_err(|e| format!("X server: {e}"))?;
     let _ = std::fs::remove_dir_all(&staging);
+    tracing::info!("X11: VcXsrv {VERSION} installed");
     Ok(())
 }
 
-async fn fetch() -> Result<Vec<u8>, String> {
+/// Stops Reach's X server and removes its files.
+pub async fn remove() -> Result<(), String> {
+    if let Some(mut r) = state().lock().await.take() {
+        let _ = r.child.kill();
+    }
+    let dir = root();
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("could not remove the X server: {e}"))?;
+    }
+    Ok(())
+}
+
+const CANCELLED: &str = "cancelled";
+
+async fn fetch(cancel: &AtomicBool, progress: &impl Fn(Progress)) -> Result<Vec<u8>, String> {
     // A development build can use a local copy of the zip.
     #[cfg(debug_assertions)]
     if let Some(p) = std::env::var_os("REACH_DEV_VCXSRV_ZIP") {
-        return std::fs::read(p).map_err(|e| e.to_string());
+        let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
+        let total = bytes.len() as u64;
+        // Paced, so the progress bar and Cancel can be tried.
+        for step in 1..=20u64 {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(CANCELLED.into());
+            }
+            progress(Progress { stage: "download", done: total * step / 20, total });
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        return Ok(bytes);
     }
+    use futures_util::StreamExt;
     let client = crate::http::client_builder()
         .user_agent("Reach (https://github.com/alexandrosnt/Reach)")
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client.get(URL).send().await.map_err(|e| format!("X server download failed: {e}"))?;
     let resp = resp.error_for_status().map_err(|e| format!("X server download failed: {e}"))?;
-    resp.bytes().await.map(|b| b.to_vec()).map_err(|e| format!("X server download failed: {e}"))
+    let total = resp.content_length().unwrap_or(ZIP_BYTES);
+    let mut bytes = Vec::with_capacity(total as usize);
+    let mut stream = resp.bytes_stream();
+    let mut last = 0u64;
+    while let Some(chunk) = stream.next().await {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(CANCELLED.into());
+        }
+        let chunk = chunk.map_err(|e| format!("X server download failed: {e}"))?;
+        bytes.extend_from_slice(&chunk);
+        // A size well past the expected one is not the X server.
+        if bytes.len() as u64 > ZIP_BYTES * 2 {
+            return Err("the X server download is larger than it should be; stopped".into());
+        }
+        let done = bytes.len() as u64;
+        if done - last >= 256 * 1024 || done == total {
+            last = done;
+            progress(Progress { stage: "download", done, total });
+        }
+    }
+    Ok(bytes)
 }
 
 /// Unpacks the zip under `into`, refusing any entry that would land
 /// outside it.
-fn unpack(bytes: &[u8], into: &Path) -> Result<(), String> {
+fn unpack(bytes: &[u8], into: &Path, cancel: &AtomicBool, progress: &impl Fn(Progress)) -> Result<(), String> {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
+    let total = zip.len() as u64;
     for i in 0..zip.len() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(CANCELLED.into());
+        }
         let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
         let Some(rel) = f.enclosed_name() else { return Err(format!("unsafe path in the X server zip: {}", f.name())) };
         let out = into.join(rel);
         if f.is_dir() {
             std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-            continue;
+        } else {
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let mut w = std::fs::File::create(&out).map_err(|e| e.to_string())?;
+            std::io::copy(&mut f, &mut w).map_err(|e| e.to_string())?;
         }
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        if i % 50 == 0 || i as u64 + 1 == total {
+            progress(Progress { stage: "unpack", done: i as u64 + 1, total });
         }
-        let mut w = std::fs::File::create(&out).map_err(|e| e.to_string())?;
-        std::io::copy(&mut f, &mut w).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -378,7 +451,7 @@ mod tests {
             w.finish().unwrap();
         }
         let dir = std::env::temp_dir().join(format!("reach-xs-{}", std::process::id()));
-        assert!(unpack(&buf, &dir).is_err());
+        assert!(unpack(&buf, &dir, &AtomicBool::new(false), &|_| {}).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

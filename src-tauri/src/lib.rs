@@ -60,6 +60,7 @@ use ipc::dragout_commands::*;
 use ipc::webview_commands::*;
 use ipc::ssh_commands::*;
 use ipc::sshconfig_commands::*;
+use ipc::x11server_commands::*;
 use ipc::sshkey_commands::*;
 use ipc::tofu_commands::*;
 use ipc::theme_commands::*;
@@ -381,6 +382,10 @@ pub fn run() {
             inspect_key_file,
             // SSH Config commands
             sshconfig_scan,
+            x11server_status,
+            x11server_install,
+            x11server_cancel,
+            x11server_remove,
             sshconfig_exists,
             ssh_options_report,
             ssh_key_import,
@@ -765,6 +770,10 @@ pub fn run() {
             inspect_key_file,
             // SSH Config commands
             sshconfig_scan,
+            x11server_status,
+            x11server_install,
+            x11server_cancel,
+            x11server_remove,
             sshconfig_exists,
             ssh_options_report,
             ssh_key_import,
