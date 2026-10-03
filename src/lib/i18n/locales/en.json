@@ -2178,7 +2178,7 @@
   "sshopt.hide_other": "Hide the other lines",
   "sshopt.import_desc": "Each host is read the way ssh reads it, with Match, Include and every option. The files are kept with the session, so it connects the same way on every device.",
   "sshopt.file_errors_title": "ssh would refuse your config because of these lines:",
-  "sshopt.files_read": "{{count}} files read",
+  "sshopt.files_read": "Files read: {{count}}",
   "sshopt.details": "Details",
   "sshopt.hide_details": "Hide",
   "sshopt.weaker_title": "Weaker than Reach's defaults",

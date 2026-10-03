@@ -2178,7 +2178,7 @@
   "sshopt.hide_other": "Nascondi le altre righe",
   "sshopt.import_desc": "Ogni host viene letto come lo legge ssh, con Match, Include e tutte le opzioni. I file vengono salvati con la sessione, così si connette allo stesso modo su ogni dispositivo.",
   "sshopt.file_errors_title": "ssh rifiuterebbe la tua configurazione per queste righe:",
-  "sshopt.files_read": "{{count}} file letti",
+  "sshopt.files_read": "File letti: {{count}}",
   "sshopt.details": "Dettagli",
   "sshopt.hide_details": "Nascondi",
   "sshopt.weaker_title": "Più debole delle impostazioni predefinite di Reach",

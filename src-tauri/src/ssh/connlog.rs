@@ -88,6 +88,10 @@ pub struct ConnLog {
     verbose: Vec<[String; 3]>,
     lines: Mutex<Vec<String>>,
     sink: Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>,
+    /// The session is up: russh's packet-level debug stops, since Reach's
+    /// own background channels (the status bar, file browsing) would fill
+    /// the terminal with it. LogVerbose can still ask for it.
+    established: std::sync::atomic::AtomicBool,
     id: u64,
 }
 
@@ -152,6 +156,7 @@ impl ConnLog {
             verbose,
             lines: Mutex::new(Vec::new()),
             sink: Mutex::new(None),
+            established: std::sync::atomic::AtomicBool::new(false),
             id: NEXT.fetch_add(1, Ordering::Relaxed),
         });
         logs().lock().unwrap().insert(log.id, log.clone());
@@ -190,7 +195,9 @@ impl ConnLog {
         if meta.target() == BANNER_TARGET {
             return self.shows(LogLevel::Info);
         }
-        self.shows(LogLevel::of(meta.level())) || (!self.verbose.is_empty() && self.forced(meta))
+        let level = LogLevel::of(meta.level());
+        let quiet_now = level >= LogLevel::Debug1 && meta.target().starts_with("russh") && self.established.load(Ordering::Relaxed);
+        (self.shows(level) && !quiet_now) || (!self.verbose.is_empty() && self.forced(meta))
     }
 
     fn push(&self, line: String) {
@@ -209,6 +216,7 @@ impl ConnLog {
 
     /// The lines so far; later ones go to `tx`.
     pub fn attach(&self, tx: tokio::sync::mpsc::UnboundedSender<String>) -> Vec<String> {
+        self.established.store(true, Ordering::Relaxed);
         let mut lines = self.lines.lock().unwrap();
         *self.sink.lock().unwrap() = Some(tx);
         std::mem::take(&mut *lines)
@@ -410,5 +418,30 @@ mod tests {
         assert_eq!(quiet.take(), vec!["an error"]);
         close(&log);
         close(&quiet);
+    }
+
+    #[test]
+    fn russh_packet_debug_stops_once_the_session_is_up() {
+        use tracing_subscriber::layer::SubscriberExt;
+        let sub = tracing_subscriber::registry().with(ConnLogLayer.with_filter(ConnLogFilter));
+        let log = ConnLog::new(Some("DEBUG1"), &[]);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        tracing::subscriber::with_default(sub, || {
+            log.span().in_scope(|| tracing::debug!(target: "russh::client", "kex packet"));
+            let early = log.attach(tx);
+            assert_eq!(early, vec!["debug1: kex packet"]);
+            log.span().in_scope(|| {
+                tracing::debug!(target: "russh::client", "status bar packet");
+                tracing::warn!(target: "russh::client", "a russh warning");
+            });
+        });
+        // Live lines went to the sink; nothing russh-debug was sent.
+        let mut rx = _rx;
+        let mut live = Vec::new();
+        while let Ok(l) = rx.try_recv() {
+            live.push(l);
+        }
+        assert_eq!(live, vec!["a russh warning"]);
+        close(&log);
     }
 }

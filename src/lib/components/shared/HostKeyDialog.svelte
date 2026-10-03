@@ -71,7 +71,7 @@
 			<pre class="randomart">{current.randomart}</pre>
 		{/if}
 		{#if current.dnsMatch != null}
-			<p class="msg">{t(current.dnsMatch ? 'hostkey.dns_match' : 'hostkey.dns_nomatch')}</p>
+			<p class="msg dns">{t(current.dnsMatch ? 'hostkey.dns_match' : 'hostkey.dns_nomatch')}</p>
 		{/if}
 
 		{#snippet actions()}
@@ -84,6 +84,10 @@
 {/if}
 
 <style>
+	.dns {
+		margin-top: var(--space-3, 12px);
+	}
+
 	.randomart {
 		margin: 8px 0 0;
 		font-family: var(--font-mono);

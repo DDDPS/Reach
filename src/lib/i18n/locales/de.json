@@ -2178,7 +2178,7 @@
   "sshopt.hide_other": "Übrige Zeilen ausblenden",
   "sshopt.import_desc": "Jeder Host wird so gelesen, wie ssh ihn liest, mit Match, Include und allen Optionen. Die Dateien werden mit der Sitzung gespeichert, damit sie auf jedem Gerät gleich verbindet.",
   "sshopt.file_errors_title": "ssh würde Ihre Konfiguration wegen dieser Zeilen ablehnen:",
-  "sshopt.files_read": "{{count}} Dateien gelesen",
+  "sshopt.files_read": "Gelesene Dateien: {{count}}",
   "sshopt.details": "Details",
   "sshopt.hide_details": "Ausblenden",
   "sshopt.weaker_title": "Schwächer als die Standardwerte von Reach",
