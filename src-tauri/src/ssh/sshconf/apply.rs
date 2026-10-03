@@ -256,8 +256,8 @@ impl Plan {
     /// configuration, which the config adjusts. `accepted` lists the
     /// weakenings the user approved ("Keyword value"); lines set in Reach
     /// itself count as approved.
-    pub fn new(r: &Resolved, base: russh::client::Config, accepted: &[String]) -> Plan {
-        let mut p = Plan { config: base, socket: SocketPlan::default(), weakenings: vec![], uses: vec![], accepted: accepted.to_vec(), pubkey_algorithms: None, auth: None, ca_signature_algorithms: crate::ssh::hostkeys::DEFAULT_CA_SIGALGS.iter().map(|s| s.to_string()).collect(), hostkeys: None, session: None, refused: None, proxy_command: None, forwards: None, log: None, control: None, typed_lines_approved: true };
+    pub fn new(r: &Resolved, base: russh::client::Config, accepted: &[String], typed_lines_approved: bool) -> Plan {
+        let mut p = Plan { config: base, socket: SocketPlan::default(), weakenings: vec![], uses: vec![], accepted: accepted.to_vec(), pubkey_algorithms: None, auth: None, ca_signature_algorithms: crate::ssh::hostkeys::DEFAULT_CA_SIGALGS.iter().map(|s| s.to_string()).collect(), hostkeys: None, session: None, refused: None, proxy_command: None, forwards: None, log: None, control: None, typed_lines_approved };
         let o = &r.options;
         p.algorithms(o);
         p.transport(o);
@@ -506,12 +506,12 @@ mod tests {
         let env = super::super::env::SystemEnv::new(super::super::env::ExecPolicy::Never);
         let r = super::super::resolve::resolve(&[src], &super::super::resolve::Query { host: "centreon".into(), ..Default::default() }, &env);
         // From a file, not yet approved: held back, and said so.
-        let p = Plan::new(&r, russh::client::Config::default(), &[]);
+        let p = Plan::new(&r, russh::client::Config::default(), &[], true);
         assert!(!p.config.preferred.mac.contains(&russh::mac::HMAC_SHA1));
         assert!(matches!(&p.uses[0].1, Use::Partly(m) if m.contains("approval")));
         assert!(!p.weakenings[0].accepted);
         // Approved: offered after Reach's own, with the warning kept.
-        let p = Plan::new(&r, russh::client::Config::default(), &["MACs hmac-sha1".into()]);
+        let p = Plan::new(&r, russh::client::Config::default(), &["MACs hmac-sha1".into()], true);
         assert!(p.config.preferred.mac.contains(&russh::mac::HMAC_SHA1));
         assert_eq!(p.config.preferred.mac.first(), Some(&russh::mac::HMAC_SHA512_ETM));
         assert_eq!(p.weakenings.len(), 1);
@@ -527,11 +527,11 @@ mod tests {
         // DSA host keys: OpenSSH 10 dropped them and Reach's engine has none.
         o.single.insert(Kw::HostKeyAlgorithms, super::super::resolve::Setting { args: vec!["+ssh-dss".into()], at });
         let r = Resolved { original_host: "h".into(), host: "h".into(), options: o, notes: vec![], refused: None, final_pass: false };
-        let p = Plan::new(&r, russh::client::Config::default(), &[]);
+        let p = Plan::new(&r, russh::client::Config::default(), &[], true);
         let used = |kw: Kw| p.uses.iter().find(|(k, _)| *k == kw).map(|(_, u)| u.clone()).unwrap();
         assert!(matches!(used(Kw::MACs), Use::Partly(m) if m.contains("approval: hmac-md5")));
         assert!(matches!(used(Kw::HostKeyAlgorithms), Use::Partly(m) if m.contains("not available: ssh-dss")));
-        let p = Plan::new(&r, russh::client::Config::default(), &["MACs hmac-md5".into()]);
+        let p = Plan::new(&r, russh::client::Config::default(), &["MACs hmac-md5".into()], true);
         assert!(p.config.preferred.mac.contains(&russh::mac::HMAC_MD5));
     }
 
@@ -540,7 +540,7 @@ mod tests {
         let mut o = Options::default();
         o.single.insert(Kw::RekeyLimit, super::super::resolve::Setting { args: vec!["4G".into(), "1h".into()], at: super::super::resolve::At { file: "f".into(), line: 1 } });
         let r = Resolved { original_host: "h".into(), host: "h".into(), options: o, notes: vec![], refused: None, final_pass: false };
-        let p = Plan::new(&r, russh::client::Config::default(), &[]);
+        let p = Plan::new(&r, russh::client::Config::default(), &[], true);
         assert_eq!(p.config.limits.rekey_write_limit, 1 << 30);
         assert_eq!(p.config.limits.rekey_time_limit, Duration::from_secs(3600));
     }

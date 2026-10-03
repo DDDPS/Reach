@@ -8,8 +8,7 @@
 	import Modal from '$lib/components/shared/Modal.svelte';
 	import Button from '$lib/components/shared/Button.svelte';
 	import SshOptionsReport from './SshOptionsReport.svelte';
-	import { sshconfigScan, weakeningKey, withMyApprovals, type HostImport } from '$lib/ipc/sshconfig';
-	import { vaultState } from '$lib/state/vault.svelte';
+	import { sshconfigScan, weakeningKey, type HostImport } from '$lib/ipc/sshconfig';
 	import { sessionCreate, sessionList, sessionListFolders, sessionCreateFolder, type SessionConfig, type AuthMethod, type JumpHostConfig, type Folder } from '$lib/ipc/sessions';
 	import { addToast } from '$lib/state/toasts.svelte';
 	import { t } from '$lib/state/i18n.svelte';
@@ -161,11 +160,8 @@
 					folderId,
 					tags: ['ssh-config'],
 					jumpChain,
-					sshOptions: {
-						...host.options,
-						approved_commands: withMyApprovals([], a.commands, vaultState.userUuid),
-						accepted_weakenings: withMyApprovals([], a.weakenings, vaultState.userUuid)
-					}
+					// What this person ticked; the backend signs it as theirs.
+					sshOptions: { ...host.options, my_approved_commands: a.commands, my_accepted_weakenings: a.weakenings }
 				});
 				count++;
 			}

@@ -507,34 +507,48 @@ fn agrees_with_ssh_g() {
     assert!(checked > 0);
 }
 
-/// Only the connecting person's approvals count, and a stored session's
-/// typed lines need one like anything else.
+/// Only approvals the connecting person signed for this session count, and
+/// a stored session's typed lines need one like anything else.
 #[test]
 fn approvals_belong_to_who_gave_them() {
-    use super::session::{plan_for, SshOptions, APPROVAL_SEP};
-    let tag = |who: &str, what: &str| format!("{who}{APPROVAL_SEP}{what}");
-    let o = SshOptions {
+    use super::approvals::{sign, Kind};
+    use super::session::{plan_for, SshOptions};
+    use crate::ssh::hostkeys::Strict;
+    let alice_key = [7u8; 32];
+    let mallory_key = [9u8; 32];
+    let stored = SshOptions {
         lines: vec!["ProxyCommand nc %h %p".into(), "StrictHostKeyChecking no".into()],
-        approved_commands: vec![tag("mallory", "nc %h %p"), "nc %h %p".into()],
-        accepted_weakenings: vec![tag("alice", "StrictHostKeyChecking no")],
+        approved_commands: vec![
+            // Mallory, in alice's name, with her own key.
+            sign(&mallory_key, "alice", Kind::Command, "s1", "nc %h %p"),
+            // Alice's real approval, but for another session.
+            sign(&alice_key, "alice", Kind::Command, "s2", "nc %h %p"),
+            "nc %h %p".into(),
+        ],
+        accepted_weakenings: vec![sign(&alice_key, "alice", Kind::Weakening, "s1", "StrictHostKeyChecking no")],
+        // A record can claim anything in the plain fields; reading replaces them.
+        my_approved_commands: Some(vec!["nc %h %p".into()]),
         ..Default::default()
     };
-    let alice = o.approved_by(Some("alice"));
-    assert!(alice.approved_commands.is_empty(), "someone else's or an untagged approval is not alice's");
-    assert_eq!(alice.accepted_weakenings, vec!["StrictHostKeyChecking no".to_string()]);
-    assert!(alice.untrusted_lines);
-    // The ProxyCommand waits for alice's own approval.
-    let plan = plan_for(Some(&alice), "h", 22, "u", false);
-    assert!(plan.proxy_command.is_none() && plan.refused.is_some());
-    // Nobody signed in: nothing is approved.
-    assert!(o.approved_by(None).accepted_weakenings.is_empty());
-    // Alice's approval turns host-key checking off for alice; for bob the
-    // same typed line counts for nothing.
-    use crate::ssh::hostkeys::Strict;
-    let strict = |opts: &SshOptions| plan_for(Some(opts), "h", 22, "u", false).hostkeys.map(|h| h.strict);
-    assert_eq!(strict(&alice), Some(Strict::No));
-    assert_ne!(strict(&o.approved_by(Some("bob"))), Some(Strict::No));
-    // Options Reach builds itself (tests, the editor's own check) keep the
-    // typed line approved.
-    assert_eq!(strict(&o), Some(Strict::No));
+    let mut alice = stored.clone();
+    alice.open_for(Some(&alice_key), Some("alice"), "s1");
+    assert_eq!(alice.my_approved_commands, Some(vec![]));
+    assert_eq!(alice.my_accepted_weakenings, Some(vec!["StrictHostKeyChecking no".to_string()]));
+    let used = alice.effective();
+    let plan = plan_for(Some(&used), "h", 22, "u", false);
+    assert!(plan.proxy_command.is_none() && plan.refused.is_some(), "the ProxyCommand waits for alice's own approval");
+    assert_eq!(plan.hostkeys.map(|h| h.strict), Some(Strict::No));
+    // Bob opens the same record: nothing is his, the typed line counts for nothing.
+    let mut bob = stored.clone();
+    bob.open_for(Some(&mallory_key), Some("bob"), "s1");
+    let plan = plan_for(Some(&bob.effective()), "h", 22, "u", false);
+    assert_ne!(plan.hostkeys.map(|h| h.strict), Some(Strict::No));
+    // Saving signs alice's choices and keeps the rest for their owners.
+    let mut saved = alice.clone();
+    saved.my_approved_commands = Some(vec!["nc %h %p".into()]);
+    saved.seal_for(Some(&alice_key), Some("alice"), "s1");
+    assert!(saved.my_approved_commands.is_none());
+    let mut reopened = saved.clone();
+    reopened.open_for(Some(&alice_key), Some("alice"), "s1");
+    assert_eq!(reopened.my_approved_commands, Some(vec!["nc %h %p".to_string()]));
 }

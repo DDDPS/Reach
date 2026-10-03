@@ -78,7 +78,30 @@ pub async fn session_list(state: State<'_, AppState>) -> Result<Vec<SessionConfi
         }
     }
 
-    Ok(unique_sessions(sessions))
+    let mut sessions = unique_sessions(sessions);
+    for s in &mut sessions {
+        open_approvals(&manager, s);
+    }
+    Ok(sessions)
+}
+
+/// After reading a session: the user's approvals are the ones signed with
+/// their key for this session; nothing else in the record counts.
+fn open_approvals(manager: &crate::vault::VaultManager, session: &mut SessionConfig) {
+    if let Some(o) = session.ssh_options.as_mut() {
+        let key = manager.approval_key();
+        let who = manager.get_user_uuid();
+        o.open_for(key.as_deref(), who.as_deref(), &session.id);
+    }
+}
+
+/// Before storing a session: the user's approvals signed into it.
+fn seal_approvals(manager: &crate::vault::VaultManager, session: &mut SessionConfig) {
+    if let Some(o) = session.ssh_options.as_mut() {
+        let key = manager.approval_key();
+        let who = manager.get_user_uuid();
+        o.seal_for(key.as_deref(), who.as_deref(), &session.id);
+    }
 }
 
 /// One entry per session id, the first one found.
@@ -131,7 +154,9 @@ pub async fn session_get(
     let json = String::from_utf8(plaintext.expose_secret().clone())
         .map_err(|e| format!("Invalid UTF-8: {}", e))?;
 
-    serde_json::from_str(&json).map_err(|e| format!("Invalid session data: {}", e))
+    let mut session: SessionConfig = serde_json::from_str(&json).map_err(|e| format!("Invalid session data: {}", e))?;
+    open_approvals(&manager, &mut session);
+    Ok(session)
 }
 
 /// Create a new session configuration. O(1) insert.
@@ -183,7 +208,7 @@ pub async fn session_create(
         ensure_sessions_vault(&mut manager).await?
     };
 
-    let session = SessionConfig {
+    let mut session = SessionConfig {
         id: uuid::Uuid::new_v4().to_string(),
         name,
         host,
@@ -214,6 +239,7 @@ pub async fn session_create(
         ssh_options: ssh_options.filter(|o| !o.is_empty()),
     };
 
+    seal_approvals(&manager, &mut session);
     let json = serde_json::to_string(&session).map_err(|e| e.to_string())?;
     let plaintext = SecretBox::new(Box::new(json.into_bytes()));
 
@@ -230,6 +256,7 @@ pub async fn session_create(
         .map_err(|e| e.to_string())?;
 
     tracing::info!("Created session: {} in storage vault: {}", session.id, storage_vault_id);
+    open_approvals(&manager, &mut session);
     Ok(session)
 }
 
@@ -238,7 +265,7 @@ pub async fn session_create(
 #[tracing::instrument(skip(state))]
 pub async fn session_update(
     state: State<'_, AppState>,
-    session: SessionConfig,
+    mut session: SessionConfig,
 ) -> Result<SessionConfig, String> {
     let manager = state.vault_manager.lock().await;
 
@@ -250,6 +277,7 @@ pub async fn session_update(
     let storage_vault_id = find_session_vault(&manager, &session.id).await
         .ok_or_else(|| format!("Session not found: {}", session.id))?;
 
+    seal_approvals(&manager, &mut session);
     let json = serde_json::to_string(&session).map_err(|e| e.to_string())?;
     let plaintext = SecretBox::new(Box::new(json.into_bytes()));
 
@@ -260,6 +288,7 @@ pub async fn session_update(
         .map_err(|e| e.to_string())?;
 
     tracing::info!("Updated session: {} in vault: {}", session.id, storage_vault_id);
+    open_approvals(&manager, &mut session);
     Ok(session)
 }
 

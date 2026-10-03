@@ -50,43 +50,71 @@ pub struct SshOptions {
     /// `ssh -o` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<String>,
-    /// Local commands the user allowed to run for this session
-    /// (ProxyCommand, LocalCommand, KnownHostsCommand, Match exec), exactly
-    /// as written in the config.
+    /// Approvals of commands (ProxyCommand, LocalCommand, KnownHostsCommand,
+    /// Match exec, XAuthLocation, token and security-key libraries), each
+    /// signed by the person who gave it for this session (see `approvals`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approved_commands: Vec<String>,
-    /// Weakening settings the user has seen and kept ("Keyword value").
+    /// Approvals of weaker settings ("Keyword value"), signed the same way.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accepted_weakenings: Vec<String>,
+    /// The connecting person's own approvals, in plain words: filled from
+    /// the verified signed ones when a session is read, set by the editor,
+    /// and signed into the lists above when it is saved. Never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_approved_commands: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_accepted_weakenings: Option<Vec<String>>,
     /// Lines typed into the session do not count as approved by themselves:
-    /// set for every stored session (see `approved_by`), whose lines anyone
-    /// with write access to its vault may have written.
+    /// set for every stored session, whose lines anyone with write access to
+    /// its vault may have written.
     #[serde(skip)]
     pub untrusted_lines: bool,
 }
 
-/// An approval as stored: who gave it, a tab, then what was approved.
-pub const APPROVAL_SEP: char = '\t';
-
 impl SshOptions {
-    /// The options as `identity` may use them. A stored session syncs and
-    /// may sit in a vault other people can write to, so an approval counts
-    /// only when the person connecting gave it: someone else's approval of a
-    /// ProxyCommand must never run it on this machine. Typed lines then need
-    /// an approval like any other weaker setting.
-    pub fn approved_by(&self, identity: Option<&str>) -> SshOptions {
-        let mine = |list: &[String]| -> Vec<String> {
-            let Some(id) = identity else { return Vec::new() };
-            list.iter()
-                .filter_map(|a| a.split_once(APPROVAL_SEP).filter(|(who, _)| *who == id).map(|(_, what)| what.to_string()))
-                .collect()
-        };
+    /// What a connection uses: only the person's own approvals, and typed
+    /// lines needing one like anything else.
+    pub fn effective(&self) -> SshOptions {
         SshOptions {
-            approved_commands: mine(&self.approved_commands),
-            accepted_weakenings: mine(&self.accepted_weakenings),
+            approved_commands: self.my_approved_commands.clone().unwrap_or_default(),
+            accepted_weakenings: self.my_accepted_weakenings.clone().unwrap_or_default(),
+            my_approved_commands: None,
+            my_accepted_weakenings: None,
             untrusted_lines: true,
             ..self.clone()
         }
+    }
+
+    /// After reading a session: the approvals `who` really gave for it.
+    /// Whatever a stored record claims in the plain fields is replaced.
+    pub fn open_for(&mut self, key: Option<&[u8; 32]>, who: Option<&str>, session: &str) {
+        use super::approvals::{verified, Kind};
+        let (cmds, weak) = match (key, who) {
+            (Some(k), Some(w)) => (
+                verified(&self.approved_commands, k, w, Kind::Command, session),
+                verified(&self.accepted_weakenings, k, w, Kind::Weakening, session),
+            ),
+            _ => (Vec::new(), Vec::new()),
+        };
+        self.my_approved_commands = Some(cmds);
+        self.my_accepted_weakenings = Some(weak);
+    }
+
+    /// Before storing a session: `who`'s plain approvals signed into the
+    /// lists, other people's kept, the plain fields dropped.
+    pub fn seal_for(&mut self, key: Option<&[u8; 32]>, who: Option<&str>, session: &str) {
+        use super::approvals::{replace_mine, Kind};
+        if let (Some(k), Some(w)) = (key, who) {
+            if let Some(m) = self.my_approved_commands.take() {
+                self.approved_commands = replace_mine(&self.approved_commands, &m, k, w, Kind::Command, session);
+            }
+            if let Some(m) = self.my_accepted_weakenings.take() {
+                self.accepted_weakenings = replace_mine(&self.accepted_weakenings, &m, k, w, Kind::Weakening, session);
+            }
+        }
+        self.my_approved_commands = None;
+        self.my_accepted_weakenings = None;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -194,7 +222,7 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
     let base = russh::client::Config::default();
     let Some(opts) = opts.filter(|o| !o.is_empty()) else {
         let empty = Resolved::empty(host);
-        return super::apply::Plan::new(&empty, base, &[]);
+        return super::apply::Plan::new(&empty, base, &[], false);
     };
     let scoped;
     let opts = if jump {
@@ -210,8 +238,7 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
     for e in &errors {
         tracing::warn!("ssh_config for {host}: {e}");
     }
-    let mut plan = super::apply::Plan::new(&r, base, &opts.accepted_weakenings);
-    plan.typed_lines_approved = !opts.untrusted_lines;
+    let mut plan = super::apply::Plan::new(&r, base, &opts.accepted_weakenings, !opts.untrusted_lines);
     if !jump {
         plan.control = crate::ssh::control::ControlPlan::from(r.options.first(super::keyword::Kw::ControlPath), r.options.first(super::keyword::Kw::ControlMaster), r.options.first(super::keyword::Kw::ControlPersist));
     }

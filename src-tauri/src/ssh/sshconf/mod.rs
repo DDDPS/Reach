@@ -1,6 +1,7 @@
 //! ssh_config, read the way OpenSSH reads it. See `resolve`.
 
 pub mod apply;
+pub mod approvals;
 pub mod env;
 pub mod expand;
 pub mod forward;

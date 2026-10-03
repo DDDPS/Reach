@@ -273,7 +273,7 @@ Host *
         let src = Source { path: "cfg".into(), text: Some(text.into()), user: true };
         let mut r = resolve(&[src], &Query { host: "a".into(), ..Default::default() }, &env);
         let fe = r.finish(&env);
-        let plan = Plan::new(&r, russh::client::Config::default(), &[]);
+        let plan = Plan::new(&r, russh::client::Config::default(), &[], true);
         let rep = build(&r, &plan, &fe, &[]);
         // Host b and its two lines are left out and counted.
         assert_eq!(rep.other_host_lines, 3);

@@ -65,6 +65,10 @@ export interface SshOptions {
   approved_commands?: string[];
   /** Weakening settings the user has seen and kept ("Keyword value"). */
   accepted_weakenings?: string[];
+  /** This person's approvals in plain words: filled from the signed ones when
+   *  a session is read, signed by the backend when it is saved. */
+  my_approved_commands?: string[] | null;
+  my_accepted_weakenings?: string[] | null;
 }
 
 export type SessionKind = 'ssh' | 'rdp' | 'vnc';

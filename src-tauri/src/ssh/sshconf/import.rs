@@ -149,7 +149,7 @@ fn import_host(alias: &str, user: &Path, system: &Path, sys: &SystemEnv) -> Host
     let mut r = resolve(&sources(user, system), &Query { host: alias.into(), ..Default::default() }, &env);
     let finish_errors = r.finish(&env);
     let exec_asked = sys.refused.borrow().clone();
-    let plan = super::apply::Plan::new(&r, russh::client::Config::default(), &[]);
+    let plan = super::apply::Plan::new(&r, russh::client::Config::default(), &[], false);
     let report = report::build(&r, &plan, &finish_errors, &exec_asked);
     let files: Vec<ConfigFile> = env
         .read

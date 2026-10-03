@@ -32,12 +32,11 @@ pub async fn ssh_options_report(
     options: SshOptions,
 ) -> Result<Report, String> {
     // As a connection would see them: only this person's approvals count.
-    let me = state.vault_manager.lock().await.get_user_uuid();
-    let options = options.approved_by(me.as_deref());
+    let _ = &state;
+    let options = options.effective();
     tokio::task::spawn_blocking(move || {
         let res = resolve_session(&options, &host, port, &username);
-        let mut plan = crate::ssh::sshconf::apply::Plan::new(&res.resolved, russh::client::Config::default(), &options.accepted_weakenings);
-        plan.typed_lines_approved = !options.untrusted_lines;
+        let plan = crate::ssh::sshconf::apply::Plan::new(&res.resolved, russh::client::Config::default(), &options.accepted_weakenings, !options.untrusted_lines);
         report::build(&res.resolved, &plan, &res.errors, &res.exec_pending)
     })
     .await
