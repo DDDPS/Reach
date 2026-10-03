@@ -65,6 +65,9 @@ pub struct AuthPolicy {
     pub use_keychain: bool,
     /// GSSAPI settings, when GSSAPIAuthentication is on.
     pub gssapi: Option<super::gssapi::GssapiPolicy>,
+    /// GSS-API key exchange, when GSSAPIKeyExchange is on; it also turns on
+    /// gssapi-keyex.
+    pub gss_kex: Option<super::gssapi::GssKexPolicy>,
     /// HostbasedAuthentication (see `hostbased`), when on.
     pub hostbased: Option<std::sync::Arc<super::hostbased::HostbasedContext>>,
     /// PKCS11Provider, once approved: the token library whose keys come first.
@@ -610,6 +613,23 @@ pub(crate) async fn authenticate<H: russh::client::Handler>(
                     }
                 }
             }
+            MethodKind::GssapiKeyex => {
+                // userauth_gsskeyex: once, and only after a GSS-API key
+                // exchange, whose context signs the session.
+                done.push(method);
+                if p.gss_kex.is_none() {
+                    continue;
+                }
+                let Some(r) = handle.authenticate_gssapi_keyex(user).await.map_err(|e| SshError::ConnectionFailed(format!("Auth error: {e}")))? else {
+                    tracing::info!("SSH gssapi-keyex: no GSSAPI key exchange context; skipped");
+                    continue;
+                };
+                let s = step(r);
+                if matches!(s, Step::Success) {
+                    outcome.by = Some(AuthBy::Gssapi);
+                }
+                s
+            }
             MethodKind::GssapiWithMic => {
                 // One mechanism, Kerberos, tried once: ssh moves past each
                 // mechanism it tried.
@@ -743,7 +763,8 @@ impl AuthPolicy {
     ) -> AuthPolicy {
         use super::sshconf::keyword::Kw;
         let flag = |kw: Kw, default: bool| o.first(kw).map_or(default, |v| v != "no");
-        let preferred = o.first(Kw::PreferredAuthentications).unwrap_or("gssapi-with-mic,hostbased,publickey,keyboard-interactive,password");
+        let preferred =
+            o.first(Kw::PreferredAuthentications).unwrap_or("gssapi-keyex,gssapi-with-mic,hostbased,publickey,keyboard-interactive,password");
         let methods = preferred
             .split(',')
             .filter_map(|m| m.trim().parse::<MethodKind>().ok())
@@ -752,6 +773,7 @@ impl AuthPolicy {
                 MethodKind::KeyboardInteractive => flag(Kw::KbdInteractiveAuthentication, true),
                 MethodKind::Password => flag(Kw::PasswordAuthentication, true),
                 MethodKind::GssapiWithMic => flag(Kw::GSSAPIAuthentication, false),
+                MethodKind::GssapiKeyex => flag(Kw::GSSAPIKeyExchange, false),
                 MethodKind::HostBased => flag(Kw::HostbasedAuthentication, false),
                 MethodKind::None => false,
             })
@@ -796,6 +818,7 @@ impl AuthPolicy {
             min_rsa_bits: o.first(Kw::RequiredRSASize).and_then(|n| n.parse().ok()).unwrap_or(1024),
             use_keychain: flag(Kw::UseKeychain, false),
             gssapi: flag(Kw::GSSAPIAuthentication, false).then(|| super::gssapi::GssapiPolicy::from_options(o)),
+            gss_kex: super::gssapi::GssKexPolicy::from_options(o),
             hostbased: None,
             // Libraries load only once approved; session.rs sets these.
             pkcs11_provider: None,
@@ -821,6 +844,18 @@ mod tests {
         assert_eq!(p.methods, [MethodKind::KeyboardInteractive, MethodKind::PublicKey]);
         let p = policy("GSSAPIAuthentication yes\n", false);
         assert_eq!(p.methods[0], MethodKind::GssapiWithMic);
+        assert!(p.gss_kex.is_none());
+        // gssapi-keyex goes first, with GSSAPIKeyExchange alone.
+        let p = policy("GSSAPIKeyExchange yes\n", false);
+        assert_eq!(p.methods[0], MethodKind::GssapiKeyex);
+        assert!(!p.methods.contains(&MethodKind::GssapiWithMic));
+        let k = p.gss_kex.unwrap();
+        assert_eq!(k.algorithms.len(), 6);
+        assert!(!k.renewal_rekey);
+        let p = policy("GSSAPIKeyExchange yes\nGSSAPIKexAlgorithms gss-curve25519-sha256-,gss-gex-sha1-\nGSSAPIRenewalForcesRekey yes\n", false);
+        let k = p.gss_kex.unwrap();
+        assert_eq!(k.algorithms, [russh::kex::GSS_CURVE25519_SHA256, russh::kex::GSS_GEX_SHA1]);
+        assert!(k.renewal_rekey);
         assert_eq!(policy("", false).methods, [MethodKind::PublicKey, MethodKind::KeyboardInteractive, MethodKind::Password]);
     }
 

@@ -160,6 +160,7 @@ impl ServerKex {
                     })?;
 
                     return Ok(KexProgress::Done {
+                        gss_context: None,
                         server_host_certificate: None,
                         newkeys,
                         server_host_key: None,
@@ -396,6 +397,7 @@ impl ServerKex {
 
                 debug!("new keys received");
                 Ok(KexProgress::Done {
+                        gss_context: None,
                     server_host_certificate: None,
                     newkeys,
                     server_host_key: None,

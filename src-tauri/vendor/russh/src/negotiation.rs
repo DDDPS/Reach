@@ -52,6 +52,10 @@ pub struct Names {
     pub ignore_guessed: bool,
     /// Whether `key` was negotiated as a certificate algorithm or not
     pub(crate) host_key_is_certificate: bool,
+    /// Whether the `null` host key algorithm was negotiated (RFC 4462
+    /// section 5), offered last by a client doing GSS-API key exchange; `key`
+    /// is then meaningless.
+    pub(crate) host_key_null: bool,
     // Prevent accidentally contructing [Names] without a [KeyCause]
     // as strict kext algo is not sent during a rekey and hence the state
     // of [strict_kex] cannot be known without a [KexCause].
@@ -268,6 +272,20 @@ pub(crate) trait Select {
         available_certificates: Option<&[Certificate]>,
         cause: &KexCause,
     ) -> Result<Names, Error> {
+        Self::read_kex_with(buffer, pref, available_host_keys, available_certificates, cause, false)
+    }
+
+    /// [`Select::read_kex`], and with `null_host_key` (client only) the
+    /// `null` host key algorithm offered last, as the GSSAPI patch's ssh
+    /// does when it offers GSS-API key exchange.
+    fn read_kex_with(
+        buffer: &[u8],
+        pref: &Preferred,
+        available_host_keys: Option<&[PrivateKey]>,
+        available_certificates: Option<&[Certificate]>,
+        cause: &KexCause,
+        null_host_key: bool,
+    ) -> Result<Names, Error> {
         let &Some(mut r) = &buffer.get(17..) else {
             return Err(Error::Inconsistent);
         };
@@ -353,21 +371,27 @@ pub(crate) trait Select {
                 .map(Algorithm::to_certificate_type)
                 .collect::<Vec<_>>()
         };
-        let (key_both_first, key_algorithm, host_key_is_certificate) = if certificate_names
+        let null_host_key = null_host_key && !Self::is_server();
+        let (key_both_first, key_algorithm, host_key_is_certificate, host_key_null) = if certificate_names
             .is_empty()
+            && !null_host_key
         {
             let (both_first, algorithm) =
                 Self::select(&possible_host_key_algos[..], &key_list, AlgorithmKind::Key)?;
-            (both_first, algorithm, false)
+            (both_first, algorithm, false, false)
         } else {
             let advertised = certificate_names
                 .iter()
                 .cloned()
                 .chain(possible_host_key_algos.iter().map(ToString::to_string))
+                .chain(null_host_key.then(|| NULL_HOST_KEY.to_string()))
                 .collect::<Vec<_>>();
             let (both_first, name) = Self::select(&advertised[..], &key_list, AlgorithmKind::Key)?;
             let is_certificate = certificate_names.contains(&name);
-            let algorithm = if is_certificate {
+            let algorithm = if name == NULL_HOST_KEY {
+                // Stands in: nothing reads the key algorithm of a null host key.
+                pref.key.first().cloned().unwrap_or(Algorithm::Ed25519)
+            } else if is_certificate {
                 Algorithm::new_certificate_ext(&name).map_err(|_| Error::KexInit)?
             } else {
                 possible_host_key_algos
@@ -376,7 +400,7 @@ pub(crate) trait Select {
                     .cloned()
                     .ok_or(Error::KexInit)?
             };
-            (both_first, algorithm, is_certificate)
+            (both_first, algorithm, is_certificate, name == NULL_HOST_KEY)
         };
 
         // Cipher
@@ -444,6 +468,7 @@ pub(crate) trait Select {
             client_compression,
             server_compression,
             host_key_is_certificate,
+            host_key_null,
             // Ignore the next packet if (1) it follows and (2) it's not the correct guess.
             ignore_guessed: follows && !(kex_both_first && key_both_first),
             strict_kex: (strict_kex_requested && strict_kex_provided) || cause.is_strict_rekey(),
@@ -508,10 +533,24 @@ impl Select for Client {
     }
 }
 
+/// The host key algorithm of a GSS-API key exchange without a host key.
+pub(crate) const NULL_HOST_KEY: &str = "null";
+
 pub(crate) fn write_kex(
     prefs: &Preferred,
     writer: &mut PacketWriter,
     server_config: Option<&Config>,
+) -> Result<Bytes, Error> {
+    write_kex_with(prefs, writer, server_config, false)
+}
+
+/// [`write_kex`], and with `null_host_key` (client only) `null` offered as
+/// the last host key algorithm.
+pub(crate) fn write_kex_with(
+    prefs: &Preferred,
+    writer: &mut PacketWriter,
+    server_config: Option<&Config>,
+    null_host_key: bool,
 ) -> Result<Bytes, Error> {
     writer.packet_bytes(|w| {
         msg::KEXINIT.encode(w)?;
@@ -574,6 +613,7 @@ pub(crate) fn write_kex(
                     .iter()
                     .map(Algorithm::to_certificate_type)
                     .chain(prefs.key.iter().map(ToString::to_string))
+                    .chain(null_host_key.then(|| NULL_HOST_KEY.to_string()))
                     .collect(),
             )
             .encode(w)?;

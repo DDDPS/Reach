@@ -8,7 +8,10 @@
 //! and SSPI on Windows.
 //!
 //! GSSAPIClientIdentity, GSSAPIServerIdentity and GSSAPITrustDns follow the
-//! GSSAPI patch Debian and Fedora carry (openssh-gsskex).
+//! GSSAPI patch Debian and Fedora carry (openssh-gsskex), and so does
+//! GSS-API key exchange (GSSAPIKeyExchange, GSSAPIKexAlgorithms,
+//! GSSAPIRenewalForcesRekey; kexgssc.c, gss-genr.c): russh runs the
+//! exchange, the contexts come from here.
 
 use std::net::{IpAddr, ToSocketAddrs};
 
@@ -55,6 +58,188 @@ impl GssapiPolicy {
             proxied: set(Kw::ProxyJump).is_some() || set(Kw::ProxyCommand).is_some(),
         }
     }
+}
+
+/// GSSAPIKexAlgorithms when it is not set: GSS_KEX_DEFAULT_KEX in ssh-gss.h.
+pub const DEFAULT_KEX_ALGORITHMS: &str =
+    "gss-group14-sha256-,gss-group16-sha512-,gss-nistp256-sha256-,gss-curve25519-sha256-,gss-group14-sha1-,gss-gex-sha1-";
+
+/// kex_gss_names_valid: every name up to the first empty one starts with
+/// `gss-` and with one of the method prefixes.
+pub fn kex_names_valid(names: &str) -> bool {
+    !names.is_empty()
+        && names.split(',').take_while(|p| !p.is_empty()).all(|p| {
+            p.starts_with("gss-") && russh::kex::GSS_KEX_ALGORITHMS.iter().any(|(prefix, _)| p.starts_with(prefix))
+        })
+}
+
+/// ssh_gssapi_kex_mechs for Kerberos v5: each name of the list with the
+/// mechanism's suffix, in the list's order. A name that is more than a
+/// prefix makes a method no server offers, so it is left out.
+pub fn kex_algorithms(names: &str) -> Vec<russh::kex::Name> {
+    names
+        .split(',')
+        .take_while(|p| !p.is_empty())
+        .filter_map(|p| {
+            let full = format!("{p}{}", russh::kex::gss::KRB5_SUFFIX);
+            russh::kex::GSS_KEX_ALGORITHMS.iter().find(|(_, n)| n.as_ref() == full).map(|(_, n)| *n)
+        })
+        .collect()
+}
+
+/// GSSAPIKeyExchange yes, with what goes with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GssKexPolicy {
+    /// The server's name, the client identity and delegation, as for
+    /// gssapi-with-mic.
+    pub gss: GssapiPolicy,
+    /// GSSAPIKexAlgorithms, as method names.
+    pub algorithms: Vec<russh::kex::Name>,
+    /// GSSAPIRenewalForcesRekey.
+    pub renewal_rekey: bool,
+}
+
+impl GssKexPolicy {
+    pub fn from_options(o: &super::sshconf::resolve::Options) -> Option<GssKexPolicy> {
+        use super::sshconf::keyword::Kw;
+        if o.first(Kw::GSSAPIKeyExchange) != Some("yes") {
+            return None;
+        }
+        Some(GssKexPolicy {
+            gss: GssapiPolicy::from_options(o),
+            algorithms: kex_algorithms(o.first(Kw::GSSAPIKexAlgorithms).unwrap_or(DEFAULT_KEX_ALGORITHMS)),
+            renewal_rekey: o.first(Kw::GSSAPIRenewalForcesRekey) == Some("yes"),
+        })
+    }
+}
+
+/// The contexts of GSS-API key exchanges with one server, and the
+/// credentials as they were at the last exchange (GSSAPIRenewalForcesRekey).
+#[derive(Debug)]
+pub(crate) struct KexProvider {
+    host: String,
+    client: Option<String>,
+    delegate: bool,
+    renewal: bool,
+    state: std::sync::Mutex<Renewal>,
+}
+
+#[derive(Debug, Default)]
+struct Renewal {
+    /// The principal and the time its credentials end, after the last key
+    /// exchange that delegated them.
+    saved: Option<(String, u64)>,
+    last_call: Option<std::time::Instant>,
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+impl KexProvider {
+    /// ssh_gssapi_credentials_updated(NULL): at most every 10 seconds, the
+    /// same principal whose credentials now end more than 10 seconds later
+    /// than at the last exchange.
+    fn renewed(&self, now: u64, inquire: impl FnOnce() -> Result<(String, u64), String>) -> bool {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if st.last_call.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(10)) {
+            return false;
+        }
+        st.last_call = Some(std::time::Instant::now());
+        let Some((saved_name, saved_end)) = st.saved.clone() else { return false };
+        match inquire() {
+            Ok((name, lifetime)) => name == saved_name && saved_end < (lifetime + now).saturating_sub(10),
+            Err(_) => false,
+        }
+    }
+}
+
+impl russh::kex::gss::GssKexProvider for KexProvider {
+    fn context(&self) -> Result<Box<dyn russh::kex::gss::GssKexContext>, String> {
+        Ok(Box::new(KexContext(sys::Context::new(&self.host, self.client.as_deref(), self.delegate)?)))
+    }
+
+    /// ssh_gssapi_credentials_updated(ctxt), called when credentials were
+    /// delegated: the credentials as they now are.
+    fn exchanged(&self) {
+        if !self.delegate {
+            return;
+        }
+        tracing::debug!("GSSAPI: rekey has happened - updating saved versions");
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Ok((name, lifetime)) = sys::inquire_cred() {
+            st.saved = Some((name, lifetime + now_secs()));
+        }
+    }
+
+    fn renewal_rekey(&self) -> bool {
+        self.renewal
+    }
+
+    fn credentials_renewed(&self) -> bool {
+        self.renewed(now_secs(), sys::inquire_cred)
+    }
+}
+
+/// One key exchange's context.
+struct KexContext(sys::Context);
+
+impl russh::kex::gss::GssKexContext for KexContext {
+    fn init(&mut self, input: Option<&[u8]>) -> Result<russh::kex::gss::GssKexStep, String> {
+        let o = self.0.step(input)?;
+        Ok(russh::kex::gss::GssKexStep { token: o.token, complete: o.complete, mutual: o.mutual, integ: o.integ })
+    }
+
+    fn verify_mic(&mut self, data: &[u8], mic: &[u8]) -> Result<(), String> {
+        self.0.verify_mic(data, mic)
+    }
+
+    fn get_mic(&mut self, data: &[u8]) -> Result<Vec<u8>, String> {
+        self.0.mic(data)
+    }
+}
+
+/// ssh_kex2's part of the GSSAPI patch: the server's name, then the
+/// mechanism tried (ssh_gssapi_client_mechanisms); when it works, the
+/// engine offers the GSS-API methods in front of its own and the `null`
+/// host key last. `None` when it does not: then the key exchange is the
+/// usual one.
+pub(crate) async fn kex_config(base: &std::sync::Arc<russh::client::Config>, k: &GssKexPolicy, host: &str) -> Option<russh::client::Config> {
+    if k.algorithms.is_empty() {
+        tracing::warn!("SSH GSSAPI key exchange: GSSAPIKexAlgorithms names no method; not offered");
+        return None;
+    }
+    let (h, policy) = (host.to_string(), k.gss.clone());
+    let checked = tokio::task::spawn_blocking(move || {
+        let target = target_host(&policy, &h);
+        probe(&target, policy.client_identity.as_deref()).map(|_| target)
+    })
+    .await;
+    let target = match checked {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => {
+            tracing::warn!("SSH GSSAPI key exchange: not offered: {e}");
+            return None;
+        }
+        Err(e) => {
+            tracing::warn!("SSH GSSAPI key exchange: {e}");
+            return None;
+        }
+    };
+    let names: Vec<&str> = k.algorithms.iter().map(|n| n.as_ref()).collect();
+    tracing::info!("SSH: offering GSSAPI proposal: {} (Kerberos for host@{target})", names.join(","));
+    let mut c = (**base).clone();
+    let mut kex = k.algorithms.clone();
+    kex.extend(c.preferred.kex.iter().filter(|n| !k.algorithms.contains(n)).copied());
+    c.preferred.kex = std::borrow::Cow::Owned(kex);
+    c.gss_kex = Some(std::sync::Arc::new(KexProvider {
+        host: target,
+        client: k.gss.client_identity.clone(),
+        delegate: k.gss.delegate,
+        renewal: k.renewal_rekey,
+        state: Default::default(),
+    }));
+    Some(c)
 }
 
 /// The host in the server's name `host@<host>`: GSSAPIServerIdentity, else
@@ -146,6 +331,7 @@ pub fn check_selected(oid: &[u8]) -> Result<(), String> {
 pub(crate) struct Out {
     pub token: Vec<u8>,
     pub complete: bool,
+    pub mutual: bool,
     pub integ: bool,
 }
 
@@ -355,6 +541,9 @@ mod sys {
     type DisplayStatus = unsafe extern "C" fn(*mut Om, Om, i32, *mut Oid, *mut Om, *mut Buffer) -> Om;
     type AcquireCred = unsafe extern "C" fn(*mut Om, Name, Om, *mut OidSet, i32, *mut Cred, *mut *mut OidSet, *mut Om) -> Om;
     type ReleaseCred = unsafe extern "C" fn(*mut Om, *mut Cred) -> Om;
+    type VerifyMic = unsafe extern "C" fn(*mut Om, Ctx, *mut Buffer, *mut Buffer, *mut Om) -> Om;
+    type InquireCred = unsafe extern "C" fn(*mut Om, Cred, *mut Name, *mut Om, *mut i32, *mut *mut OidSet) -> Om;
+    type DisplayName = unsafe extern "C" fn(*mut Om, Name, *mut Buffer, *mut *mut Oid) -> Om;
 
     struct Lib {
         /// Never unloaded: the function pointers below point into it.
@@ -368,6 +557,9 @@ mod sys {
         display_status: DisplayStatus,
         acquire_cred: AcquireCred,
         release_cred: ReleaseCred,
+        verify_mic: VerifyMic,
+        inquire_cred: InquireCred,
+        display_name: DisplayName,
     }
 
     #[cfg(target_os = "macos")]
@@ -393,6 +585,9 @@ mod sys {
                     display_status: *lib.get(b"gss_display_status\0")?,
                     acquire_cred: *lib.get(b"gss_acquire_cred\0")?,
                     release_cred: *lib.get(b"gss_release_cred\0")?,
+                    verify_mic: *lib.get(b"gss_verify_mic\0")?,
+                    inquire_cred: *lib.get(b"gss_inquire_cred\0")?,
+                    display_name: *lib.get(b"gss_display_name\0")?,
                     _lib: lib,
                 })
             }
@@ -563,7 +758,26 @@ mod sys {
             if is_error(major) {
                 return Err(lib.describe(major, minor));
             }
-            Ok(Out { token, complete: major & CONTINUE_NEEDED == 0, integ: ret_flags & INTEG_FLAG != 0 })
+            Ok(Out {
+                token,
+                complete: major & CONTINUE_NEEDED == 0,
+                mutual: ret_flags & MUTUAL_FLAG != 0,
+                integ: ret_flags & INTEG_FLAG != 0,
+            })
+        }
+
+        /// gss_verify_mic: `mic` over `data`.
+        pub fn verify_mic(&mut self, data: &[u8], mic: &[u8]) -> Result<(), String> {
+            let lib = self.lib;
+            let mut msg = Buffer { length: data.len(), value: data.as_ptr() as *mut c_void };
+            let mut tok = Buffer { length: mic.len(), value: mic.as_ptr() as *mut c_void };
+            let (mut minor, mut qop) = (0, 0);
+            // SAFETY: an established context; both buffers are only read.
+            let major = unsafe { (lib.verify_mic)(&mut minor, self.ctx, &mut msg, &mut tok, &mut qop) };
+            if is_error(major) {
+                return Err(lib.describe(major, minor));
+            }
+            Ok(())
         }
 
         pub fn mic(&mut self, data: &[u8]) -> Result<Vec<u8>, String> {
@@ -579,6 +793,30 @@ mod sys {
             }
             Ok(mic)
         }
+    }
+
+    /// gss_inquire_cred on the default credentials: the principal and the
+    /// seconds they have left.
+    pub fn inquire_cred() -> Result<(String, u64), String> {
+        let lib = lib()?;
+        let (mut minor, mut name, mut lifetime): (Om, Name, Om) = (0, null_mut(), 0);
+        // SAFETY: GSS_C_NO_CREDENTIAL and valid out-pointers; `name` is
+        // released below.
+        let major = unsafe { (lib.inquire_cred)(&mut minor, null_mut(), &mut name, &mut lifetime, null_mut(), null_mut()) };
+        if is_error(major) {
+            return Err(lib.describe(major, minor));
+        }
+        let mut b = Buffer { length: 0, value: null_mut() };
+        // SAFETY: `name` came from gss_inquire_cred; `b` is released by `take`.
+        let major = unsafe { (lib.display_name)(&mut minor, name, &mut b, null_mut()) };
+        let text = lib.take(&mut b);
+        let mut m2 = 0;
+        // SAFETY: released once.
+        unsafe { (lib.release_name)(&mut m2, &mut name) };
+        if is_error(major) {
+            return Err(lib.describe(major, minor));
+        }
+        Ok((String::from_utf8_lossy(&text).into_owned(), u64::from(lifetime)))
     }
 
     impl Drop for Context {
@@ -614,9 +852,11 @@ mod sys {
     };
     use windows::Win32::Security::Authentication::Identity::{
         AcquireCredentialsHandleW, CompleteAuthToken, DeleteSecurityContext, FreeContextBuffer, FreeCredentialsHandle,
-        InitializeSecurityContextW, MakeSignature, QueryContextAttributesW, SecBuffer, SecBufferDesc, SecPkgContext_Sizes,
-        ISC_REQ_ALLOCATE_MEMORY, ISC_REQ_DELEGATE, ISC_REQ_FLAGS, ISC_REQ_INTEGRITY, ISC_REQ_MUTUAL_AUTH, ISC_RET_INTEGRITY,
-        SECBUFFER_DATA, SECBUFFER_TOKEN, SECBUFFER_VERSION, SECPKG_ATTR_SIZES, SECPKG_CRED_OUTBOUND, SECURITY_NATIVE_DREP,
+        InitializeSecurityContextW, MakeSignature, QueryContextAttributesW, QueryCredentialsAttributesW, SecBuffer,
+        SecBufferDesc, SecPkgContext_Sizes, SecPkgCredentials_NamesW, VerifySignature, ISC_REQ_ALLOCATE_MEMORY,
+        ISC_REQ_DELEGATE, ISC_REQ_FLAGS, ISC_REQ_INTEGRITY, ISC_REQ_MUTUAL_AUTH, ISC_RET_INTEGRITY, ISC_RET_MUTUAL_AUTH,
+        SECBUFFER_DATA, SECBUFFER_TOKEN, SECBUFFER_VERSION, SECPKG_ATTR_SIZES, SECPKG_CRED_ATTR_NAMES, SECPKG_CRED_OUTBOUND,
+        SECURITY_NATIVE_DREP,
     };
     use windows::Win32::Security::Credentials::SecHandle;
 
@@ -729,7 +969,21 @@ mod sys {
             }
             completed.map_err(|e| describe(e.code()))?;
             let complete = hr == SEC_E_OK || hr == SEC_I_COMPLETE_NEEDED;
-            Ok(Out { token, complete, integ: attrs & ISC_RET_INTEGRITY != 0 })
+            Ok(Out { token, complete, mutual: attrs & ISC_RET_MUTUAL_AUTH != 0, integ: attrs & ISC_RET_INTEGRITY != 0 })
+        }
+
+        /// VerifySignature, SSPI's gss_verify_mic.
+        pub fn verify_mic(&mut self, data: &[u8], mic: &[u8]) -> Result<(), String> {
+            let mut msg = data.to_vec();
+            let mut sig = mic.to_vec();
+            let mut bufs = [
+                SecBuffer { cbBuffer: msg.len() as u32, BufferType: SECBUFFER_DATA, pvBuffer: msg.as_mut_ptr() as *mut c_void },
+                SecBuffer { cbBuffer: sig.len() as u32, BufferType: SECBUFFER_TOKEN, pvBuffer: sig.as_mut_ptr() as *mut c_void },
+            ];
+            let desc = SecBufferDesc { ulVersion: SECBUFFER_VERSION, cBuffers: 2, pBuffers: bufs.as_mut_ptr() };
+            // SAFETY: an established context; both buffers are ours.
+            unsafe { VerifySignature(&self.ctx, &desc, 0) }.map_err(|e| describe(e.code()))?;
+            Ok(())
         }
 
         pub fn mic(&mut self, data: &[u8]) -> Result<Vec<u8>, String> {
@@ -749,6 +1003,40 @@ mod sys {
             sig.truncate(bufs[1].cbBuffer as usize);
             Ok(sig)
         }
+    }
+
+    /// The Windows account's Kerberos credentials: the principal and the
+    /// seconds until they end.
+    pub fn inquire_cred() -> Result<(String, u64), String> {
+        let package = wide("Kerberos");
+        let mut cred = SecHandle::default();
+        let mut expiry = 0i64;
+        // SAFETY: the package name is NUL-terminated and outlives the call.
+        unsafe {
+            AcquireCredentialsHandleW(PCWSTR::null(), PCWSTR(package.as_ptr()), SECPKG_CRED_OUTBOUND, None, None, None, None, &mut cred, Some(&mut expiry))
+        }
+        .map_err(|e| describe(e.code()))?;
+        let mut names = SecPkgCredentials_NamesW::default();
+        // SAFETY: a valid credentials handle; `names` is the attribute's type.
+        let r = unsafe { QueryCredentialsAttributesW(&cred, SECPKG_CRED_ATTR_NAMES, &mut names as *mut _ as *mut c_void) };
+        let name = if r.is_ok() && !names.sUserName.is_null() {
+            // SAFETY: SSPI returned a NUL-terminated string, freed once.
+            let n = unsafe { PCWSTR(names.sUserName).to_string() }.unwrap_or_default();
+            let _ = unsafe { FreeContextBuffer(names.sUserName as *mut c_void) };
+            n
+        } else {
+            String::new()
+        };
+        // SAFETY: released once.
+        let _ = unsafe { FreeCredentialsHandle(&cred) };
+        r.map_err(|e| describe(e.code()))?;
+        // A FILETIME in local time; the clock's own offset cancels out.
+        let now = {
+            let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+            d.as_secs() as i64 + 11_644_473_600
+        };
+        let left = (expiry / 10_000_000 - now).max(0) as u64;
+        Ok((name, left))
     }
 
     impl Drop for Context {
@@ -783,6 +1071,14 @@ mod sys {
         pub fn mic(&mut self, _data: &[u8]) -> Result<Vec<u8>, String> {
             match *self {}
         }
+
+        pub fn verify_mic(&mut self, _data: &[u8], _mic: &[u8]) -> Result<(), String> {
+            match *self {}
+        }
+    }
+
+    pub fn inquire_cred() -> Result<(String, u64), String> {
+        Err("GSSAPI is not available on Android".into())
     }
 }
 
@@ -850,6 +1146,84 @@ mod tests {
         );
     }
 
+    #[test]
+    fn kex_names_as_the_patch_takes_them() {
+        assert!(kex_names_valid(DEFAULT_KEX_ALGORITHMS));
+        assert!(kex_names_valid("gss-curve25519-sha256-"));
+        // A prefix match, as kex_alg_by_name makes it for GSS names.
+        assert!(kex_names_valid("gss-group14-sha256-anything"));
+        assert!(!kex_names_valid("curve25519-sha256"));
+        assert!(!kex_names_valid("gss-group18-sha512-"));
+        assert!(!kex_names_valid(""));
+        // strsep stops at an empty name.
+        assert!(kex_names_valid("gss-gex-sha1-,,bogus"));
+        let algorithms = kex_algorithms(DEFAULT_KEX_ALGORITHMS);
+        let names: Vec<&str> = algorithms.iter().map(|n| n.as_ref()).collect();
+        assert_eq!(
+            names,
+            [
+                "gss-group14-sha256-toWM5Slw5Ew8Mqkay+al2g==",
+                "gss-group16-sha512-toWM5Slw5Ew8Mqkay+al2g==",
+                "gss-nistp256-sha256-toWM5Slw5Ew8Mqkay+al2g==",
+                "gss-curve25519-sha256-toWM5Slw5Ew8Mqkay+al2g==",
+                "gss-group14-sha1-toWM5Slw5Ew8Mqkay+al2g==",
+                "gss-gex-sha1-toWM5Slw5Ew8Mqkay+al2g==",
+            ]
+        );
+        assert!(kex_algorithms("gss-group14-sha256-anything").is_empty());
+    }
+
+    /// The method name suffix is the base64 of the MD5 of this OID
+    /// (ssh_gssapi_kex_mechs); russh holds both.
+    #[test]
+    fn kex_names_are_for_this_mechanism() {
+        assert_eq!(russh::kex::gss::KRB5_MECH.as_slice(), krb5_mech().as_slice());
+        assert_eq!(russh::kex::gss::KRB5_SUFFIX, "toWM5Slw5Ew8Mqkay+al2g==");
+    }
+
+    #[test]
+    fn renewal_is_the_same_principal_lasting_longer() {
+        let p = KexProvider { host: "h".into(), client: None, delegate: true, renewal: true, state: Default::default() };
+        // Nothing saved: no exchange delegated anything yet.
+        assert!(!p.renewed(1000, || Ok(("a@R".into(), 100))));
+        let check = |saved: (&str, u64), now: u64, cur: Result<(String, u64), String>| {
+            let p = KexProvider { host: "h".into(), client: None, delegate: true, renewal: true, state: Default::default() };
+            p.state.lock().unwrap().saved = Some((saved.0.into(), saved.1));
+            p.renewed(now, || cur)
+        };
+        // Ends at 2000; now 1000 with 2000 s left ends at 3000: renewed.
+        assert!(check(("a@R", 2000), 1000, Ok(("a@R".into(), 2000))));
+        // Within the 10 s slack: not renewed.
+        assert!(!check(("a@R", 2000), 1000, Ok(("a@R".into(), 1005))));
+        // Someone else's credentials now.
+        assert!(!check(("a@R", 2000), 1000, Ok(("b@R".into(), 9000))));
+        // Expired or unreadable.
+        assert!(!check(("a@R", 2000), 1000, Err("expired".into())));
+        // At most every 10 seconds.
+        let p2 = KexProvider { host: "h".into(), client: None, delegate: true, renewal: true, state: Default::default() };
+        p2.state.lock().unwrap().saved = Some(("a@R".into(), 2000));
+        assert!(p2.renewed(1000, || Ok(("a@R".into(), 2000))));
+        assert!(!p2.renewed(1000, || Ok(("a@R".into(), 2000))));
+    }
+
+    /// readconf.c's error for a list kex_gss_names_valid refuses.
+    #[test]
+    fn bad_kex_algorithms_is_a_config_error() {
+        use crate::ssh::sshconf::resolve::{resolve, Query, Source};
+        let env = crate::ssh::sshconf::env::SystemEnv::new(crate::ssh::sshconf::env::ExecPolicy::Never);
+        let src = Source { path: "c".into(), text: Some("GSSAPIKexAlgorithms curve25519-sha256
+".into()), user: true };
+        let mut r = resolve(&[src], &Query { host: "h".into(), ..Default::default() }, &env);
+        let errors = r.finish(&env);
+        let all = format!("{errors:?} {:?}", r.notes);
+        assert!(r.has_errors() || !errors.is_empty(), "{all}");
+        assert!(all.contains("Bad GSSAPI KexAlgorithms 'curve25519-sha256'."), "{all}");
+        let src = Source { path: "c".into(), text: Some("GSSAPIKexAlgorithms gss-curve25519-sha256-
+".into()), user: true };
+        let mut r = resolve(&[src], &Query { host: "h".into(), ..Default::default() }, &env);
+        assert!(r.finish(&env).is_empty() && !r.has_errors());
+    }
+
     /// No ticket for a server no KDC knows: a clean error, on every system.
     #[test]
     fn unknown_server_is_a_clean_error() {
@@ -865,3 +1239,7 @@ mod tests {
 #[cfg(test)]
 #[path = "gssapi_live_tests.rs"]
 mod live;
+
+#[cfg(test)]
+#[path = "gssapi_kex_live_tests.rs"]
+mod live_kex;

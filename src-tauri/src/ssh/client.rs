@@ -946,6 +946,19 @@ impl From<crate::ssh::sshconf::apply::Plan> for HopOptions {
 }
 
 impl HopOptions {
+    /// The engine's settings for `host`: with GSSAPIKeyExchange, the
+    /// GSS-API key exchange methods in front once a Kerberos context for the
+    /// server can be made, as ssh_kex2 in the GSSAPI patch does.
+    pub(crate) async fn engine_config(&self, host: &str) -> Arc<russh::client::Config> {
+        let Some(k) = self.auth.as_ref().and_then(|a| a.gss_kex.as_ref()) else {
+            return self.config.clone();
+        };
+        match crate::ssh::gssapi::kex_config(&self.config, k, host).await {
+            Some(c) => Arc::new(c),
+            None => self.config.clone(),
+        }
+    }
+
     /// The whole connect, handshake and login within `base`, stretched to
     /// leave room for every ConnectionAttempts try of ConnectTimeout.
     fn connect_limit(&self, base: std::time::Duration) -> std::time::Duration {
@@ -1073,7 +1086,7 @@ impl SshManager {
         opts: &HopOptions,
         interactive: bool,
     ) -> Result<russh::client::Handle<SshClientHandler>, SshError> {
-        let config = opts.config.clone();
+        let config = opts.engine_config(host).await;
         let handler = SshClientHandler::new(host, port, Some(app_handle.clone())).with_hostkeys(opts.hostkeys.clone()).with_forwards(opts.forwards.clone());
 
         let mut handle = if let Some(proxy) = proxy {
@@ -1290,7 +1303,7 @@ impl SshManager {
 
         // Step 1: Connect to the first jump host directly
         let first_jump = &jump_chain[0];
-        let config = first_jump.opts.config.clone();
+        let config = first_jump.opts.engine_config(&first_jump.host).await;
         let handler = SshClientHandler::new(first_jump.host.as_str(), first_jump.port, Some(app_handle.clone())).with_hostkeys(first_jump.opts.hostkeys.clone());
 
         let failed = |e: String| SshError::ConnectionFailed(format!("Jump host {} connection failed: {}", first_jump.host, e));
@@ -1336,7 +1349,7 @@ impl SshManager {
                 };
 
                 let stream = channel.into_stream();
-                let config = next_jump.opts.config.clone();
+                let config = next_jump.opts.engine_config(&next_jump.host).await;
                 let handler = SshClientHandler::new(next_jump.host.as_str(), next_jump.port, Some(app_handle.clone())).with_hostkeys(next_jump.opts.hostkeys.clone());
 
                 let mut next_handle =
@@ -1387,7 +1400,7 @@ impl SshManager {
             };
 
             let stream = channel.into_stream();
-            let config = target_opts.config.clone();
+            let config = target_opts.engine_config(target_host).await;
             let handler = SshClientHandler::new(target_host, target_port, Some(app_handle.clone())).with_hostkeys(target_opts.hostkeys.clone()).with_forwards(target_opts.forwards.clone());
 
             let mut target_handle =
@@ -1436,7 +1449,7 @@ impl SshManager {
             };
 
             let stream = channel.into_stream();
-            let config = target_opts.config.clone();
+            let config = target_opts.engine_config(target_host).await;
             let handler = SshClientHandler::new(target_host, target_port, Some(app_handle.clone())).with_hostkeys(target_opts.hostkeys.clone()).with_forwards(target_opts.forwards.clone());
 
             let mut target_handle =

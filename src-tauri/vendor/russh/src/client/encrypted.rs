@@ -1415,6 +1415,13 @@ impl Encrypted {
                     }
                     true
                 }
+                auth::Method::GssapiKeyex { ref mic } => {
+                    user.as_bytes().encode(&mut self.write)?;
+                    "ssh-connection".encode(&mut self.write)?;
+                    "gssapi-keyex".encode(&mut self.write)?;
+                    mic.as_slice().encode(&mut self.write)?;
+                    true
+                }
                 auth::Method::Hostbased {
                     ref algorithm,
                     ref key_blob,
@@ -1441,12 +1448,23 @@ impl Encrypted {
         user: &str,
         buffer: &mut Vec<u8>,
     ) -> Result<Vec<u8>, crate::Error> {
+        self.gssapi_mic_data(user, "gssapi-with-mic", buffer)
+    }
+
+    /// ssh_gssapi_buildmic: the session id, then the userauth request for
+    /// `method`.
+    pub(crate) fn gssapi_mic_data(
+        &self,
+        user: &str,
+        method: &str,
+        buffer: &mut Vec<u8>,
+    ) -> Result<Vec<u8>, crate::Error> {
         buffer.clear();
         self.session_id.as_ref().encode(buffer)?;
         buffer.push(msg::USERAUTH_REQUEST);
         user.encode(buffer)?;
         "ssh-connection".encode(buffer)?;
-        "gssapi-with-mic".encode(buffer)?;
+        method.encode(buffer)?;
         Ok(buffer.clone())
     }
 

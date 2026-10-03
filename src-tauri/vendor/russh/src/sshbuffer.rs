@@ -27,7 +27,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use super::*;
 
 /// The SSH client/server identification string.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SshId {
     /// When sending the id, append RFC standard `\r\n`. Example: `SshId::Standard("SSH-2.0-acme")`
     Standard(Cow<'static, str>),

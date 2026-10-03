@@ -108,6 +108,9 @@ pub struct Session {
     /// The host key algorithm of the last key exchange, which RSA host key
     /// proofs are checked with (OpenSSH's kex->hostkey_alg).
     host_key_algorithm: Option<Algorithm>,
+    /// The context of the first GSS-API key exchange, which signs
+    /// `gssapi-keyex` (the GSSAPI patch's gss_kex_context).
+    gss_kex_context: Option<crate::kex::gss::KexContext>,
 }
 
 impl Drop for Session {
@@ -150,6 +153,9 @@ enum Reply {
     AuthGssapiError {
         error: auth::GssapiError,
     },
+    /// `gssapi-keyex` cannot be tried: no GSS-API key exchange context, or
+    /// it could not sign.
+    AuthGssapiKeyexUnavailable,
 }
 
 #[derive(Debug)]
@@ -171,6 +177,10 @@ pub enum Msg {
     },
     AuthGssapiExchangeComplete {
         token: Option<Vec<u8>>,
+    },
+    /// `gssapi-keyex` for `user`, signed by the session.
+    AuthGssapiKeyex {
+        user: String,
     },
     Signed {
         data: Vec<u8>,
@@ -629,6 +639,42 @@ impl<H: Handler> Handle<H> {
                         remaining_methods: MethodSet::empty(),
                         partial_success: false,
                     });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Authenticate with `gssapi-keyex`, as the GSSAPI patch's ssh does after
+    /// a GSS-API key exchange: the userauth data signed with the key
+    /// exchange's context. `None` when there is no such context or it could
+    /// not sign, so nothing was sent and the next method is up.
+    pub async fn authenticate_gssapi_keyex<U: Into<String>>(
+        &mut self,
+        user: U,
+    ) -> Result<Option<AuthResult>, crate::Error> {
+        self.sender
+            .send(Msg::AuthGssapiKeyex { user: user.into() })
+            .await
+            .map_err(|_| crate::Error::SendError)?;
+        loop {
+            match self.receiver.recv().await {
+                Some(Reply::AuthSuccess) => return Ok(Some(AuthResult::Success)),
+                Some(Reply::AuthFailure {
+                    proceed_with_methods: remaining_methods,
+                    partial_success,
+                }) => {
+                    return Ok(Some(AuthResult::Failure {
+                        remaining_methods,
+                        partial_success,
+                    }));
+                }
+                Some(Reply::AuthGssapiKeyexUnavailable) => return Ok(None),
+                None => {
+                    return Ok(Some(AuthResult::Failure {
+                        remaining_methods: MethodSet::empty(),
+                        partial_success: false,
+                    }));
                 }
                 _ => {}
             }
@@ -1258,6 +1304,7 @@ impl Session {
             open_global_requests: VecDeque::new(),
             server_sig_algs: None,
             host_key_algorithm: None,
+            gss_kex_context: None,
         }
     }
 
@@ -1333,6 +1380,21 @@ impl Session {
             crate::future_or_pending(self.common.config.inactivity_timeout, tokio::time::sleep);
         pin!(inactivity_timer);
 
+        // GSSAPIRenewalForcesRekey: clientloop.c asks on every turn of its
+        // loop, and ssh_gssapi_credentials_updated looks at most every 10 s.
+        let gss_renewal = self
+            .common
+            .config
+            .gss_kex
+            .clone()
+            .filter(|p| p.renewal_rekey());
+        let gss_renewal_every = std::time::Duration::from_secs(10);
+        let gss_renewal_timer = crate::future_or_pending(
+            gss_renewal.as_ref().map(|_| gss_renewal_every),
+            tokio::time::sleep,
+        );
+        pin!(gss_renewal_timer);
+
         let reading = start_reading(stream_read, buffer, opening_cipher);
         pin!(reading);
 
@@ -1389,6 +1451,19 @@ impl Session {
                 () = &mut inactivity_timer => {
                     debug!("timeout");
                     return Err(crate::Error::InactivityTimeout.into());
+                }
+                () = &mut gss_renewal_timer => {
+                    if let futures::future::Either::Right(ref mut sleep) =
+                        gss_renewal_timer.as_mut().as_pin_mut()
+                    {
+                        sleep.as_mut().reset(tokio::time::Instant::now() + gss_renewal_every);
+                    }
+                    if let Some(p) = &gss_renewal {
+                        if !self.kex.active() && self.common.encrypted.is_some() && p.credentials_renewed() {
+                            debug!("credentials updated - forcing rekey");
+                            self.initiate_rekey()?;
+                        }
+                    }
                 }
                 msg = self.receiver.recv(), if can_receive_outbound => {
                     self.drain_priority_msgs()?;
@@ -1537,6 +1612,36 @@ impl Session {
             Msg::AuthGssapiExchangeComplete { token } => {
                 if let Some(ref mut enc) = self.common.encrypted {
                     enc.client_send_gssapi_exchange_complete(token.as_deref())?;
+                }
+            }
+            Msg::AuthGssapiKeyex { user } => {
+                // userauth_gsskeyex: the MIC over ssh_gssapi_buildmic's data,
+                // made by gss_kex_context.
+                let mic = match (&mut self.gss_kex_context, &self.common.encrypted) {
+                    (Some(ctx), Some(enc)) => {
+                        let data = enc.gssapi_mic_data(&user, "gssapi-keyex", &mut Vec::new())?;
+                        match ctx.0.get_mic(&data) {
+                            Ok(mic) => Some(mic),
+                            Err(e) => {
+                                debug!("gssapi-keyex: {e}");
+                                None
+                            }
+                        }
+                    }
+                    _ => {
+                        debug!("No valid Key exchange context");
+                        None
+                    }
+                };
+                match mic {
+                    Some(mic) => {
+                        self.write_auth_request_if_needed(&user, auth::Method::GssapiKeyex { mic })?;
+                    }
+                    None => {
+                        self.sender
+                            .send(Reply::AuthGssapiKeyexUnavailable)
+                            .map_err(|_| crate::Error::SendError)?;
+                    }
                 }
             }
             Msg::ChannelOpenSession { channel_ref } => {
@@ -1832,13 +1937,17 @@ async fn reply<H: Handler>(
             pkt.seqn.0,
             pkt.buffer.len()
         );
-        let strict_kex = match session.kex {
-            SessionKexState::InProgress(ref kex) => kex.strict_kex(),
-            _ => session.common.strict_kex,
+        let (strict_kex, gss_kex) = match session.kex {
+            SessionKexState::InProgress(ref kex) => (kex.strict_kex(), kex.is_gss()),
+            _ => (session.common.strict_kex, false),
         };
         if strict_kex && session.common.encrypted.is_none() {
             let seqno = pkt.seqn.0 - 1; // was incremented after read()
-            validate_server_msg_strict_kex(*message_type, seqno as usize)?;
+            if gss_kex {
+                crate::msg::validate_server_msg_strict_kex_gss(*message_type, seqno as usize)?;
+            } else {
+                validate_server_msg_strict_kex(*message_type, seqno as usize)?;
+            }
         }
 
         if [msg::IGNORE, msg::UNIMPLEMENTED, msg::DEBUG].contains(message_type) {
@@ -1905,9 +2014,16 @@ async fn reply<H: Handler>(
                     server_host_key,
                     server_host_certificate,
                     newkeys,
+                    gss_context,
                 } => {
                     debug!("kex impl has completed");
-                    session.host_key_algorithm = Some(newkeys.names.key.clone());
+                    session.host_key_algorithm =
+                        (!newkeys.names.host_key_null).then(|| newkeys.names.key.clone());
+                    // The first GSS-API key exchange's context is kept for
+                    // gssapi-keyex; a re-key's is dropped (kexgssc.c).
+                    if session.gss_kex_context.is_none() {
+                        session.gss_kex_context = gss_context;
+                    }
                     session.common.strict_kex =
                         session.common.strict_kex || newkeys.names.strict_kex();
 
@@ -2332,7 +2448,7 @@ impl Default for GexParams {
 }
 
 /// The configuration of clients.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     /// The client ID string sent at the beginning of the protocol.
     pub client_id: SshId,
@@ -2358,6 +2474,12 @@ pub struct Config {
     pub gex: GexParams,
     /// If active, invoke `set_nodelay(true)` on the ssh socket; disabled by default (i.e. Nagle's algorithm is active).
     pub nodelay: bool,
+    /// GSS-API key exchange (RFC 4462 section 2): the contexts come from
+    /// here. When set, list the GSS methods (`kex::GSS_*`) in front of
+    /// `preferred.kex`, and the `null` host key algorithm is offered last.
+    /// A GSS key exchange checks no host key: the server is authenticated by
+    /// the mechanism, so [`Handler::check_server_key`] is not called for it.
+    pub gss_kex: Option<Arc<dyn crate::kex::gss::GssKexProvider>>,
 }
 
 impl Default for Config {
@@ -2380,6 +2502,7 @@ impl Default for Config {
             anonymous: false,
             gex: Default::default(),
             nodelay: false,
+            gss_kex: None,
         }
     }
 }

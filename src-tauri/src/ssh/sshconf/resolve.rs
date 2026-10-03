@@ -582,6 +582,9 @@ impl Reader<'_> {
             GSSAPIKexAlgorithms => {
                 extra(1)?;
                 let a = one(&args, "")?;
+                if !crate::ssh::gssapi::kex_names_valid(&a) {
+                    return Err(format!("Bad GSSAPI KexAlgorithms '{a}'."));
+                }
                 first_wins(self, vec![a])
             }
             // Commands: the rest of the line, as written.

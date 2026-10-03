@@ -35,6 +35,9 @@ pub enum MethodKind {
     HostBased,
     KeyboardInteractive,
     GssapiWithMic,
+    /// `gssapi-keyex`: the session signed with the context of a GSS-API key
+    /// exchange (the GSSAPI patch OpenSSH carries in Debian and Fedora).
+    GssapiKeyex,
 }
 
 impl From<&MethodKind> for &'static str {
@@ -46,6 +49,7 @@ impl From<&MethodKind> for &'static str {
             MethodKind::HostBased => "hostbased",
             MethodKind::KeyboardInteractive => "keyboard-interactive",
             MethodKind::GssapiWithMic => "gssapi-with-mic",
+            MethodKind::GssapiKeyex => "gssapi-keyex",
         }
     }
 }
@@ -59,6 +63,7 @@ impl FromStr for MethodKind {
             "hostbased" => Ok(MethodKind::HostBased),
             "keyboard-interactive" => Ok(MethodKind::KeyboardInteractive),
             "gssapi-with-mic" => Ok(MethodKind::GssapiWithMic),
+            "gssapi-keyex" => Ok(MethodKind::GssapiKeyex),
             _ => Err(()),
         }
     }
@@ -124,6 +129,7 @@ impl MethodSet {
             MethodKind::HostBased,
             MethodKind::KeyboardInteractive,
             MethodKind::GssapiWithMic,
+            MethodKind::GssapiKeyex,
         ])
     }
 
@@ -318,6 +324,11 @@ pub enum Method {
     GssapiWithMic {
         mechanism_oids: Vec<Vec<u8>>,
     },
+    /// `gssapi-keyex`, with the MIC over the userauth data made by the key
+    /// exchange's context.
+    GssapiKeyex {
+        mic: Vec<u8>,
+    },
     /// RFC 4252 section 9, sent whole: the signature is made before the
     /// request, there is no probe.
     Hostbased {
@@ -369,6 +380,7 @@ impl std::fmt::Debug for Method {
                 .debug_struct("GssapiWithMic")
                 .field("mechanism_oids", mechanism_oids)
                 .finish(),
+            Method::GssapiKeyex { .. } => f.write_str("GssapiKeyex"),
             Method::Hostbased {
                 algorithm,
                 client_host,
