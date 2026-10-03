@@ -28,6 +28,7 @@ use super::userauth::Ui;
 
 /// sk-api.h
 const SSH_SK_USER_PRESENCE_REQD: u8 = 0x01;
+#[cfg_attr(target_os = "android", allow(dead_code))]
 const SSH_SK_USER_VERIFICATION_REQD: u8 = 0x04;
 const SSH_SK_ECDSA: u32 = 0x00;
 const SSH_SK_ED25519: u32 = 0x01;

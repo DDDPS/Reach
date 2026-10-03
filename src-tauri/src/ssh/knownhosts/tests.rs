@@ -14,6 +14,10 @@ use super::*;
 // ---------------------------------------------------------------- helpers
 
 fn testdata() -> PathBuf {
+    // On a device the sources are elsewhere: the folder is pushed and named.
+    if let Some(d) = std::env::var_os("REACH_KNOWNHOSTS_TESTDATA") {
+        return PathBuf::from(d);
+    }
     let f = Path::new(file!());
     let candidates: Vec<PathBuf> = if f.is_absolute() {
         vec![f.to_path_buf()]

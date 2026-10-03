@@ -105,7 +105,7 @@ fn reverse(addr: IpAddr) -> Option<String> {
         // SAFETY: `sa` is a valid socket address of `sa.len()` bytes and
         // `host` is writable for its whole length.
         let r = unsafe {
-            libc::getnameinfo(sa.as_ptr().cast(), sa.len(), host.as_mut_ptr(), host.len() as libc::socklen_t, std::ptr::null_mut(), 0, libc::NI_NAMEREQD)
+            libc::getnameinfo(sa.as_ptr().cast(), sa.len(), host.as_mut_ptr(), host.len() as _, std::ptr::null_mut(), 0, libc::NI_NAMEREQD)
         };
         if r != 0 {
             return None;

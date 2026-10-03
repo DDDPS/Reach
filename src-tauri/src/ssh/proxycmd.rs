@@ -70,6 +70,7 @@ impl AsyncWrite for ProxyStream {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn shell_command(command: &str) -> tokio::process::Command {
     #[cfg(windows)]
     {

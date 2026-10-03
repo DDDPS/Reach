@@ -105,7 +105,7 @@ pub async fn rdp_window_fullscreen(app_handle: tauri::AppHandle, on: bool) -> Re
     #[cfg(not(desktop))]
     {
         let _ = (app_handle, on);
-        return Ok(());
+        Ok(())
     }
     #[cfg(desktop)]
     desktop_fullscreen(app_handle, on)
