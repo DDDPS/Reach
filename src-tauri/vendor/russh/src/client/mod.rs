@@ -526,7 +526,12 @@ impl<H: Handler> Handle<H> {
                     let data = signer.auth_sign(&key.into(), hash_alg, data).await;
                     let data = match data {
                         Ok(data) => data,
-                        Err(e) => return Err(e),
+                        Err(e) => {
+                            // Reach: tell the session no signature is coming,
+                            // so the next key can be tried (as OpenSSH does).
+                            let _ = self.sender.send(Msg::Signed { data: Vec::new() }).await;
+                            return Err(e);
+                        }
                     };
                     if self.sender.send(Msg::Signed { data }).await.is_err() {
                         return Err((crate::SendError {}).into());
@@ -671,7 +676,12 @@ impl<H: Handler> Handle<H> {
                     let data = signer.auth_sign(&cert.into(), hash_alg, data).await;
                     let data = match data {
                         Ok(data) => data,
-                        Err(e) => return Err(e),
+                        Err(e) => {
+                            // Reach: tell the session no signature is coming,
+                            // so the next key can be tried (as OpenSSH does).
+                            let _ = self.sender.send(Msg::Signed { data: Vec::new() }).await;
+                            return Err(e);
+                        }
                     };
                     if self.sender.send(Msg::Signed { data }).await.is_err() {
                         return Err((crate::SendError {}).into());

@@ -272,7 +272,9 @@ impl Session {
                                             _ => {}
                                         }
                                     };
-                                    if self.common.buffer.len() != len {
+                                    // Reach: an empty answer means the signer
+                                    // failed; nothing is sent for this key.
+                                    if !self.common.buffer.is_empty() && self.common.buffer.len() != len {
                                         // The buffer was modified.
                                         push_packet!(enc.write, {
                                             #[allow(clippy::indexing_slicing)] // length checked
@@ -306,7 +308,9 @@ impl Session {
                                             _ => {}
                                         }
                                     };
-                                    if self.common.buffer.len() != len {
+                                    // Reach: an empty answer means the signer
+                                    // failed; nothing is sent for this key.
+                                    if !self.common.buffer.is_empty() && self.common.buffer.len() != len {
                                         // The buffer was modified.
                                         push_packet!(enc.write, {
                                             #[allow(clippy::indexing_slicing)] // length checked
