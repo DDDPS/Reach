@@ -117,6 +117,24 @@ pub(crate) trait Asker: Send + Sync {
         instructions: &'a str,
         fields: Vec<Field>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answers> + Send + 'a>>;
+
+    /// A notice that needs no answer while the login waits on something
+    /// else, as ssh's notify_start ("Confirm user presence for key …").
+    fn notify_start(&self, _host: &str, _port: u16, _text: &str) {}
+
+    /// The notice is over; `done` is said briefly, as notify_complete does.
+    fn notify_complete(&self, _host: &str, _port: u16, _done: Option<&str>) {}
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Notice<'a> {
+    host: &'a str,
+    port: u16,
+    /// Shown until the next notice; `None` takes it down.
+    text: Option<&'a str>,
+    /// Said briefly when it ends.
+    done: Option<&'a str>,
 }
 
 impl Asker for tauri::AppHandle {
@@ -130,6 +148,14 @@ impl Asker for tauri::AppHandle {
         fields: Vec<Field>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Answers> + Send + 'a>> {
         Box::pin(ask(Some(self), host, port, kind, title, instructions, fields))
+    }
+
+    fn notify_start(&self, host: &str, port: u16, text: &str) {
+        let _ = self.emit("ssh-auth-notice", Notice { host, port, text: Some(text), done: None });
+    }
+
+    fn notify_complete(&self, host: &str, port: u16, done: Option<&str>) {
+        let _ = self.emit("ssh-auth-notice", Notice { host, port, text: None, done });
     }
 }
 

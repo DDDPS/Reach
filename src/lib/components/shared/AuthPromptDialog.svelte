@@ -11,6 +11,7 @@
 	import Modal from '$lib/components/shared/Modal.svelte';
 	import Button from '$lib/components/shared/Button.svelte';
 	import { t } from '$lib/state/i18n.svelte';
+	import { addToast, dismissToast } from '$lib/state/toasts.svelte';
 
 	interface AuthPrompt {
 		promptId: string;
@@ -30,9 +31,28 @@
 		answers = current ? current.fields.map(() => '') : [];
 	});
 
+	/** A notice with no answer while a login waits ("Confirm user presence for key …"). */
+	interface AuthNotice {
+		host: string;
+		port: number;
+		text: string | null;
+		done: string | null;
+	}
+	let noticeId: string | undefined;
+
 	let unlisten: UnlistenFn | undefined;
 	let unlistenClosed: UnlistenFn | undefined;
+	let unlistenNotice: UnlistenFn | undefined;
 	onMount(async () => {
+		unlistenNotice = await listen<AuthNotice>('ssh-auth-notice', (e) => {
+			if (noticeId) dismissToast(noticeId);
+			noticeId = undefined;
+			if (e.payload.text) {
+				noticeId = addToast(`${e.payload.host}: ${e.payload.text}`, 'info', 0).id;
+			} else if (e.payload.done) {
+				addToast(e.payload.done, 'success', 2000);
+			}
+		});
 		unlisten = await listen<AuthPrompt>('ssh-auth-prompt', (e) => {
 			queue = [...queue, e.payload];
 		});
@@ -43,6 +63,7 @@
 	onDestroy(() => {
 		unlisten?.();
 		unlistenClosed?.();
+		unlistenNotice?.();
 	});
 
 	async function respond(ok: boolean): Promise<void> {
