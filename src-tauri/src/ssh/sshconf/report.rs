@@ -40,15 +40,19 @@ pub fn support(kw: Kw) -> Support {
         StrictHostKeyChecking | UserKnownHostsFile | GlobalKnownHostsFile | HostKeyAlias | CheckHostIP
         | HashKnownHosts | NoHostAuthenticationForLocalhost | RevokedHostKeys | KnownHostsCommand | VisualHostKey
         | FingerprintHash | RequiredRSASize | CASignatureAlgorithms => Support::Yes,
+        // The session (ssh/session_opts.rs), ProxyCommand (ssh/proxycmd.rs).
+        // ForkAfterAuthentication backgrounds ssh before the session: a
+        // Reach connection already runs in the background. SyslogFacility
+        // applies to ssh only when it logs to syslog (-y); it never does by
+        // its own choice, and Reach does not either.
+        RequestTTY | RemoteCommand | SessionType | SetEnv | SendEnv | StdinNull | EscapeChar | ObscureKeystrokeTiming | LocalCommand | PermitLocalCommand | RefuseConnection | ProxyCommand | ProxyUseFdpass | WarnWeakCrypto | ForkAfterAuthentication | SyslogFacility => Support::Yes,
         ChannelTimeout | ClearAllForwardings | ControlMaster | ControlPath
-        | ControlPersist | DynamicForward | EnableEscapeCommandline | EnableSSHKeysign | EscapeChar
-        | ExitOnForwardFailure | ForkAfterAuthentication | ForwardAgent | ForwardX11
+        | ControlPersist | DynamicForward | EnableEscapeCommandline | EnableSSHKeysign
+        | ExitOnForwardFailure | ForwardAgent | ForwardX11
         | ForwardX11Timeout | ForwardX11Trusted | GatewayPorts | GSSAPIAuthentication
-        | GSSAPIDelegateCredentials | HostbasedAcceptedAlgorithms | HostbasedAuthentication | LocalCommand | LocalForward | LogLevel | LogVerbose | ObscureKeystrokeTiming | PermitLocalCommand | PermitRemoteOpen
-        | PKCS11Provider | ProxyCommand | ProxyUseFdpass | RefuseConnection | RemoteCommand | RemoteForward
-        | RequestTTY | SecurityKeyProvider | SendEnv | SessionType | SetEnv
-        | StdinNull | StreamLocalBindMask | StreamLocalBindUnlink | SyslogFacility | Tunnel
-        | TunnelDevice | UpdateHostKeys | VerifyHostKeyDNS | WarnWeakCrypto
+        | GSSAPIDelegateCredentials | HostbasedAcceptedAlgorithms | HostbasedAuthentication | LocalForward | LogLevel | LogVerbose | PermitRemoteOpen
+        | PKCS11Provider | RemoteForward | SecurityKeyProvider | StreamLocalBindMask | StreamLocalBindUnlink | Tunnel
+        | TunnelDevice | UpdateHostKeys | VerifyHostKeyDNS
         | XAuthLocation | GSSAPIKeyExchange | GSSAPIClientIdentity | GSSAPIServerIdentity | GSSAPIRenewalForcesRekey
         | GSSAPITrustDns | GSSAPIKexAlgorithms => Support::NotYet,
     }

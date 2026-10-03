@@ -199,6 +199,36 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
         ]);
     }
     plan.hostkeys = Some(hk);
+    plan.refused = r.refused.clone().map(|m| format!("RefuseConnection: {m}"));
+    {
+        use super::keyword::Kw;
+        if let Some(cmd) = r.options.first(Kw::ProxyCommand).filter(|c| !c.eq_ignore_ascii_case("none")) {
+            if opts.approved_commands.iter().any(|a| a == cmd) {
+                plan.proxy_command = Some(crate::ssh::proxycmd::ProxyCommand {
+                    command: cmd.to_string(),
+                    use_fdpass: r.options.first(Kw::ProxyUseFdpass) == Some("yes"),
+                    original_host: r.original_host.clone(),
+                    key_alias: r.options.first(Kw::HostKeyAlias).map(str::to_string).unwrap_or_else(|| r.original_host.clone()),
+                });
+            } else if plan.refused.is_none() {
+                // Connecting directly instead would skip the path the config
+                // asks for.
+                plan.refused = Some(format!("ProxyCommand \"{cmd}\" waits for your approval in the session's SSH options"));
+            }
+        }
+    }
+    if !jump {
+        use super::keyword::Kw;
+        // LocalCommand runs only with PermitLocalCommand, and only once the
+        // user allowed that exact command.
+        let local = r
+            .options
+            .first(Kw::LocalCommand)
+            .filter(|_| r.options.first(Kw::PermitLocalCommand) == Some("yes"))
+            .filter(|c| opts.approved_commands.iter().any(|a| a == c))
+            .map(str::to_string);
+        plan.session = Some(crate::ssh::session_opts::SessionPolicy::from_options(&r.options, local));
+    }
     for w in &plan.weakenings {
         tracing::warn!("ssh_config for {host}: {} {} weakens the connection: {}", w.keyword, w.value, w.reason);
     }
@@ -255,6 +285,7 @@ fn hostkey_policy(r: &Resolved, plan: &super::apply::Plan, opts: &SshOptions) ->
         ca_signature_algorithms: plan.ca_signature_algorithms.clone(),
         proxied: o.first(Kw::ProxyJump).is_some_and(|j| j != "none") || o.first(Kw::ProxyCommand).is_some_and(|c| c != "none"),
         tokens: r.tokens(&sys),
+        warn_weak_crypto: o.first(Kw::WarnWeakCrypto) != Some("no"),
     }
 }
 

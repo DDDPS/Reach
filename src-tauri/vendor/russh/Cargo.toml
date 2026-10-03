@@ -8,6 +8,7 @@
 # - Key exchange sntrup761x25519-sha512 (and @openssh.com), src/kex/
 #   hybrid_sntrup.rs, with sntrup761 ported from OpenSSH's sntrup761.c
 #   (src/kex/sntrup761.rs).
+# - Channel::send_break: RFC 4335 "break" requests from the client (ssh's ~B).
 # Tests: tests/test_legacy_algorithms.rs (russh to russh always; against real
 # OpenSSH servers when RUSSH_INTEROP is set) and known answers in the modules.
 # Drop this copy and the [patch.crates-io] entry in ../../Cargo.toml once

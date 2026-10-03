@@ -2193,5 +2193,6 @@
   "authprompt.yes": "Add",
   "authprompt.no": "Not now",
   "authprompt.host_hint": "Asked while logging in to {{host}}. Nothing you type here is saved.",
-  "hostkey.refused": "Refused the host key of {{host}}: {{reason}}"
+  "hostkey.refused": "Refused the host key of {{host}}: {{reason}}",
+  "ssh.weak_kex": "{{host}} is not using a post-quantum key exchange ({{kex}}): the session could be recorded now and decrypted later. Upgrading the server fixes it."
 }

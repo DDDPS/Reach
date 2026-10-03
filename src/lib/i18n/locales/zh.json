@@ -2193,5 +2193,6 @@
   "authprompt.yes": "添加",
   "authprompt.no": "暂不",
   "authprompt.host_hint": "登录 {{host}} 时询问。您在此输入的内容不会被保存。",
-  "hostkey.refused": "已拒绝 {{host}} 的主机密钥：{{reason}}"
+  "hostkey.refused": "已拒绝 {{host}} 的主机密钥：{{reason}}",
+  "ssh.weak_kex": "{{host}} 未使用后量子密钥交换（{{kex}}）：会话可能现在被记录、以后被解密。升级服务器即可解决。"
 }

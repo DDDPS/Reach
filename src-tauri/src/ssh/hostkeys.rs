@@ -52,6 +52,8 @@ pub struct HostKeyPolicy {
     pub proxied: bool,
     /// The connection's `%` tokens, for KnownHostsCommand.
     pub tokens: crate::ssh::sshconf::expand::Tokens,
+    /// WarnWeakCrypto: say so when the key exchange is not post-quantum.
+    pub warn_weak_crypto: bool,
 }
 
 /// OpenSSH's default CASignatureAlgorithms (SSH_ALLOWED_CA_SIGALGS).
@@ -332,6 +334,7 @@ mod tests {
             ca_signature_algorithms: DEFAULT_CA_SIGALGS.iter().map(|s| s.to_string()).collect(),
             proxied: false,
             tokens: Default::default(),
+            warn_weak_crypto: false,
         }
     }
 

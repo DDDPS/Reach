@@ -89,6 +89,13 @@ pub struct Plan {
     pub ca_signature_algorithms: Vec<String>,
     /// How to check the host key; set for sessions with ssh_config settings.
     pub hostkeys: Option<crate::ssh::hostkeys::HostKeyPolicy>,
+    /// The session itself (target host only).
+    pub session: Option<crate::ssh::session_opts::SessionPolicy>,
+    /// Why the connection must not be made: RefuseConnection, or a
+    /// ProxyCommand the user has not approved.
+    pub refused: Option<String>,
+    /// ProxyCommand, approved.
+    pub proxy_command: Option<crate::ssh::proxycmd::ProxyCommand>,
 }
 
 /// OpenSSH's default PubkeyAcceptedAlgorithms (KEX_DEFAULT_PK_ALG).
@@ -241,7 +248,7 @@ impl Plan {
     /// weakenings the user approved ("Keyword value"); lines set in Reach
     /// itself count as approved.
     pub fn new(r: &Resolved, base: russh::client::Config, accepted: &[String]) -> Plan {
-        let mut p = Plan { config: base, socket: SocketPlan::default(), weakenings: vec![], uses: vec![], accepted: accepted.to_vec(), pubkey_algorithms: None, auth: None, ca_signature_algorithms: crate::ssh::hostkeys::DEFAULT_CA_SIGALGS.iter().map(|s| s.to_string()).collect(), hostkeys: None };
+        let mut p = Plan { config: base, socket: SocketPlan::default(), weakenings: vec![], uses: vec![], accepted: accepted.to_vec(), pubkey_algorithms: None, auth: None, ca_signature_algorithms: crate::ssh::hostkeys::DEFAULT_CA_SIGALGS.iter().map(|s| s.to_string()).collect(), hostkeys: None, session: None, refused: None, proxy_command: None };
         let o = &r.options;
         p.algorithms(o);
         p.transport(o);

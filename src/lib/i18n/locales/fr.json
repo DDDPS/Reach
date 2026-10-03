@@ -2193,5 +2193,6 @@
   "authprompt.yes": "Ajouter",
   "authprompt.no": "Pas maintenant",
   "authprompt.host_hint": "Demandé pendant la connexion à {{host}}. Rien de ce que vous tapez ici n’est enregistré.",
-  "hostkey.refused": "Clé d’hôte de {{host}} refusée : {{reason}}"
+  "hostkey.refused": "Clé d’hôte de {{host}} refusée : {{reason}}",
+  "ssh.weak_kex": "{{host}} n’utilise pas d’échange de clés post-quantique ({{kex}}) : la session pourrait être enregistrée maintenant et déchiffrée plus tard. Mettre le serveur à jour corrige cela."
 }

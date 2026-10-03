@@ -143,7 +143,11 @@ impl Env for SystemEnv {
 #[cfg(not(target_os = "android"))]
 pub fn run_shell(command: &str) -> Result<bool, String> {
     #[cfg(windows)]
-    let status = std::process::Command::new("cmd").args(["/C", command]).status();
+    let status = {
+        use std::os::windows::process::CommandExt;
+        // Raw, so cmd sees the command line as written.
+        std::process::Command::new("cmd").arg("/C").raw_arg(command).status()
+    };
     #[cfg(not(windows))]
     let status = {
         let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());

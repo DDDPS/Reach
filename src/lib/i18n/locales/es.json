@@ -2193,5 +2193,6 @@
   "authprompt.yes": "Añadir",
   "authprompt.no": "Ahora no",
   "authprompt.host_hint": "Se pregunta al iniciar sesión en {{host}}. Nada de lo que escriba aquí se guarda.",
-  "hostkey.refused": "Clave de host de {{host}} rechazada: {{reason}}"
+  "hostkey.refused": "Clave de host de {{host}} rechazada: {{reason}}",
+  "ssh.weak_kex": "{{host}} no usa un intercambio de claves poscuántico ({{kex}}): la sesión podría grabarse ahora y descifrarse más tarde. Actualizar el servidor lo soluciona."
 }

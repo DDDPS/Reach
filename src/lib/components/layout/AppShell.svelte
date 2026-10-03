@@ -126,6 +126,9 @@
 		const stopHostKey = listen<{ host: string; port: number; reason: string }>('ssh-hostkey-refused', (e) => {
 			addToast(t('hostkey.refused', { host: `${e.payload.host}:${e.payload.port}`, reason: e.payload.reason }), 'error', 20000);
 		});
+		const stopWeakKex = listen<{ host: string; port: number; kex: string }>('ssh-weak-kex', (e) => {
+			addToast(t('ssh.weak_kex', { host: `${e.payload.host}:${e.payload.port}`, kex: e.payload.kex }), 'warning', 12000);
+		});
 		const unlisten = listen<{ host: string; fingerprint: string; via: 'agent' | 'password' }>('ssh-key-refused-notice', (e) => {
 			const { host, fingerprint, via } = e.payload;
 			addToast(t(via === 'agent' ? 'ssh.key_refused_agent' : 'ssh.key_refused_password', { host, fingerprint }), 'warning', 20000);
@@ -134,6 +137,7 @@
 			void unlisten.then((stop) => stop());
 			void stopLogError.then((stop) => stop());
 			void stopHostKey.then((stop) => stop());
+			void stopWeakKex.then((stop) => stop());
 		};
 	});
 

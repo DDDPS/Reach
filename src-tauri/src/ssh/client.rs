@@ -915,17 +915,23 @@ pub struct HopOptions {
     /// How to check the host key, when ssh_config says; `None` keeps
     /// Reach's own store and question.
     pub hostkeys: Option<Arc<crate::ssh::hostkeys::HostKeyPolicy>>,
+    /// The session itself, when ssh_config says (target only).
+    pub session: Option<Arc<crate::ssh::session_opts::SessionPolicy>>,
+    /// Why not to connect (RefuseConnection, an unapproved ProxyCommand).
+    pub refused: Option<String>,
+    /// ProxyCommand, approved.
+    pub proxy_command: Option<crate::ssh::proxycmd::ProxyCommand>,
 }
 
 impl Default for HopOptions {
     fn default() -> Self {
-        Self { config: Arc::new(russh::client::Config::default()), socket: Default::default(), auth: None, hostkeys: None }
+        Self { config: Arc::new(russh::client::Config::default()), socket: Default::default(), auth: None, hostkeys: None, session: None, refused: None, proxy_command: None }
     }
 }
 
 impl From<crate::ssh::sshconf::apply::Plan> for HopOptions {
     fn from(p: crate::ssh::sshconf::apply::Plan) -> Self {
-        Self { config: Arc::new(p.config), socket: p.socket, auth: p.auth, hostkeys: p.hostkeys.map(Arc::new) }
+        Self { config: Arc::new(p.config), socket: p.socket, auth: p.auth, hostkeys: p.hostkeys.map(Arc::new), session: p.session.map(Arc::new), refused: p.refused, proxy_command: p.proxy_command }
     }
 }
 
@@ -1010,22 +1016,22 @@ impl SshManager {
     ) -> Result<ActiveConnection, SshError> {
         tracing::info!("SSH connecting to {}@{}:{}", username, host, port);
 
+        if let Some(msg) = &opts.refused {
+            return Err(SshError::ConnectionFailed(msg.clone()));
+        }
         let timeout_duration = opts.connect_limit(std::time::Duration::from_secs(15));
         let connect_future = async {
             let handle = Self::handshake_direct(host, port, username, &auth, proxy.as_ref(), app_handle.clone(), &opts, true).await?;
             tracing::info!("SSH authenticated for {}@{}:{}", username, host, port);
 
-            let channel = handle.channel_open_session().await
-                .map_err(|e| SshError::ChannelError(format!("Failed to open session: {}", e)))?;
-
-            open_interactive_shell(&channel, cols, rows, shell.as_deref()).await?;
+            let (channel, tty) = open_session(&handle, &opts, cols, rows, shell.as_deref()).await?;
 
             tracing::info!("SSH shell opened for {}@{}:{}", username, host, port);
 
-            Ok((handle, channel))
+            Ok((handle, channel, tty))
         };
 
-        let (handle, channel) = within_connect_limit(timeout_duration, connect_future).await?;
+        let (handle, channel, tty) = within_connect_limit(timeout_duration, connect_future).await?;
 
         let info = ConnectionInfo {
             id: id.to_string(),
@@ -1034,7 +1040,7 @@ impl SshManager {
             username: username.to_string(),
         };
 
-        into_active_connection(channel, handle, info, shell.as_deref(), login, app_handle, Vec::new()).await
+        into_active_connection(channel, handle, info, shell.as_deref(), login, app_handle, Vec::new(), opts.session.clone(), tty).await
     }
 
     /// Connect and authenticate, directly or through a proxy. Opens no channel:
@@ -1060,6 +1066,17 @@ impl SshManager {
             russh::client::connect_stream(config, stream, handler)
                 .await
                 .map_err(|e| SshError::ConnectionFailed(format!("Proxy SSH handshake failed: {}", e)))?
+        } else if let Some(pc) = &opts.proxy_command {
+            let cmd = crate::ssh::proxycmd::expand(pc, host, port, username).map_err(SshError::ConnectionFailed)?;
+            tracing::info!("SSH connecting through ProxyCommand: {cmd}");
+            let failed = |e: String| SshError::ConnectionFailed(format!("ProxyCommand: {e}"));
+            if pc.use_fdpass {
+                let stream = crate::ssh::proxycmd::fdpass(&cmd).await.map_err(|e| failed(e.to_string()))?;
+                russh::client::connect_stream(config, stream, handler).await.map_err(|e| failed(e.to_string()))?
+            } else {
+                let stream = crate::ssh::proxycmd::spawn(&cmd).map_err(|e| failed(e.to_string()))?;
+                russh::client::connect_stream(config, stream, handler).await.map_err(|e| failed(e.to_string()))?
+            }
         } else {
             // "No route to host" on a Mac usually means the local network
             // permission, not the route (issue #47).
@@ -1188,6 +1205,9 @@ impl SshManager {
             "SSH connecting to {}@{}:{} via {} jump host(s)",
             target_username, target_host, target_port, jump_chain.len()
         );
+        if let Some(msg) = &opts.refused {
+            return Err(SshError::ConnectionFailed(msg.clone()));
+        }
 
         let base = std::time::Duration::from_secs(30);
         let timeout_duration = jump_chain.first().map_or(base, |j| j.opts.connect_limit(base));
@@ -1210,12 +1230,7 @@ impl SshManager {
         );
 
         // Open session, request PTY and the (optionally overridden) shell on target
-        let channel = target_handle
-            .channel_open_session()
-            .await
-            .map_err(|e| SshError::ChannelError(format!("Failed to open session: {}", e)))?;
-
-        open_interactive_shell(&channel, cols, rows, shell.as_deref()).await?;
+        let (channel, tty) = open_session(&target_handle, &opts, cols, rows, shell.as_deref()).await?;
 
         tracing::info!(
             "SSH shell opened for {}@{}:{} (via jump)",
@@ -1229,7 +1244,7 @@ impl SshManager {
             username: target_username.to_string(),
         };
 
-        into_active_connection(channel, target_handle, info, shell.as_deref(), login, app_handle, jump_handles).await
+        into_active_connection(channel, target_handle, info, shell.as_deref(), login, app_handle, jump_handles, opts.session.clone(), tty).await
     }
 
     /// Connect and authenticate on the target through each jump host in turn.
@@ -1434,6 +1449,9 @@ impl SshManager {
         app_handle: tauri::AppHandle,
         opts: HopOptions,
     ) -> Result<HeadlessConnection, SshError> {
+        if let Some(msg) = &opts.refused {
+            return Err(SshError::ConnectionFailed(msg.clone()));
+        }
         let base = std::time::Duration::from_secs(if jump_chain.is_empty() { 15 } else { 30 });
         let timeout = jump_chain.first().map_or(&opts, |j| &j.opts).connect_limit(base);
         let connect = async {
@@ -1953,6 +1971,25 @@ struct KnownHosts {
 impl russh::client::Handler for SshClientHandler {
     type Error = russh::Error;
 
+    /// WarnWeakCrypto, as OpenSSH 10.1+ warns: a key exchange that is not
+    /// post-quantum could be recorded now and broken later.
+    async fn kex_done(
+        &mut self,
+        _shared_secret: Option<&[u8]>,
+        names: &russh::Names,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        let kex: &str = names.kex.as_ref();
+        let pq = matches!(kex, "mlkem768x25519-sha256" | "sntrup761x25519-sha512" | "sntrup761x25519-sha512@openssh.com");
+        if !pq && self.hostkeys.as_ref().is_some_and(|p| p.warn_weak_crypto) {
+            tracing::warn!("{}:{} uses the key exchange {kex}, which is not post-quantum", self.host, self.port);
+            if let Some(app) = &self.app_handle {
+                let _ = app.emit("ssh-weak-kex", serde_json::json!({ "host": self.host, "port": self.port, "kex": kex }));
+            }
+        }
+        Ok(())
+    }
+
     async fn check_server_key(
         &mut self,
         server_public_key: &russh::keys::PublicKeyOrCertificate,
@@ -2095,30 +2132,60 @@ pub(crate) async fn verify_host_identity_with(
 /// Finish a connection once the channel is open: inject shell color/prompt init
 /// (when enabled for the shell), spawn the streaming session task, and build the
 /// `ActiveConnection`. Shared by both the direct and jump-host connect paths.
+/// Open the terminal's session channel: as ssh_config says when it says
+/// (see `session_opts`), else Reach's own shell. `None` for SessionType
+/// none. Also whether a terminal was allocated.
+async fn open_session(
+    handle: &russh::client::Handle<SshClientHandler>,
+    opts: &HopOptions,
+    cols: u16,
+    rows: u16,
+    shell: Option<&str>,
+) -> Result<(Option<russh::Channel<russh::client::Msg>>, bool), SshError> {
+    use crate::ssh::session_opts::{setup_channel, SessionType};
+    if let Some(p) = &opts.session {
+        if p.session_type == SessionType::None {
+            return Ok((None, false));
+        }
+        let channel = handle.channel_open_session().await.map_err(|e| SshError::ChannelError(format!("Failed to open session: {}", e)))?;
+        let tty = setup_channel(&channel, p, cols, rows, shell).await.map_err(SshError::ChannelError)?;
+        return Ok((Some(channel), tty));
+    }
+    let channel = handle.channel_open_session().await.map_err(|e| SshError::ChannelError(format!("Failed to open session: {}", e)))?;
+    open_interactive_shell(&channel, cols, rows, shell).await?;
+    Ok((Some(channel), true))
+}
+
+#[expect(clippy::too_many_arguments, reason = "everything a finished login hands to its session")]
 async fn into_active_connection(
-    channel: russh::Channel<russh::client::Msg>,
+    channel: Option<russh::Channel<russh::client::Msg>>,
     handle: russh::client::Handle<SshClientHandler>,
     info: ConnectionInfo,
     shell: Option<&str>,
     login: LoginOptions,
     app_handle: tauri::AppHandle,
     jump_handles: Vec<SharedHandle>,
+    session: Option<Arc<crate::ssh::session_opts::SessionPolicy>>,
+    tty: bool,
 ) -> Result<ActiveConnection, SshError> {
     // Inject shell-appropriate color/prompt init (chosen per shell family so a
     // fish login never gets bash syntax), unless the user disabled it. `None`
     // shell-family => nothing injected. Keeping the login message means
     // typing it later, once the server is quiet; otherwise it goes now.
-    let init = if login.inject_colors { shell_init(shell) } else { None };
-    let flow = match init {
-        Some(init) if login.show_login_message => Some(LoginFlow::new(init, std::time::Instant::now())),
-        Some(init) => {
+    // Typed into an interactive shell only: never into a RemoteCommand or a
+    // subsystem, which a session with ssh_config settings may run.
+    let shell_session = channel.is_some() && session.as_ref().is_none_or(|p| p.remote_command.is_none() && tty);
+    let init = if login.inject_colors && shell_session { shell_init(shell) } else { None };
+    let flow = match (init, channel.as_ref()) {
+        (Some(init), Some(_)) if login.show_login_message => Some(LoginFlow::new(init, std::time::Instant::now())),
+        (Some(init), Some(channel)) => {
             channel
                 .data(init.as_bytes())
                 .await
                 .map_err(|e| SshError::ChannelError(format!("Color init failed: {}", e)))?;
             None
         }
-        None => None,
+        _ => None,
     };
 
     // A log that cannot be opened does not stop the session, but the user
@@ -2144,16 +2211,49 @@ async fn into_active_connection(
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let task_id = info.id.clone();
     let task_handle = app_handle.clone();
+    let shared: SharedHandle = Arc::new(tokio::sync::Mutex::new(handle));
+    let task_shared = shared.clone();
+    let host_label = format!("{}:{}", info.host, info.port);
     tokio::spawn(async move {
-        ssh_session_task(channel, cmd_rx, task_id, task_handle, flow, log).await;
+        match channel {
+            Some(channel) => ssh_session_task(channel, cmd_rx, task_id, task_handle, flow, log, SessionExtras { policy: session, tty, handle: task_shared, host: host_label }).await,
+            None => ssh_idle_task(cmd_rx, task_id, task_handle).await,
+        }
     });
 
     Ok(ActiveConnection {
         cmd_tx,
         info,
-        handle: Arc::new(tokio::sync::Mutex::new(handle)),
+        handle: shared,
         jump_handles,
     })
+}
+
+/// What ssh_config adds to a session's loop.
+struct SessionExtras {
+    policy: Option<Arc<crate::ssh::session_opts::SessionPolicy>>,
+    tty: bool,
+    handle: SharedHandle,
+    host: String,
+}
+
+/// SessionType none: the connection carries no session, only what else it
+/// was asked for. The tab says so and stays until closed.
+async fn ssh_idle_task(mut cmd_rx: mpsc::UnboundedReceiver<SessionCommand>, connection_id: String, app_handle: tauri::AppHandle) {
+    let data_event = format!("ssh-data-{}", connection_id);
+    let note = "Connected. SessionType none: no shell or command was started; the connection stays open for its forwards.\r\n";
+    let mut shown = false;
+    while let Some(cmd) = cmd_rx.recv().await {
+        match cmd {
+            SessionCommand::Ready if !shown => {
+                shown = true;
+                let _ = app_handle.emit(&data_event, note);
+            }
+            SessionCommand::Close => break,
+            _ => {}
+        }
+    }
+    let _ = app_handle.emit(&format!("ssh-exit-{}", connection_id), ());
 }
 
 async fn ssh_session_task(
@@ -2163,7 +2263,32 @@ async fn ssh_session_task(
     app_handle: tauri::AppHandle,
     mut flow: Option<LoginFlow>,
     mut log: Option<crate::ssh::session_log::SessionLog>,
+    extras: SessionExtras,
 ) {
+    use crate::ssh::session_opts::{EscapeAction, Escapes, Obscure};
+    let policy = extras.policy.clone();
+    // The escape character works where ssh's does: a session with a
+    // terminal, under ssh_config settings that do not turn it off.
+    let mut escapes = policy.as_ref().filter(|_| extras.tty).and_then(|p| p.escape.map(|c| Escapes::new(c, p.escape_cmdline)));
+    let mut obscure = policy.as_ref().filter(|p| extras.tty && p.obscure_ms > 0).map(|p| Obscure::new(p.obscure_ms));
+    let mut obscure_tick = tokio::time::interval(std::time::Duration::from_millis(5));
+    obscure_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let stdin_null = policy.as_ref().is_some_and(|p| p.stdin_null);
+    let idle_limit = policy.as_ref().and_then(|p| p.timeout_for("session"));
+    let mut last_activity = std::time::Instant::now();
+    let mut idle_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    idle_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // LocalCommand: run once the session is up; its output shows in the tab.
+    let (local_tx, mut local_rx) = mpsc::unbounded_channel::<String>();
+    if let Some(cmd) = policy.as_ref().and_then(|p| p.local_command.clone()) {
+        tokio::task::spawn_blocking(move || {
+            let text = match run_local_command(&cmd) {
+                Ok(out) => out,
+                Err(e) => format!("LocalCommand: {e}\r\n"),
+            };
+            let _ = local_tx.send(text);
+        });
+    }
     let data_event = format!("ssh-data-{}", connection_id);
     // Drives the login flow while it runs: types the init once the server
     // is quiet, and lets go of output if the init's marker never comes.
@@ -2237,6 +2362,7 @@ async fn ssh_session_task(
             msg = channel.wait() => {
                 match msg {
                     Some(ChannelMsg::Data { ref data }) => {
+                        last_activity = std::time::Instant::now();
                         let mut text = out_decoder.push(data);
                         if let Some(f) = flow.as_mut() {
                             text = f.output(&text, std::time::Instant::now());
@@ -2278,9 +2404,74 @@ async fn ssh_session_task(
                     deliver!(held);
                 }
             }
+            Some(text) = local_rx.recv() => {
+                deliver!(text.replace('\n', "\r\n").replace("\r\r\n", "\r\n"));
+            }
+            _ = obscure_tick.tick(), if obscure.as_ref().is_some_and(|o| o.active()) => {
+                let now = std::time::Instant::now();
+                if let Some(bytes) = obscure.as_mut().and_then(|o| o.tick(now)) {
+                    if bytes.is_empty() {
+                        // Chaff: a ping, as ssh sends when no key was typed.
+                        let h = extras.handle.lock().await;
+                        let _ = h.send_ping().await;
+                    } else if let Err(e) = channel.data(&bytes[..]).await {
+                        tracing::error!("SSH '{}' write error: {}", connection_id, e);
+                        break;
+                    }
+                }
+            }
+            _ = idle_tick.tick(), if idle_limit.is_some() => {
+                if let Some(limit) = idle_limit {
+                    if last_activity.elapsed() >= limit {
+                        let note = format!("\r\nClosed after {}s without activity (ChannelTimeout).\r\n", limit.as_secs());
+                        let _ = app_handle.emit(&data_event, &note);
+                        let _ = channel.close().await;
+                        break;
+                    }
+                }
+            }
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(SessionCommand::Data(data)) => {
+                        last_activity = std::time::Instant::now();
+                        if stdin_null {
+                            continue;
+                        }
+                        let (data, actions) = match escapes.as_mut() {
+                            Some(e) => e.feed(&data),
+                            None => (data, Vec::new()),
+                        };
+                        let mut disconnect = false;
+                        for a in actions {
+                            match a {
+                                EscapeAction::Show(t) => deliver!(t),
+                                EscapeAction::Disconnect => disconnect = true,
+                                EscapeAction::Break => {
+                                    let _ = channel.send_break(1000).await;
+                                }
+                                EscapeAction::Rekey => {
+                                    let h = extras.handle.lock().await;
+                                    let _ = h.rekey_soon().await;
+                                }
+                                EscapeAction::ListChannels => {
+                                    deliver!(format!("The following connections are open:\r\n  #0 session (interactive, {})\r\n", extras.host));
+                                }
+                                EscapeAction::Command(line) => {
+                                    deliver!(escape_command(&line));
+                                }
+                            }
+                        }
+                        if disconnect {
+                            let _ = channel.close().await;
+                            break;
+                        }
+                        if data.is_empty() {
+                            continue;
+                        }
+                        if let Some(o) = obscure.as_mut() {
+                            o.keystroke(&data);
+                            continue;
+                        }
                         if let Err(e) = channel.data(&data[..]).await {
                             tracing::error!("SSH '{}' write error: {}", connection_id, e);
                             break;
@@ -2624,4 +2815,43 @@ mod connect_limit_tests {
         hostkey_prompts().lock().unwrap().remove("test-prompt");
         assert_eq!(out.unwrap(), "done");
     }
+}
+
+
+/// The ~C command line. Forward requests are answered once a session's
+/// forwards can be changed while it runs; until then, said plainly.
+fn escape_command(line: &str) -> String {
+    let line = line.trim();
+    if line.is_empty() {
+        return String::new();
+    }
+    if line == "?" || line == "-h" {
+        return "Commands:\r\n      -L[bind_address:]port:host:hostport    Request local forward\r\n      -R[bind_address:]port:host:hostport    Request remote forward\r\n      -D[bind_address:]port                  Request dynamic forward\r\n      -KL[bind_address:]port                 Cancel local forward\r\n      -KR[bind_address:]port                 Cancel remote forward\r\n      -KD[bind_address:]port                 Cancel dynamic forward\r\n".into();
+    }
+    format!("Not available from the command line in this session yet: {line}\r\n")
+}
+
+/// LocalCommand, run on this machine with the user's shell; its output.
+#[cfg(not(target_os = "android"))]
+fn run_local_command(cmd: &str) -> Result<String, String> {
+    #[cfg(windows)]
+    let out = {
+        use std::os::windows::process::CommandExt;
+        // Raw, so cmd sees the command line as written.
+        std::process::Command::new("cmd").arg("/C").raw_arg(cmd).stdin(std::process::Stdio::null()).output()
+    };
+    #[cfg(not(windows))]
+    let out = {
+        let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
+        std::process::Command::new(shell).args(["-c", cmd]).stdin(std::process::Stdio::null()).output()
+    };
+    let out = out.map_err(|e| e.to_string())?;
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    Ok(text)
+}
+
+#[cfg(target_os = "android")]
+fn run_local_command(cmd: &str) -> Result<String, String> {
+    Err(format!("A phone cannot run \"{cmd}\""))
 }

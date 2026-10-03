@@ -287,3 +287,102 @@ async fn live_config_hostkeys() {
     std::fs::remove_dir_all(&dir).ok();
     assert!(failed.is_empty(), "failed: {failed:?}");
 }
+
+/// The session under ssh_config settings: RemoteCommand, SetEnv, RequestTTY
+/// and a subsystem, through `session_opts::setup_channel`. Run with
+/// REACH_SSH_TEST and REACH_SSH_KEYS (k_good) as above; the server's sshd
+/// must accept LC_* (Debian's does).
+#[tokio::test]
+#[ignore = "needs an SSH server"]
+async fn live_config_session() {
+    use crate::ssh::sshconf::session::SshOptions;
+    let a = std::env::var("REACH_SSH_TEST").unwrap();
+    let (host, port) = a.rsplit_once(':').unwrap();
+    let port: u16 = port.parse().unwrap();
+    let key = std::fs::read_to_string(std::path::Path::new(&std::env::var("REACH_SSH_KEYS").unwrap()).join("k_good")).unwrap();
+
+    async fn run(host: &str, port: u16, key: &str, lines: &[&str]) -> Result<String, String> {
+        let o = SshOptions { lines: lines.iter().map(|l| l.to_string()).collect(), ..Default::default() };
+        let plan = crate::ssh::sshconf::session::plan_for(Some(&o), host, port, "reach", false);
+        let opts: HopOptions = plan.into();
+        let stream = crate::ssh::sshconf::net::connect(host, port, &opts.socket, false).await.map_err(|e| e.to_string())?;
+        let mut handle = russh::client::connect_stream(opts.config.clone(), stream, AnyHost).await.map_err(|e| e.to_string())?;
+        let auth = AuthParams { key: Some(KeyAuth { source: KeySource::Material(key.to_string()), passphrase: None }), password: None, allow_agent: false };
+        crate::ssh::client::login(&mut handle, "reach", &auth, &opts, None, host, port).await.map_err(|e| e.to_string())?.into_result().map_err(|e| e.to_string())?;
+        let mut ch = handle.channel_open_session().await.map_err(|e| e.to_string())?;
+        let p = opts.session.clone().unwrap();
+        let tty = crate::ssh::session_opts::setup_channel(&ch, &p, 80, 24, None).await?;
+        let mut out = format!("tty={tty} ");
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, ch.wait()).await {
+            match msg {
+                ChannelMsg::Data { data } => {
+                    out.push_str(&String::from_utf8_lossy(&data));
+                    if p.session_type == crate::ssh::session_opts::SessionType::Subsystem {
+                        break;
+                    }
+                }
+                ChannelMsg::ExitStatus { .. } | ChannelMsg::Eof | ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+        Ok(out)
+    }
+
+    let r = run(host, port, &key, &["RemoteCommand echo cmd-$USER"]).await.unwrap();
+    println!("RemoteCommand: {r:?}");
+    assert!(r.starts_with("tty=false") && r.contains("cmd-reach"), "{r}");
+    let r = run(host, port, &key, &["SetEnv LC_REACH=from-setenv", "RemoteCommand echo env=$LC_REACH"]).await.unwrap();
+    println!("SetEnv: {r:?}");
+    assert!(r.contains("env=from-setenv"), "{r}");
+    let r = run(host, port, &key, &["RequestTTY force", "RemoteCommand tty"]).await.unwrap();
+    println!("RequestTTY force: {r:?}");
+    assert!(r.starts_with("tty=true") && r.contains("/dev/pts/"), "{r}");
+    let r = run(host, port, &key, &["SessionType subsystem", "RemoteCommand sftp"]).await;
+    println!("subsystem: {r:?}");
+    // The SFTP server speaks first only when asked; a subsystem accepted and
+    // nothing refused is the proof here.
+    assert!(r.is_ok(), "{r:?}");
+}
+
+/// ProxyCommand through a real jump (`ssh -W %h:%p` via REACH_SSH_TEST) to
+/// REACH_SSH_LEGACY; and refused while not approved. REACH_SSH_PROXY_SSH is
+/// the ssh program to run as the proxy.
+#[tokio::test]
+#[ignore = "needs the SSH test servers"]
+async fn live_config_proxycommand() {
+    use crate::ssh::sshconf::session::SshOptions;
+    let jump = std::env::var("REACH_SSH_TEST").unwrap();
+    let (jh, jp) = jump.rsplit_once(':').unwrap();
+    let target = std::env::var("REACH_SSH_LEGACY").unwrap();
+    let (th, tp) = target.rsplit_once(':').unwrap();
+    let tp: u16 = tp.parse().unwrap();
+    let keys = std::path::PathBuf::from(std::env::var("REACH_SSH_KEYS").unwrap());
+    let key_path = keys.join("k_good").display().to_string().replace('\\', "/");
+    let key = std::fs::read_to_string(keys.join("k_good")).unwrap();
+    let ssh = std::env::var("REACH_SSH_PROXY_SSH").unwrap_or_else(|_| "ssh".into());
+    let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let cmd = format!("\"{ssh}\" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile={null} -o IdentitiesOnly=yes -i {key_path} -p {jp} -W %h:%p reach@{jh}");
+
+    async fn run(host: &str, port: u16, key: &str, o: SshOptions) -> Result<(), String> {
+        let plan = crate::ssh::sshconf::session::plan_for(Some(&o), host, port, "reach", false);
+        let opts: HopOptions = plan.into();
+        if let Some(r) = &opts.refused {
+            return Err(r.clone());
+        }
+        let pc = opts.proxy_command.clone().ok_or("no proxy command")?;
+        let c = crate::ssh::proxycmd::expand(&pc, host, port, "reach")?;
+        let stream = crate::ssh::proxycmd::spawn(&c).map_err(|e| e.to_string())?;
+        let mut handle = russh::client::connect_stream(opts.config.clone(), stream, AnyHost).await.map_err(|e| e.to_string())?;
+        let auth = AuthParams { key: Some(KeyAuth { source: KeySource::Material(key.to_string()), passphrase: None }), password: None, allow_agent: false };
+        crate::ssh::client::login(&mut handle, "reach", &auth, &opts, None, host, port).await.map_err(|e| e.to_string())?.into_result().map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    let lines = vec![format!("ProxyCommand {cmd}"), "MACs +hmac-sha1".into()];
+    let pending = run(th, tp, &key, SshOptions { lines: lines.clone(), ..Default::default() }).await;
+    println!("not approved: {pending:?}");
+    assert!(pending.as_ref().is_err_and(|e| e.contains("approval")), "{pending:?}");
+    let approved = run(th, tp, &key, SshOptions { lines, approved_commands: vec![cmd.clone()], ..Default::default() }).await;
+    println!("approved: {approved:?}");
+    assert!(approved.is_ok(), "{approved:?}");
+}

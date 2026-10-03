@@ -2193,5 +2193,6 @@
   "authprompt.yes": "Aggiungi",
   "authprompt.no": "Non ora",
   "authprompt.host_hint": "Richiesto durante l’accesso a {{host}}. Niente di ciò che digiti qui viene salvato.",
-  "hostkey.refused": "Chiave host di {{host}} rifiutata: {{reason}}"
+  "hostkey.refused": "Chiave host di {{host}} rifiutata: {{reason}}",
+  "ssh.weak_kex": "{{host}} non usa uno scambio di chiavi post-quantistico ({{kex}}): la sessione potrebbe essere registrata ora e decifrata in seguito. Aggiornare il server risolve."
 }

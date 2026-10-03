@@ -257,6 +257,22 @@ impl Session {
         Ok(())
     }
 
+    /// RFC 4335 "break", without a reply.
+    pub fn send_break(&mut self, channel: ChannelId, length_ms: u32) -> Result<(), crate::Error> {
+        if let Some(ref mut enc) = self.common.encrypted {
+            if let Some(channel) = enc.channels.get(&channel) {
+                push_packet!(enc.write, {
+                    msg::CHANNEL_REQUEST.encode(&mut enc.write)?;
+                    channel.recipient_channel.encode(&mut enc.write)?;
+                    "break".encode(&mut enc.write)?;
+                    0u8.encode(&mut enc.write)?;
+                    length_ms.encode(&mut enc.write)?;
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub fn request_subsystem(
         &mut self,
         want_reply: bool,

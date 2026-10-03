@@ -56,6 +56,10 @@ pub enum ChannelMsg {
     Signal {
         signal: Sig,
     },
+    /// (client only) RFC 4335: a BREAK of `length_ms` milliseconds.
+    Break {
+        length_ms: u32,
+    },
     /// (client only)
     RequestSubsystem {
         want_reply: bool,
@@ -243,6 +247,11 @@ impl<S: From<(ChannelId, ChannelMsg)> + Send + Sync + 'static> ChannelWriteHalf<
     /// Signal a remote process.
     pub async fn signal(&self, signal: Sig) -> Result<(), Error> {
         self.send_msg(ChannelMsg::Signal { signal }).await
+    }
+
+    /// Send a BREAK (RFC 4335), as ssh's ~B does with 1000 ms.
+    pub async fn send_break(&self, length_ms: u32) -> Result<(), Error> {
+        self.send_msg(ChannelMsg::Break { length_ms }).await
     }
 
     /// Request the start of a subsystem with the given name.
@@ -544,6 +553,11 @@ impl<S: From<(ChannelId, ChannelMsg)> + Send + Sync + 'static> Channel<S> {
     /// Signal a remote process.
     pub async fn signal(&self, signal: Sig) -> Result<(), Error> {
         self.write_half.signal(signal).await
+    }
+
+    /// Send a BREAK (RFC 4335).
+    pub async fn send_break(&self, length_ms: u32) -> Result<(), Error> {
+        self.write_half.send_break(length_ms).await
     }
 
     /// Request the start of a subsystem with the given name.

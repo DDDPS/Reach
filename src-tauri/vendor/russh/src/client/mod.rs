@@ -1635,6 +1635,7 @@ impl Session {
                 },
             ) => self.exec(id, want_reply, &command)?,
             Msg::Channel(id, ChannelMsg::Signal { signal }) => self.signal(id, signal)?,
+            Msg::Channel(id, ChannelMsg::Break { length_ms }) => self.send_break(id, length_ms)?,
             Msg::Channel(id, ChannelMsg::RequestSubsystem { want_reply, name }) => {
                 self.request_subsystem(want_reply, id, &name)?
             }
