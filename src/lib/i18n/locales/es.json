@@ -2182,5 +2182,15 @@
   "sshopt.details": "Detalles",
   "sshopt.hide_details": "Ocultar",
   "sshopt.weaker_title": "Más débil que los valores predeterminados de Reach",
-  "sshopt.weaker_hint": "Los ha permitido. Desmarque uno para dejar de usarlo."
+  "sshopt.weaker_hint": "Los ha permitido. Desmarque uno para dejar de usarlo.",
+  "authprompt.title_password": "Contraseña para {{host}}",
+  "authprompt.title_passphrase": "Desbloquear su clave",
+  "authprompt.title_keyboard": "{{host}} pregunta",
+  "authprompt.title_confirm": "¿Añadir la clave al agente SSH?",
+  "authprompt.field_password": "Contraseña",
+  "authprompt.field_passphrase": "Frase de contraseña",
+  "authprompt.continue": "Continuar",
+  "authprompt.yes": "Añadir",
+  "authprompt.no": "Ahora no",
+  "authprompt.host_hint": "Se pregunta al iniciar sesión en {{host}}. Nada de lo que escriba aquí se guarda."
 }

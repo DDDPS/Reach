@@ -258,6 +258,13 @@ pub fn ssh_hostkey_response(prompt_id: String, accept: bool) {
     crate::ssh::client::resolve_hostkey_prompt(&prompt_id, accept);
 }
 
+/// The answer to a login question (password, passphrase, keyboard-interactive,
+/// yes/no); `None` when the user cancelled.
+#[tauri::command]
+pub fn ssh_auth_prompt_response(prompt_id: String, answers: Option<Vec<String>>) {
+    crate::ssh::prompt::resolve(&prompt_id, answers);
+}
+
 #[tauri::command]
 pub async fn ssh_resize(
     state: tauri::State<'_, AppState>,

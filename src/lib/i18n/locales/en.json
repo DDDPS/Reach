@@ -2182,5 +2182,15 @@
   "sshopt.details": "Details",
   "sshopt.hide_details": "Hide",
   "sshopt.weaker_title": "Weaker than Reach's defaults",
-  "sshopt.weaker_hint": "You allowed these. Untick one to stop using it."
+  "sshopt.weaker_hint": "You allowed these. Untick one to stop using it.",
+  "authprompt.title_password": "Password for {{host}}",
+  "authprompt.title_passphrase": "Unlock your key",
+  "authprompt.title_keyboard": "{{host}} asks",
+  "authprompt.title_confirm": "Add the key to the SSH agent?",
+  "authprompt.field_password": "Password",
+  "authprompt.field_passphrase": "Passphrase",
+  "authprompt.continue": "Continue",
+  "authprompt.yes": "Add",
+  "authprompt.no": "Not now",
+  "authprompt.host_hint": "Asked while logging in to {{host}}. Nothing you type here is saved."
 }

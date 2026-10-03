@@ -2182,5 +2182,15 @@
   "sshopt.details": "Details",
   "sshopt.hide_details": "Ausblenden",
   "sshopt.weaker_title": "Schwächer als die Standardwerte von Reach",
-  "sshopt.weaker_hint": "Sie haben diese erlaubt. Entfernen Sie den Haken, um eine nicht mehr zu verwenden."
+  "sshopt.weaker_hint": "Sie haben diese erlaubt. Entfernen Sie den Haken, um eine nicht mehr zu verwenden.",
+  "authprompt.title_password": "Passwort für {{host}}",
+  "authprompt.title_passphrase": "Schlüssel entsperren",
+  "authprompt.title_keyboard": "{{host}} fragt",
+  "authprompt.title_confirm": "Schlüssel zum SSH-Agenten hinzufügen?",
+  "authprompt.field_password": "Passwort",
+  "authprompt.field_passphrase": "Passphrase",
+  "authprompt.continue": "Weiter",
+  "authprompt.yes": "Hinzufügen",
+  "authprompt.no": "Nicht jetzt",
+  "authprompt.host_hint": "Gefragt bei der Anmeldung an {{host}}. Was Sie hier eingeben, wird nicht gespeichert."
 }

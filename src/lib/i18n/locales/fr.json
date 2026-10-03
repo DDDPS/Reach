@@ -2182,5 +2182,15 @@
   "sshopt.details": "Détails",
   "sshopt.hide_details": "Masquer",
   "sshopt.weaker_title": "Plus faible que les valeurs par défaut de Reach",
-  "sshopt.weaker_hint": "Vous les avez autorisés. Décochez-en un pour ne plus l’utiliser."
+  "sshopt.weaker_hint": "Vous les avez autorisés. Décochez-en un pour ne plus l’utiliser.",
+  "authprompt.title_password": "Mot de passe pour {{host}}",
+  "authprompt.title_passphrase": "Déverrouiller votre clé",
+  "authprompt.title_keyboard": "{{host}} demande",
+  "authprompt.title_confirm": "Ajouter la clé à l’agent SSH ?",
+  "authprompt.field_password": "Mot de passe",
+  "authprompt.field_passphrase": "Phrase de passe",
+  "authprompt.continue": "Continuer",
+  "authprompt.yes": "Ajouter",
+  "authprompt.no": "Pas maintenant",
+  "authprompt.host_hint": "Demandé pendant la connexion à {{host}}. Rien de ce que vous tapez ici n’est enregistré."
 }

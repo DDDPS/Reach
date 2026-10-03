@@ -2182,5 +2182,15 @@
   "sshopt.details": "Подробнее",
   "sshopt.hide_details": "Скрыть",
   "sshopt.weaker_title": "Слабее настроек Reach по умолчанию",
-  "sshopt.weaker_hint": "Вы это разрешили. Снимите отметку, чтобы перестать использовать."
+  "sshopt.weaker_hint": "Вы это разрешили. Снимите отметку, чтобы перестать использовать.",
+  "authprompt.title_password": "Пароль для {{host}}",
+  "authprompt.title_passphrase": "Разблокировать ключ",
+  "authprompt.title_keyboard": "{{host}} спрашивает",
+  "authprompt.title_confirm": "Добавить ключ в SSH-агент?",
+  "authprompt.field_password": "Пароль",
+  "authprompt.field_passphrase": "Парольная фраза",
+  "authprompt.continue": "Продолжить",
+  "authprompt.yes": "Добавить",
+  "authprompt.no": "Не сейчас",
+  "authprompt.host_hint": "Запрошено при входе на {{host}}. Введённое здесь не сохраняется."
 }

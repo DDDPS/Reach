@@ -136,3 +136,69 @@ async fn live_legacy_macs() {
     println!("With MACs +hmac-sha1: {after:?}");
     assert!(after.is_ok(), "{after:?}");
 }
+
+/// OpenSSH-style login from ssh_config settings, against real servers.
+/// Run with `REACH_SSH_AUTH=127.0.0.1:2226` (TrustedUserCAKeys, password
+/// and keyboard-interactive on), `REACH_SSH_TEST=127.0.0.1:2222`, and
+/// REACH_SSH_KEYS holding k_good, k_enc (passphrase enc-pass-123),
+/// k_certkey with k_certkey-cert.pub signed by the server's CA; user
+/// `plain` has the password plain-test-pw.
+#[tokio::test]
+#[ignore = "needs the SSH test servers"]
+async fn live_config_login() {
+    use crate::ssh::sshconf::session::{ConfigFile, FileRole, Imported, SshOptions};
+    let addr = |var: &str| -> (String, u16) {
+        let a = std::env::var(var).unwrap_or_else(|_| panic!("{var}"));
+        let (h, p) = a.rsplit_once(':').unwrap();
+        (h.to_string(), p.parse().unwrap())
+    };
+    let (h1, p1) = addr("REACH_SSH_TEST");
+    let (h2, p2) = addr("REACH_SSH_AUTH");
+    let keys = std::path::PathBuf::from(std::env::var("REACH_SSH_KEYS").unwrap());
+    let k = |n: &str| keys.join(n).display().to_string().replace('\\', "/");
+
+    fn options(text: String) -> SshOptions {
+        SshOptions {
+            imported: Some(Imported { alias: "t".into(), files: vec![ConfigFile { path: "cfg".into(), text, role: FileRole::User }], at: 0 }),
+            ..Default::default()
+        }
+    }
+    async fn run(host: &str, port: u16, user: &str, text: String, auth: AuthParams) -> Result<AuthBy, String> {
+        let o = options(text);
+        let plan = crate::ssh::sshconf::session::plan_for(Some(&o), host, port, user, false);
+        let opts: HopOptions = plan.into();
+        let stream = crate::ssh::sshconf::net::connect(host, port, &opts.socket, false).await.map_err(|e| e.to_string())?;
+        let mut handle = russh::client::connect_stream(opts.config.clone(), stream, AnyHost).await.map_err(|e| e.to_string())?;
+        crate::ssh::client::login(&mut handle, user, &auth, &opts, None, host, port).await.map_err(|e| e.to_string())?.into_result().map_err(|e| e.to_string())
+    }
+
+    let mut results = Vec::new();
+    let mut check = |name: &str, got: Result<AuthBy, String>, want: Result<AuthBy, ()>| {
+        println!("{name}: {got:?}");
+        let ok = match (&got, &want) {
+            (Ok(a), Ok(b)) => a == b,
+            (Err(_), Err(())) => true,
+            _ => false,
+        };
+        results.push((name.to_string(), ok));
+    };
+
+    check("IdentityFile from the config", run(&h1, p1, "reach", format!("Host t\n  IdentityFile {}\n  IdentitiesOnly yes\n", k("k_good")), AuthParams::default()).await, Ok(AuthBy::Key));
+    check("certificate (CertificateFile)", run(&h2, p2, "reach", format!("Host t\n  IdentityFile {}\n  CertificateFile {}\n  IdentitiesOnly yes\n  PreferredAuthentications publickey\n", k("k_certkey"), k("k_certkey-cert.pub")), AuthParams::default()).await, Ok(AuthBy::Key));
+    let bare = keys.join("k_certkey_bare");
+    std::fs::copy(keys.join("k_certkey"), &bare).unwrap();
+    check("the same key without its certificate", run(&h2, p2, "reach", format!("Host t\n  IdentityFile {}\n  IdentitiesOnly yes\n  PreferredAuthentications publickey\n", bare.display().to_string().replace('\\', "/")), AuthParams::default()).await, Err(()));
+    std::fs::remove_file(&bare).ok();
+    check("password", run(&h2, p2, "plain", "Host t\n  PreferredAuthentications password\n".into(), AuthParams::from_password("plain-test-pw".into())).await, Ok(AuthBy::Password));
+    check("keyboard-interactive (PAM) with the stored password", run(&h2, p2, "plain", "Host t\n  PreferredAuthentications keyboard-interactive\n".into(), AuthParams::from_password("plain-test-pw".into())).await, Ok(AuthBy::Password));
+    check("wrong password refused", run(&h2, p2, "plain", "Host t\n  PreferredAuthentications password\n  NumberOfPasswordPrompts 1\n".into(), AuthParams::from_password("nope".into())).await, Err(()));
+    check("PasswordAuthentication no", run(&h2, p2, "plain", "Host t\n  PreferredAuthentications password\n  PasswordAuthentication no\n".into(), AuthParams::from_password("plain-test-pw".into())).await, Err(()));
+    let enc = k("k_enc");
+    check("encrypted key, BatchMode, no passphrase", run(&h1, p1, "reach", format!("Host t\n  IdentityFile {enc}\n  IdentitiesOnly yes\n  BatchMode yes\n"), AuthParams::default()).await, Err(()));
+    crate::vault::manager::keychain_entry_in("Reach SSH key passphrase", &enc).unwrap().set_password("enc-pass-123").unwrap();
+    check("encrypted key, passphrase from UseKeychain", run(&h1, p1, "reach", format!("Host t\n  IdentityFile {enc}\n  IdentitiesOnly yes\n  UseKeychain yes\n"), AuthParams::default()).await, Ok(AuthBy::Key));
+    check("PubkeyAuthentication no", run(&h1, p1, "reach", format!("Host t\n  IdentityFile {}\n  PubkeyAuthentication no\n  PreferredAuthentications publickey\n", k("k_good")), AuthParams::default()).await, Err(()));
+
+    let failed: Vec<_> = results.iter().filter(|(_, ok)| !ok).map(|(n, _)| n.clone()).collect();
+    assert!(failed.is_empty(), "failed: {failed:?}");
+}

@@ -2182,5 +2182,15 @@
   "sshopt.details": "Λεπτομέρειες",
   "sshopt.hide_details": "Απόκρυψη",
   "sshopt.weaker_title": "Ασθενέστερο από τις προεπιλογές του Reach",
-  "sshopt.weaker_hint": "Τα επιτρέψατε. Αποεπιλέξτε ένα για να σταματήσει να χρησιμοποιείται."
+  "sshopt.weaker_hint": "Τα επιτρέψατε. Αποεπιλέξτε ένα για να σταματήσει να χρησιμοποιείται.",
+  "authprompt.title_password": "Κωδικός για {{host}}",
+  "authprompt.title_passphrase": "Ξεκλείδωμα του κλειδιού σας",
+  "authprompt.title_keyboard": "Ο {{host}} ρωτά",
+  "authprompt.title_confirm": "Προσθήκη του κλειδιού στον SSH agent;",
+  "authprompt.field_password": "Κωδικός",
+  "authprompt.field_passphrase": "Φράση πρόσβασης",
+  "authprompt.continue": "Συνέχεια",
+  "authprompt.yes": "Προσθήκη",
+  "authprompt.no": "Όχι τώρα",
+  "authprompt.host_hint": "Ζητήθηκε κατά τη σύνδεση στον {{host}}. Τίποτα από όσα πληκτρολογείτε εδώ δεν αποθηκεύεται."
 }

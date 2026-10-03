@@ -81,7 +81,21 @@ pub struct Plan {
     pub uses: Vec<(Kw, Use)>,
     /// Weakenings the user approved ("Keyword value").
     pub accepted: Vec<String>,
+    /// PubkeyAcceptedAlgorithms, assembled; `None` leaves OpenSSH's default.
+    pub pubkey_algorithms: Option<Vec<String>>,
+    /// How to log in; set for sessions with ssh_config settings.
+    pub auth: Option<crate::ssh::userauth::AuthPolicy>,
 }
+
+/// OpenSSH's default PubkeyAcceptedAlgorithms (KEX_DEFAULT_PK_ALG).
+pub const DEFAULT_PUBKEY_ALGORITHMS: &[&str] = &[
+    "ssh-ed25519-cert-v01@openssh.com", "ecdsa-sha2-nistp256-cert-v01@openssh.com",
+    "ecdsa-sha2-nistp384-cert-v01@openssh.com", "ecdsa-sha2-nistp521-cert-v01@openssh.com",
+    "sk-ssh-ed25519-cert-v01@openssh.com", "sk-ecdsa-sha2-nistp256-cert-v01@openssh.com",
+    "rsa-sha2-512-cert-v01@openssh.com", "rsa-sha2-256-cert-v01@openssh.com", "ssh-ed25519",
+    "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "sk-ssh-ed25519@openssh.com",
+    "sk-ecdsa-sha2-nistp256@openssh.com", "rsa-sha2-512", "rsa-sha2-256",
+];
 
 /// How an approved weakening is stored: "Keyword value".
 pub fn weakening_key(kw: Kw, value: &str) -> String {
@@ -208,7 +222,7 @@ impl Plan {
     /// weakenings the user approved ("Keyword value"); lines set in Reach
     /// itself count as approved.
     pub fn new(r: &Resolved, base: russh::client::Config, accepted: &[String]) -> Plan {
-        let mut p = Plan { config: base, socket: SocketPlan::default(), weakenings: vec![], uses: vec![], accepted: accepted.to_vec() };
+        let mut p = Plan { config: base, socket: SocketPlan::default(), weakenings: vec![], uses: vec![], accepted: accepted.to_vec(), pubkey_algorithms: None, auth: None };
         let o = &r.options;
         p.algorithms(o);
         p.transport(o);
@@ -298,6 +312,12 @@ impl Plan {
             let default: Vec<&str> = table.iter().filter(|(_, a)| cur.contains(a)).map(|(n, _)| *n).collect();
             if let Some(v) = self.pick(o, Kw::HostKeyAlgorithms, &table, &default) {
                 self.config.preferred.key = Cow::Owned(v);
+            }
+        }
+        {
+            let table: Vec<(&str, String)> = super::value::algos::KEYS.iter().map(|n| (*n, n.to_string())).collect();
+            if let Some(v) = self.pick(o, Kw::PubkeyAcceptedAlgorithms, &table, DEFAULT_PUBKEY_ALGORITHMS) {
+                self.pubkey_algorithms = Some(v);
             }
         }
         if let Some(c) = o.first(Kw::Compression) {

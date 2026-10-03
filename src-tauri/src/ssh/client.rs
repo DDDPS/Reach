@@ -354,8 +354,8 @@ fn describe_key_load_error(
 /// server refused it on the way.
 #[derive(Debug, Default)]
 pub(crate) struct AuthOutcome {
-    by: Option<AuthBy>,
-    refused_key: Option<String>,
+    pub(crate) by: Option<AuthBy>,
+    pub(crate) refused_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -363,6 +363,8 @@ pub(crate) enum AuthBy {
     Key,
     Agent,
     Password,
+    /// The server let the user in without credentials ("none").
+    NoCredentials,
 }
 
 impl AuthOutcome {
@@ -384,6 +386,26 @@ impl AuthOutcome {
 /// refuse SHA-1 (OpenSSH 8.8+) sends its list, as all have since 7.2.
 fn rsa_hashes(known: Option<Option<russh::keys::HashAlg>>) -> Vec<Option<russh::keys::HashAlg>> {
     vec![known.flatten()]
+}
+
+/// Log in on one hop: under its ssh_config settings when it has some
+/// (OpenSSH's rules, see `userauth`), else Reach's own cascade.
+pub(crate) async fn login<H: russh::client::Handler>(
+    handle: &mut russh::client::Handle<H>,
+    username: &str,
+    auth: &AuthParams,
+    opts: &HopOptions,
+    app: Option<&dyn crate::ssh::prompt::Asker>,
+    host: &str,
+    port: u16,
+) -> Result<AuthOutcome, SshError> {
+    match &opts.auth {
+        Some(policy) => {
+            let ui = crate::ssh::userauth::Ui { app, host, port };
+            crate::ssh::userauth::authenticate(handle, username, auth, policy, ui).await
+        }
+        None => cascade_authenticate(handle, username, auth).await,
+    }
 }
 
 pub(crate) async fn cascade_authenticate<H: russh::client::Handler>(
@@ -550,7 +572,7 @@ async fn try_agent_auth<H: russh::client::Handler>(
 /// Pageant announces itself with a hidden window of class and title
 /// "Pageant"; that window is how every client finds it.
 #[cfg(windows)]
-fn pageant_is_running() -> bool {
+pub(crate) fn pageant_is_running() -> bool {
     use windows::core::w;
     use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
     // SAFETY: two valid, NUL-terminated wide strings; no other state involved.
@@ -888,17 +910,19 @@ pub struct JumpHostParams {
 pub struct HopOptions {
     pub config: Arc<russh::client::Config>,
     pub socket: crate::ssh::sshconf::apply::SocketPlan,
+    /// How to log in, when ssh_config says; `None` keeps Reach's own login.
+    pub auth: Option<crate::ssh::userauth::AuthPolicy>,
 }
 
 impl Default for HopOptions {
     fn default() -> Self {
-        Self { config: Arc::new(russh::client::Config::default()), socket: Default::default() }
+        Self { config: Arc::new(russh::client::Config::default()), socket: Default::default(), auth: None }
     }
 }
 
 impl From<crate::ssh::sshconf::apply::Plan> for HopOptions {
     fn from(p: crate::ssh::sshconf::apply::Plan) -> Self {
-        Self { config: Arc::new(p.config), socket: p.socket }
+        Self { config: Arc::new(p.config), socket: p.socket, auth: p.auth }
     }
 }
 
@@ -1045,7 +1069,7 @@ impl SshManager {
 
         // Authenticate using a cascading strategy: configured key → agent → password.
         // The first method the server accepts wins. Mirrors OpenSSH's progressive auth.
-        let outcome = cascade_authenticate(&mut handle, username, auth).await?;
+        let outcome = login(&mut handle, username, auth, opts, Some(&app_handle as &dyn crate::ssh::prompt::Asker), host, port).await?;
         let refused = outcome.refused_key.clone();
         let by = outcome.into_result()?;
         // Logged in, but not with the session's key: the agent or a password
@@ -1232,7 +1256,7 @@ impl SshManager {
             .map_err(|e| failed(e.to_string()))?;
 
         // Authenticate on first jump host
-        Self::authenticate_handle(&mut current_handle, &first_jump.username, &first_jump.auth)
+        Self::authenticate_handle(&mut current_handle, &first_jump.username, &first_jump.auth, &first_jump.opts, &app_handle, &first_jump.host, first_jump.port)
             .await?;
 
         tracing::info!("Authenticated on jump host {}", first_jump.host);
@@ -1283,6 +1307,10 @@ impl SshManager {
                     &mut next_handle,
                     &next_jump.username,
                     &next_jump.auth,
+                    &next_jump.opts,
+                    &app_handle,
+                    &next_jump.host,
+                    next_jump.port,
                 )
                 .await?;
 
@@ -1330,6 +1358,10 @@ impl SshManager {
                 &mut target_handle,
                 target_username,
                 target_auth,
+                target_opts,
+                &app_handle,
+                target_host,
+                target_port,
             )
             .await?;
 
@@ -1375,6 +1407,10 @@ impl SshManager {
                 &mut target_handle,
                 target_username,
                 target_auth,
+                target_opts,
+                &app_handle,
+                target_host,
+                target_port,
             )
             .await?;
 
@@ -1412,12 +1448,17 @@ impl SshManager {
     /// Authenticate on a russh handle by cascading through the configured
     /// methods. Used by jump hosts; the direct connect path uses the same
     /// `cascade_authenticate` free function.
+    #[expect(clippy::too_many_arguments, reason = "one hop's login settings, passed through as they are")]
     async fn authenticate_handle(
         handle: &mut russh::client::Handle<SshClientHandler>,
         username: &str,
         auth: &AuthParams,
+        opts: &HopOptions,
+        app: &tauri::AppHandle,
+        host: &str,
+        port: u16,
     ) -> Result<(), SshError> {
-        cascade_authenticate(handle, username, auth).await?.into_result().map(|_| ())
+        login(handle, username, auth, opts, Some(app as &dyn crate::ssh::prompt::Asker), host, port).await?.into_result().map(|_| ())
     }
 
     pub fn send_data(&self, id: &str, data: &[u8]) -> Result<(), SshError> {
@@ -1769,7 +1810,7 @@ pub(crate) async fn within_connect_limit<T>(
         tokio::select! {
             done = &mut attempt => return done,
             _ = tokio::time::sleep(tick) => {
-                if hostkey_prompts().lock().unwrap().is_empty() {
+                if hostkey_prompts().lock().unwrap().is_empty() && !crate::ssh::prompt::any_open() {
                     spent += tick;
                 }
                 if spent >= limit {

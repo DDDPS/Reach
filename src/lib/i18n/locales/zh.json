@@ -2182,5 +2182,15 @@
   "sshopt.details": "详情",
   "sshopt.hide_details": "隐藏",
   "sshopt.weaker_title": "弱于 Reach 的默认设置",
-  "sshopt.weaker_hint": "您已允许这些设置。取消勾选即可停止使用。"
+  "sshopt.weaker_hint": "您已允许这些设置。取消勾选即可停止使用。",
+  "authprompt.title_password": "{{host}} 的密码",
+  "authprompt.title_passphrase": "解锁您的密钥",
+  "authprompt.title_keyboard": "{{host}} 询问",
+  "authprompt.title_confirm": "将密钥添加到 SSH 代理？",
+  "authprompt.field_password": "密码",
+  "authprompt.field_passphrase": "密码短语",
+  "authprompt.continue": "继续",
+  "authprompt.yes": "添加",
+  "authprompt.no": "暂不",
+  "authprompt.host_hint": "登录 {{host}} 时询问。您在此输入的内容不会被保存。"
 }

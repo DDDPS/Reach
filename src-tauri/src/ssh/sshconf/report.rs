@@ -28,27 +28,27 @@ pub fn support(kw: Kw) -> Support {
     match kw {
         Host | Match | Include | IgnoreUnknown | Tag | CanonicalizeHostname | CanonicalDomains
         | CanonicalizeFallbackLocal | CanonicalizeMaxDots | CanonicalizePermittedCNAMEs => Support::Structure,
-        Hostname | Port | User | IdentityFile | ProxyJump => Support::SessionField,
+        Hostname | Port | User | ProxyJump => Support::SessionField,
         Ciphers | MACs | KexAlgorithms | HostKeyAlgorithms | Compression | ServerAliveInterval | ServerAliveCountMax
         | RekeyLimit | VersionAddendum | ConnectTimeout | ConnectionAttempts | AddressFamily | BindAddress
         | BindInterface | TCPKeepAlive | IPQoS => Support::Yes,
-        AddKeysToAgent | BatchMode | CASignatureAlgorithms | CertificateFile | ChannelTimeout | CheckHostIP
-        | ClearAllForwardings | ControlMaster | ControlPath | ControlPersist | DynamicForward
-        | EnableEscapeCommandline | EnableSSHKeysign | EscapeChar | ExitOnForwardFailure | FingerprintHash
-        | ForkAfterAuthentication | ForwardAgent | ForwardX11 | ForwardX11Timeout | ForwardX11Trusted
-        | GatewayPorts | GlobalKnownHostsFile | GSSAPIAuthentication | GSSAPIDelegateCredentials
-        | HashKnownHosts | HostbasedAcceptedAlgorithms | HostbasedAuthentication | HostKeyAlias
-        | IdentitiesOnly | IdentityAgent | KbdInteractiveAuthentication | KbdInteractiveDevices
-        | KnownHostsCommand | LocalCommand | LocalForward | LogLevel | LogVerbose
-        | NoHostAuthenticationForLocalhost | NumberOfPasswordPrompts | ObscureKeystrokeTiming
-        | PasswordAuthentication | PermitLocalCommand | PermitRemoteOpen | PKCS11Provider
-        | PreferredAuthentications | ProxyCommand | ProxyUseFdpass | PubkeyAcceptedAlgorithms
-        | PubkeyAuthentication | RefuseConnection | RemoteCommand | RemoteForward | RequestTTY
-        | RequiredRSASize | RevokedHostKeys | SecurityKeyProvider | SendEnv | SessionType | SetEnv
-        | StdinNull | StreamLocalBindMask | StreamLocalBindUnlink | StrictHostKeyChecking | SyslogFacility
-        | Tunnel | TunnelDevice | UpdateHostKeys | UserKnownHostsFile | VerifyHostKeyDNS | VisualHostKey
-        | WarnWeakCrypto | XAuthLocation | UseKeychain | GSSAPIKeyExchange | GSSAPIClientIdentity
-        | GSSAPIServerIdentity | GSSAPIRenewalForcesRekey | GSSAPITrustDns | GSSAPIKexAlgorithms => Support::NotYet,
+        // Logging in (ssh/userauth.rs).
+        IdentityFile | IdentitiesOnly | IdentityAgent | CertificateFile | AddKeysToAgent | BatchMode
+        | KbdInteractiveAuthentication | KbdInteractiveDevices | NumberOfPasswordPrompts | PasswordAuthentication
+        | PreferredAuthentications | PubkeyAcceptedAlgorithms | PubkeyAuthentication | UseKeychain => Support::Yes,
+        CASignatureAlgorithms | ChannelTimeout | CheckHostIP | ClearAllForwardings | ControlMaster | ControlPath
+        | ControlPersist | DynamicForward | EnableEscapeCommandline | EnableSSHKeysign | EscapeChar
+        | ExitOnForwardFailure | FingerprintHash | ForkAfterAuthentication | ForwardAgent | ForwardX11
+        | ForwardX11Timeout | ForwardX11Trusted | GatewayPorts | GlobalKnownHostsFile | GSSAPIAuthentication
+        | GSSAPIDelegateCredentials | HashKnownHosts | HostbasedAcceptedAlgorithms | HostbasedAuthentication
+        | HostKeyAlias | KnownHostsCommand | LocalCommand | LocalForward | LogLevel | LogVerbose
+        | NoHostAuthenticationForLocalhost | ObscureKeystrokeTiming | PermitLocalCommand | PermitRemoteOpen
+        | PKCS11Provider | ProxyCommand | ProxyUseFdpass | RefuseConnection | RemoteCommand | RemoteForward
+        | RequestTTY | RequiredRSASize | RevokedHostKeys | SecurityKeyProvider | SendEnv | SessionType | SetEnv
+        | StdinNull | StreamLocalBindMask | StreamLocalBindUnlink | StrictHostKeyChecking | SyslogFacility | Tunnel
+        | TunnelDevice | UpdateHostKeys | UserKnownHostsFile | VerifyHostKeyDNS | VisualHostKey | WarnWeakCrypto
+        | XAuthLocation | GSSAPIKeyExchange | GSSAPIClientIdentity | GSSAPIServerIdentity | GSSAPIRenewalForcesRekey
+        | GSSAPITrustDns | GSSAPIKexAlgorithms => Support::NotYet,
     }
 }
 

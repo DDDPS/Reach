@@ -182,7 +182,8 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
     for e in &errors {
         tracing::warn!("ssh_config for {host}: {e}");
     }
-    let plan = super::apply::Plan::new(&r, base, &opts.accepted_weakenings);
+    let mut plan = super::apply::Plan::new(&r, base, &opts.accepted_weakenings);
+    plan.auth = Some(auth_policy(&r, &plan, opts.imported.is_some()));
     for w in &plan.weakenings {
         tracing::warn!("ssh_config for {host}: {} {} weakens the connection: {}", w.keyword, w.value, w.reason);
     }
@@ -190,4 +191,27 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
         tracing::info!("ssh_config for {host}: {} {:?}", kw.name(), u);
     }
     plan
+}
+
+/// The login policy: IdentityFile and CertificateFile expanded as ssh
+/// expands them when it loads them (`~`, `%` tokens, `${VAR}`).
+fn auth_policy(r: &Resolved, plan: &super::apply::Plan, imported: bool) -> crate::ssh::userauth::AuthPolicy {
+    use super::expand::{expand, tilde, TokenSet};
+    let sys = SystemEnv::new(ExecPolicy::Never);
+    let tokens = r.tokens(&sys);
+    let home = sys.home();
+    let paths = |list: &[super::resolve::Setting]| -> Vec<String> {
+        list.iter()
+            .filter_map(|s| match expand(&tilde(&s.args[0], &home), &tokens, TokenSet::Default, true, &|n| std::env::var(n).ok()) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    tracing::warn!("ssh_config: {}: {e}", s.args[0]);
+                    None
+                }
+            })
+            .collect()
+    };
+    let ids = paths(&r.options.identity_files);
+    let certs = paths(&r.options.certificate_files);
+    crate::ssh::userauth::AuthPolicy::from_options(&r.options, ids, certs, plan.pubkey_algorithms.clone(), imported)
 }

@@ -2182,5 +2182,15 @@
   "sshopt.details": "Dettagli",
   "sshopt.hide_details": "Nascondi",
   "sshopt.weaker_title": "Più debole delle impostazioni predefinite di Reach",
-  "sshopt.weaker_hint": "Li hai consentiti. Togli la spunta per smettere di usarne uno."
+  "sshopt.weaker_hint": "Li hai consentiti. Togli la spunta per smettere di usarne uno.",
+  "authprompt.title_password": "Password per {{host}}",
+  "authprompt.title_passphrase": "Sblocca la tua chiave",
+  "authprompt.title_keyboard": "{{host}} chiede",
+  "authprompt.title_confirm": "Aggiungere la chiave all’agente SSH?",
+  "authprompt.field_password": "Password",
+  "authprompt.field_passphrase": "Passphrase",
+  "authprompt.continue": "Continua",
+  "authprompt.yes": "Aggiungi",
+  "authprompt.no": "Non ora",
+  "authprompt.host_hint": "Richiesto durante l’accesso a {{host}}. Niente di ciò che digiti qui viene salvato."
 }

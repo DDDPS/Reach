@@ -2182,5 +2182,15 @@
   "sshopt.details": "Подробности",
   "sshopt.hide_details": "Скрий",
   "sshopt.weaker_title": "По-слабо от настройките на Reach по подразбиране",
-  "sshopt.weaker_hint": "Разрешили сте ги. Махнете отметката, за да спрете да го използвате."
+  "sshopt.weaker_hint": "Разрешили сте ги. Махнете отметката, за да спрете да го използвате.",
+  "authprompt.title_password": "Парола за {{host}}",
+  "authprompt.title_passphrase": "Отключете ключа си",
+  "authprompt.title_keyboard": "{{host}} пита",
+  "authprompt.title_confirm": "Да се добави ли ключът в SSH агента?",
+  "authprompt.field_password": "Парола",
+  "authprompt.field_passphrase": "Парола на ключа",
+  "authprompt.continue": "Продължи",
+  "authprompt.yes": "Добави",
+  "authprompt.no": "Не сега",
+  "authprompt.host_hint": "Попитано при влизане в {{host}}. Нищо въведено тук не се запазва."
 }
