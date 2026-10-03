@@ -856,8 +856,11 @@ pub async fn vault_set_turso_config(
 use crate::vault::{turso_api, TursoDbInfo};
 
 /// Create a new database in Turso (for shared vaults).
+/// The database goes into the configured group; one is found or made
+/// first, since a new Turso account has none (see `turso_api::choose_group`).
+/// Failures are logged with Turso's own reason.
 #[tauri::command(rename_all = "snake_case")]
-#[tracing::instrument(skip(state))]
+#[tracing::instrument(skip(state), err)]
 pub async fn turso_create_database(
     db_name: String,
     state: State<'_, AppState>,
@@ -865,9 +868,18 @@ pub async fn turso_create_database(
     let manager = state.vault_manager.lock().await;
     let settings = manager.get_settings().await.map_err(|e| e.to_string())?;
 
-    let org = settings.turso_org.ok_or("Turso organization not configured")?;
-    let api_token = settings.turso_api_token.ok_or("Turso API token not configured")?;
-    let group = settings.turso_group.unwrap_or_else(|| "default".to_string());
+    let org = settings.turso_org.map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).ok_or("Turso organization not configured")?;
+    let api_token = settings.turso_api_token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).ok_or("Turso API token not configured")?;
+    let wanted = settings.turso_group.map(|g| g.trim().to_string()).filter(|g| !g.is_empty()).unwrap_or_else(|| "default".to_string());
+
+    let existing = turso_api::list_groups(&org, &api_token).await.map_err(|e| e.to_string())?;
+    let group = match turso_api::choose_group(&existing, &wanted) {
+        turso_api::GroupChoice::Use(g) => g,
+        turso_api::GroupChoice::Create(g) => {
+            turso_api::create_group(&org, &api_token, &g).await.map_err(|e| e.to_string())?;
+            g
+        }
+    };
 
     turso_api::create_database(&org, &api_token, &db_name, &group)
         .await
@@ -876,7 +888,7 @@ pub async fn turso_create_database(
 
 /// Create an auth token for a Turso database.
 #[tauri::command(rename_all = "snake_case")]
-#[tracing::instrument(skip(state))]
+#[tracing::instrument(skip(state), err)]
 pub async fn turso_create_database_token(
     db_name: String,
     state: State<'_, AppState>,
@@ -884,8 +896,8 @@ pub async fn turso_create_database_token(
     let manager = state.vault_manager.lock().await;
     let settings = manager.get_settings().await.map_err(|e| e.to_string())?;
 
-    let org = settings.turso_org.ok_or("Turso organization not configured")?;
-    let api_token = settings.turso_api_token.ok_or("Turso API token not configured")?;
+    let org = settings.turso_org.map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).ok_or("Turso organization not configured")?;
+    let api_token = settings.turso_api_token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).ok_or("Turso API token not configured")?;
 
     turso_api::create_database_token(&org, &api_token, &db_name)
         .await

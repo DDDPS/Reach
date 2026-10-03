@@ -138,7 +138,7 @@
 			newPassword = '';
 			confirmPassword = '';
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to set password';
+			error = e instanceof Error ? e.message : String(e) || 'Failed to set password';
 		}
 		saving = false;
 	}

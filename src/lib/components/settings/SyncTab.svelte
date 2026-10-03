@@ -120,7 +120,7 @@
 				addToast(t('sync.settings_saved'), 'success');
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to save';
+			error = e instanceof Error ? e.message : String(e);
 		}
 		saving = false;
 	}
@@ -130,7 +130,7 @@
 			exportedKey = await exportIdentity();
 			showExportKey = true;
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to export';
+			error = e instanceof Error ? e.message : String(e);
 		}
 	}
 
@@ -154,7 +154,7 @@
 			inviteSyncUrl = '';
 			inviteToken = '';
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to accept invite';
+			error = e instanceof Error ? e.message : String(e);
 		} finally {
 			acceptingInvite = false;
 		}
