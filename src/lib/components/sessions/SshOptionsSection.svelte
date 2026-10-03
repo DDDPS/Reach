@@ -162,7 +162,6 @@
 				spellcheck="false"
 				autocapitalize="off"
 				autocomplete="off"
-				placeholder={'MACs +hmac-sha1\nServerAliveInterval 30'}
 				{disabled}
 			></textarea>
 			<p class="hint">{t('sshopt.lines_hint')}</p>
