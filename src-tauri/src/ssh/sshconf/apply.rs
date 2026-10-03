@@ -110,6 +110,8 @@ pub mod supported {
         use kex::*;
         vec![
             ("mlkem768x25519-sha256", MLKEM768X25519_SHA256),
+            ("sntrup761x25519-sha512", SNTRUP761X25519_SHA512),
+            ("sntrup761x25519-sha512@openssh.com", SNTRUP761X25519_SHA512_OPENSSH),
             ("curve25519-sha256", CURVE25519),
             ("curve25519-sha256@libssh.org", CURVE25519_PRE_RFC_8731),
             ("ecdh-sha2-nistp256", ECDH_SHA2_NISTP256),
@@ -152,6 +154,19 @@ pub mod supported {
             ("hmac-sha2-256", HMAC_SHA256),
             ("hmac-sha1-etm@openssh.com", HMAC_SHA1_ETM),
             ("hmac-sha1", HMAC_SHA1),
+            ("umac-128-etm@openssh.com", UMAC_128_ETM),
+            ("umac-64-etm@openssh.com", UMAC_64_ETM),
+            ("umac-128@openssh.com", UMAC_128),
+            ("umac-64@openssh.com", UMAC_64),
+            ("hmac-sha1-96-etm@openssh.com", HMAC_SHA1_96_ETM),
+            ("hmac-sha1-96", HMAC_SHA1_96),
+            ("hmac-md5-etm@openssh.com", HMAC_MD5_ETM),
+            ("hmac-md5-96-etm@openssh.com", HMAC_MD5_96_ETM),
+            ("hmac-md5", HMAC_MD5),
+            ("hmac-md5-96", HMAC_MD5_96),
+            ("hmac-ripemd160-etm@openssh.com", HMAC_RIPEMD160_ETM),
+            ("hmac-ripemd160@openssh.com", HMAC_RIPEMD160_OPENSSH),
+            ("hmac-ripemd160", HMAC_RIPEMD160),
         ]
     }
 }
@@ -480,12 +495,19 @@ mod tests {
     }
 
     #[test]
-    fn a_mac_the_engine_lacks_is_reported() {
+    fn a_weak_mac_waits_and_a_missing_algorithm_is_reported() {
+        let at = super::super::resolve::At { file: "f".into(), line: 1 };
         let mut o = Options::default();
-        o.single.insert(Kw::MACs, super::super::resolve::Setting { args: vec!["+hmac-md5".into()], at: super::super::resolve::At { file: "f".into(), line: 1 } });
+        o.single.insert(Kw::MACs, super::super::resolve::Setting { args: vec!["+hmac-md5".into()], at: at.clone() });
+        // DSA host keys: OpenSSH 10 dropped them and Reach's engine has none.
+        o.single.insert(Kw::HostKeyAlgorithms, super::super::resolve::Setting { args: vec!["+ssh-dss".into()], at });
         let r = Resolved { original_host: "h".into(), host: "h".into(), options: o, notes: vec![], refused: None, final_pass: false };
         let p = Plan::new(&r, russh::client::Config::default(), &[]);
-        assert!(matches!(&p.uses[0].1, Use::Partly(m) if m.contains("hmac-md5")));
+        let used = |kw: Kw| p.uses.iter().find(|(k, _)| *k == kw).map(|(_, u)| u.clone()).unwrap();
+        assert!(matches!(used(Kw::MACs), Use::Partly(m) if m.contains("approval: hmac-md5")));
+        assert!(matches!(used(Kw::HostKeyAlgorithms), Use::Partly(m) if m.contains("not available: ssh-dss")));
+        let p = Plan::new(&r, russh::client::Config::default(), &["MACs hmac-md5".into()]);
+        assert!(p.config.preferred.mac.contains(&russh::mac::HMAC_MD5));
     }
 
     #[test]

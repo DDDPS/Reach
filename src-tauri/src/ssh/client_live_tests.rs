@@ -135,6 +135,14 @@ async fn live_legacy_macs() {
     let after = attempt(host, port, &user, &key, Some(&opts)).await;
     println!("With MACs +hmac-sha1: {after:?}");
     assert!(after.is_ok(), "{after:?}");
+
+    // The MACs added to the vendored russh, each alone, through Reach's plan.
+    for mac in ["hmac-md5", "hmac-md5-96", "hmac-sha1-96", "umac-64@openssh.com"] {
+        let opts = crate::ssh::sshconf::session::SshOptions { lines: vec![format!("MACs {mac}")], ..Default::default() };
+        let r = attempt(host, port, &user, &key, Some(&opts)).await;
+        println!("With MACs {mac}: {r:?}");
+        assert!(r.is_ok(), "{mac}: {r:?}");
+    }
 }
 
 /// OpenSSH-style login from ssh_config settings, against real servers.
