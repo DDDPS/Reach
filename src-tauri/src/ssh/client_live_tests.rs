@@ -576,3 +576,54 @@ exit
     assert!(rx.try_recv().is_err(), "the wrong cookie never reached the display");
     std::fs::remove_file(&kh).ok();
 }
+
+/// LogLevel: the banner and the connection's debug lines collected as ssh
+/// would print them. REACH_SSH_BANNER: a server with a Banner;
+/// REACH_SSH_KEYS (k_good).
+#[tokio::test]
+#[ignore = "needs an SSH server"]
+async fn live_config_loglevel() {
+    use crate::ssh::sshconf::session::SshOptions;
+    use crate::ssh::connlog::{close, ConnLog, ConnLogFilter, ConnLogLayer};
+    use tracing::Instrument;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::Layer;
+    let a = std::env::var("REACH_SSH_BANNER").unwrap();
+    let (host, port) = a.rsplit_once(':').unwrap();
+    let port: u16 = port.parse().unwrap();
+    let key = std::fs::read_to_string(std::path::Path::new(&std::env::var("REACH_SSH_KEYS").unwrap()).join("k_good")).unwrap();
+    // russh logs through the log crate, bridged as the app bridges it.
+    let _ = tracing_log::LogTracer::init();
+    let _guard = tracing::subscriber::set_default(tracing_subscriber::registry().with(ConnLogLayer.with_filter(ConnLogFilter)));
+    let mut out = Vec::new();
+    for level in ["DEBUG1", "ERROR"] {
+        let kh = std::env::temp_dir().join(format!("reach-log-kh-{}-{level}", std::process::id()));
+        let lines: Vec<String> = vec![
+            format!("UserKnownHostsFile {}", kh.display().to_string().replace('\\', "/")),
+            "StrictHostKeyChecking accept-new".into(),
+            format!("LogLevel {level}"),
+        ];
+        let o = SshOptions { lines, ..Default::default() };
+        let opts: HopOptions = crate::ssh::sshconf::session::plan_for(Some(&o), host, port, "reach", false).into();
+        let (l, v) = opts.log.clone().unwrap();
+        let log = ConnLog::new(l.as_deref(), &v);
+        let key = key.clone();
+        async {
+            let stream = crate::ssh::sshconf::net::connect(host, port, &opts.socket, false).await.unwrap();
+            let handler = SshClientHandler::new(host, port, None).with_hostkeys(opts.hostkeys.clone());
+            let mut handle = russh::client::connect_stream(opts.config.clone(), stream, handler).await.unwrap();
+            let auth = AuthParams { key: Some(KeyAuth { source: KeySource::Material(key), passphrase: None }), password: None, allow_agent: false };
+            crate::ssh::client::login(&mut handle, "reach", &auth, &opts, None, host, port).await.unwrap().into_result().unwrap();
+        }
+        .instrument(log.span())
+        .await;
+        close(&log);
+        out.push(log.take());
+        std::fs::remove_file(&kh).ok();
+    }
+    println!("DEBUG1:\n{}\n\nERROR:\n{}", out[0].join("\n"), out[1].join("\n"));
+    assert!(out[0].iter().any(|l| l == "Authorized use only"), "banner at DEBUG1");
+    assert!(out[0].iter().any(|l| l.starts_with("debug1: ")), "debug lines at DEBUG1");
+    assert!(!out[1].iter().any(|l| l.contains("Authorized use only")), "no banner at ERROR");
+    assert!(!out[1].iter().any(|l| l.starts_with("debug")), "no debug at ERROR");
+}

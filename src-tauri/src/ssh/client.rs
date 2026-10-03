@@ -923,17 +923,23 @@ pub struct HopOptions {
     pub proxy_command: Option<crate::ssh::proxycmd::ProxyCommand>,
     /// Forwards and agent forwarding (target only).
     pub forwards: Option<Arc<crate::ssh::forwarding::ForwardTable>>,
+    /// LogLevel and LogVerbose (target only).
+    pub log: Option<(Option<String>, Vec<String>)>,
+    /// The connection's log, made from `log` when connecting.
+    pub connlog: Option<Arc<crate::ssh::connlog::ConnLog>>,
+    /// ControlMaster/ControlPath/ControlPersist (target only).
+    pub control: Option<crate::ssh::control::ControlPlan>,
 }
 
 impl Default for HopOptions {
     fn default() -> Self {
-        Self { config: Arc::new(russh::client::Config::default()), socket: Default::default(), auth: None, hostkeys: None, session: None, refused: None, proxy_command: None, forwards: None }
+        Self { config: Arc::new(russh::client::Config::default()), socket: Default::default(), auth: None, hostkeys: None, session: None, refused: None, proxy_command: None, forwards: None, log: None, connlog: None, control: None }
     }
 }
 
 impl From<crate::ssh::sshconf::apply::Plan> for HopOptions {
     fn from(p: crate::ssh::sshconf::apply::Plan) -> Self {
-        Self { config: Arc::new(p.config), socket: p.socket, auth: p.auth, hostkeys: p.hostkeys.map(Arc::new), session: p.session.map(Arc::new), refused: p.refused, proxy_command: p.proxy_command, forwards: p.forwards.map(crate::ssh::forwarding::ForwardTable::new) }
+        Self { config: Arc::new(p.config), socket: p.socket, auth: p.auth, hostkeys: p.hostkeys.map(Arc::new), session: p.session.map(Arc::new), refused: p.refused, proxy_command: p.proxy_command, forwards: p.forwards.map(crate::ssh::forwarding::ForwardTable::new), log: p.log, connlog: None, control: p.control }
     }
 }
 
@@ -1021,6 +1027,10 @@ impl SshManager {
         if let Some(msg) = &opts.refused {
             return Err(SshError::ConnectionFailed(msg.clone()));
         }
+        let info = ConnectionInfo { id: id.to_string(), host: host.to_string(), port, username: username.to_string() };
+        if let Some(conn) = shared_session(&info, &opts, cols, rows, shell.as_deref(), &login, &app_handle).await {
+            return conn;
+        }
         let timeout_duration = opts.connect_limit(std::time::Duration::from_secs(15));
         let connect_future = async {
             let handle = Self::handshake_direct(host, port, username, &auth, proxy.as_ref(), app_handle.clone(), &opts, true).await?;
@@ -1035,14 +1045,11 @@ impl SshManager {
 
         let (handle, channel, tty) = within_connect_limit(timeout_duration, connect_future).await?;
 
-        let info = ConnectionInfo {
-            id: id.to_string(),
-            host: host.to_string(),
-            port,
-            username: username.to_string(),
-        };
-
-        into_active_connection(channel, handle, info, shell.as_deref(), login, app_handle, Vec::new(), opts.session.clone(), tty, opts.forwards.clone()).await
+        let shared: SharedHandle = Arc::new(tokio::sync::Mutex::new(handle));
+        if let Some(cp) = &opts.control {
+            crate::ssh::control::register(cp, &shared, &[]);
+        }
+        into_active_connection(channel, shared, info, shell.as_deref(), login, app_handle, Vec::new(), opts.session.clone(), tty, opts.forwards.clone(), opts.connlog.clone()).await
     }
 
     /// Connect and authenticate, directly or through a proxy. Opens no channel:
@@ -1210,6 +1217,10 @@ impl SshManager {
         if let Some(msg) = &opts.refused {
             return Err(SshError::ConnectionFailed(msg.clone()));
         }
+        let shared_info = ConnectionInfo { id: id.to_string(), host: target_host.to_string(), port: target_port, username: target_username.to_string() };
+        if let Some(conn) = shared_session(&shared_info, &opts, cols, rows, shell.as_deref(), &login, &app_handle).await {
+            return conn;
+        }
 
         let base = std::time::Duration::from_secs(30);
         let timeout_duration = jump_chain.first().map_or(base, |j| j.opts.connect_limit(base));
@@ -1246,7 +1257,11 @@ impl SshManager {
             username: target_username.to_string(),
         };
 
-        into_active_connection(channel, target_handle, info, shell.as_deref(), login, app_handle, jump_handles, opts.session.clone(), tty, opts.forwards.clone()).await
+        let shared: SharedHandle = Arc::new(tokio::sync::Mutex::new(target_handle));
+        if let Some(cp) = &opts.control {
+            crate::ssh::control::register(cp, &shared, &jump_handles);
+        }
+        into_active_connection(channel, shared, info, shell.as_deref(), login, app_handle, jump_handles, opts.session.clone(), tty, opts.forwards.clone(), opts.connlog.clone()).await
     }
 
     /// Connect and authenticate on the target through each jump host in turn.
@@ -2037,6 +2052,13 @@ impl russh::client::Handler for SshClientHandler {
         Ok(())
     }
 
+    /// The server's login banner, shown as ssh shows it: through the log,
+    /// at LogLevel INFO and above.
+    async fn auth_banner(&mut self, banner: &str, _session: &mut russh::client::Session) -> Result<(), Self::Error> {
+        tracing::warn!(target: crate::ssh::connlog::BANNER_TARGET, "{banner}");
+        Ok(())
+    }
+
     /// WarnWeakCrypto, as OpenSSH 10.1+ warns: a key exchange that is not
     /// post-quantum could be recorded now and broken later.
     async fn kex_done(
@@ -2242,10 +2264,48 @@ async fn open_session(
     Ok((Some(channel), true))
 }
 
+/// ControlMaster: a session on a live master for the same ControlPath,
+/// with no new handshake or login. `None` when there is none to use (or
+/// the master's user said no), so the caller connects as usual.
+async fn shared_session(
+    info: &ConnectionInfo,
+    opts: &HopOptions,
+    cols: u16,
+    rows: u16,
+    shell: Option<&str>,
+    login: &LoginOptions,
+    app_handle: &tauri::AppHandle,
+) -> Option<Result<ActiveConnection, SshError>> {
+    let cp = opts.control.as_ref().filter(|c| c.may_use())?;
+    let (shared, jumps, asks) = crate::ssh::control::existing(&cp.path)?;
+    if asks {
+        let title = format!("Allow shared connection to {}?", info.host);
+        let yes = crate::ssh::prompt::ask(Some(app_handle), &info.host, info.port, crate::ssh::prompt::Kind::Confirm, &title, "", vec![]).await;
+        if yes.is_none() {
+            tracing::info!("ControlMaster: the shared connection to {} was refused; connecting anew", info.host);
+            return None;
+        }
+    }
+    tracing::info!("ControlMaster: {}@{}:{} shares the connection at {}", info.username, info.host, info.port, cp.path);
+    let opened = {
+        let h = shared.lock().await;
+        open_session(&h, opts, cols, rows, shell).await
+    };
+    let (channel, tty) = match opened {
+        Ok(x) => x,
+        // A master that cannot open sessions any more: connect anew.
+        Err(e) => {
+            tracing::info!("ControlMaster: the master at {} did not open a session ({e}); connecting anew", cp.path);
+            return None;
+        }
+    };
+    Some(into_active_connection(channel, shared, info.clone(), shell, login.clone(), app_handle.clone(), jumps, opts.session.clone(), tty, opts.forwards.clone(), opts.connlog.clone()).await)
+}
+
 #[expect(clippy::too_many_arguments, reason = "everything a finished login hands to its session")]
 async fn into_active_connection(
     channel: Option<russh::Channel<russh::client::Msg>>,
-    handle: russh::client::Handle<SshClientHandler>,
+    shared: SharedHandle,
     info: ConnectionInfo,
     shell: Option<&str>,
     login: LoginOptions,
@@ -2254,6 +2314,7 @@ async fn into_active_connection(
     session: Option<Arc<crate::ssh::session_opts::SessionPolicy>>,
     tty: bool,
     forwards: Option<Arc<crate::ssh::forwarding::ForwardTable>>,
+    connlog: Option<Arc<crate::ssh::connlog::ConnLog>>,
 ) -> Result<ActiveConnection, SshError> {
     // Inject shell-appropriate color/prompt init (chosen per shell family so a
     // fish login never gets bash syntax), unless the user disabled it. `None`
@@ -2298,7 +2359,6 @@ async fn into_active_connection(
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let task_id = info.id.clone();
     let task_handle = app_handle.clone();
-    let shared: SharedHandle = Arc::new(tokio::sync::Mutex::new(handle));
     let task_shared = shared.clone();
     let host_label = format!("{}:{}", info.host, info.port);
     // Forwards from ssh_config, set up as ssh does once logged in; under
@@ -2310,12 +2370,17 @@ async fn into_active_connection(
         },
         None => (None, Vec::new()),
     };
-    tokio::spawn(async move {
+    tokio::spawn(tracing::Instrument::in_current_span(async move {
         match channel {
-            Some(channel) => ssh_session_task(channel, cmd_rx, task_id, task_handle, flow, log, SessionExtras { policy: session, tty, handle: task_shared, host: host_label, forwarder, notes: forward_notes }).await,
-            None => ssh_idle_task(cmd_rx, task_id, task_handle).await,
+            Some(channel) => ssh_session_task(channel, cmd_rx, task_id, task_handle, flow, log, SessionExtras { policy: session, tty, handle: task_shared, host: host_label, forwarder, notes: forward_notes, connlog: connlog.clone() }).await,
+            None => {
+                if let Some(cl) = connlog.as_ref() {
+                    crate::ssh::connlog::close(cl);
+                }
+                ssh_idle_task(cmd_rx, task_id, task_handle).await
+            }
         }
-    });
+    }));
 
     Ok(ActiveConnection {
         cmd_tx,
@@ -2334,6 +2399,8 @@ struct SessionExtras {
     forwarder: Option<Arc<crate::ssh::forwarding::Forwarder>>,
     /// Lines to show once the tab is listening (forwards set up).
     notes: Vec<String>,
+    /// LogLevel: what ssh would print about the connection.
+    connlog: Option<Arc<crate::ssh::connlog::ConnLog>>,
 }
 
 /// SessionType none: the connection carries no session, only what else it
@@ -2410,6 +2477,19 @@ async fn ssh_session_task(
     let mut ready = false;
     let mut backlog: Vec<String> = Vec::new();
     let mut backlog_bytes = 0usize;
+    // LogLevel: what was logged while connecting (the banner among it)
+    // comes first; later lines follow as they are logged.
+    let (connlog_tx, mut connlog_rx) = mpsc::unbounded_channel::<String>();
+    if let Some(cl) = extras.connlog.as_ref() {
+        for l in cl.attach(connlog_tx.clone()) {
+            let text = format!("{l}\r\n");
+            if let Some(f) = log.as_mut() {
+                f.push(&text);
+            }
+            backlog_bytes += text.len();
+            backlog.push(text);
+        }
+    }
 
     // Tap for the MCP server. Output is mirrored into the shared-session
     // buffer *before* the ready/backlog logic, because an AI client attaches
@@ -2506,6 +2586,9 @@ async fn ssh_session_task(
             }
             Some(text) = local_rx.recv() => {
                 deliver!(text.replace('\n', "\r\n").replace("\r\r\n", "\r\n"));
+            }
+            Some(line) = connlog_rx.recv() => {
+                deliver!(format!("{line}\r\n"));
             }
             _ = obscure_tick.tick(), if obscure.as_ref().is_some_and(|o| o.active()) => {
                 let now = std::time::Instant::now();
@@ -2621,6 +2704,9 @@ async fn ssh_session_task(
 
     if let Err(e) = app_handle.emit(&exit_event, ()) {
         tracing::error!("Failed to emit '{}': {}", exit_event, e);
+    }
+    if let Some(cl) = extras.connlog.as_ref() {
+        crate::ssh::connlog::close(cl);
     }
     tracing::info!("SSH '{}' session task exiting", connection_id);
 }

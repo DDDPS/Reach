@@ -183,6 +183,10 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
         tracing::warn!("ssh_config for {host}: {e}");
     }
     let mut plan = super::apply::Plan::new(&r, base, &opts.accepted_weakenings);
+    if !jump {
+        plan.control = crate::ssh::control::ControlPlan::from(r.options.first(super::keyword::Kw::ControlPath), r.options.first(super::keyword::Kw::ControlMaster), r.options.first(super::keyword::Kw::ControlPersist));
+    }
+    plan.log = Some((r.options.first(super::keyword::Kw::LogLevel).map(str::to_string), r.options.get(super::keyword::Kw::LogVerbose).map(|s| s.args.clone()).unwrap_or_default()));
     plan.auth = Some(auth_policy(&r, &plan, opts.imported.is_some()));
     let hk = hostkey_policy(&r, &plan, opts);
     if hk.use_files {

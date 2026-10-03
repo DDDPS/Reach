@@ -48,11 +48,14 @@ pub fn support(kw: Kw) -> Support {
         RequestTTY | RemoteCommand | SessionType | SetEnv | SendEnv | StdinNull | EscapeChar | ObscureKeystrokeTiming | LocalCommand | PermitLocalCommand | RefuseConnection | ProxyCommand | ProxyUseFdpass | WarnWeakCrypto | ForkAfterAuthentication | SyslogFacility => Support::Yes,
         // Forwarding (ssh/forwarding.rs).
         LocalForward | RemoteForward | DynamicForward | ClearAllForwardings | ExitOnForwardFailure | GatewayPorts | PermitRemoteOpen | StreamLocalBindMask | StreamLocalBindUnlink | ChannelTimeout | EnableEscapeCommandline | ForwardAgent => Support::Yes,
+        // Connection sharing (ssh/control.rs).
+        ControlMaster | ControlPath | ControlPersist => Support::Yes,
+        // Logging (ssh/connlog.rs).
+        LogLevel | LogVerbose => Support::Yes,
         // X11 (ssh/x11.rs).
         ForwardX11 | ForwardX11Trusted | ForwardX11Timeout | XAuthLocation => Support::Yes,
-        ControlMaster | ControlPath
-        | ControlPersist | EnableSSHKeysign | GSSAPIAuthentication
-        | GSSAPIDelegateCredentials | HostbasedAcceptedAlgorithms | HostbasedAuthentication | LogLevel | LogVerbose
+        EnableSSHKeysign | GSSAPIAuthentication
+        | GSSAPIDelegateCredentials | HostbasedAcceptedAlgorithms | HostbasedAuthentication
         | PKCS11Provider | SecurityKeyProvider | Tunnel
         | TunnelDevice | UpdateHostKeys
         | GSSAPIKeyExchange | GSSAPIClientIdentity | GSSAPIServerIdentity | GSSAPIRenewalForcesRekey

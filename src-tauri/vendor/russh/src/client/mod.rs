@@ -1152,7 +1152,9 @@ where
     );
     session.begin_rekey()?;
     let (kex_done_signal, kex_done_signal_rx) = oneshot::channel();
-    let join = russh_util::runtime::spawn(session.run(stream, handler, Some(kex_done_signal)));
+    // The session runs in the caller's span, so what it logs stays with
+    // the connection it belongs to (Reach's LogLevel).
+    let join = russh_util::runtime::spawn(tracing::Instrument::in_current_span(session.run(stream, handler, Some(kex_done_signal))));
 
     if let Err(err) = kex_done_signal_rx.await {
         // kex_done_signal Sender is dropped when the session

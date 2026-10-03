@@ -137,8 +137,14 @@ pub async fn ssh_connect(
     // ssh_disconnect on every other live connection. We lock only afterwards,
     // briefly, to register the finished connection (a single HashMap insert).
     // ssh_config settings for the target: resolved here, before connecting.
-    let target_opts: crate::ssh::client::HopOptions =
+    let mut target_opts: crate::ssh::client::HopOptions =
         crate::ssh::sshconf::session::plan_for(ssh_options.as_ref(), &host, port, &username, false).into();
+    // LogLevel/LogVerbose: everything logged while connecting is collected
+    // for the terminal, and shown with the error if the connection fails.
+    let connlog = target_opts.log.as_ref().map(|(level, verbose)| crate::ssh::connlog::ConnLog::new(level.as_deref(), verbose));
+    target_opts.connlog = connlog.clone();
+    let span = connlog.as_ref().map_or_else(tracing::Span::none, |l| l.span());
+    let connected: Result<_, String> = tracing::Instrument::instrument(async {
     let conn = if let Some(chain) = jump_chain {
         if chain.is_empty() {
             // No jump hosts, connect directly
@@ -202,6 +208,17 @@ pub async fn ssh_connect(
         SshManager::connect(&id, &host, port, &username, auth, cols, rows, app.clone(), proxy, shell, login, target_opts)
             .await
             .map_err(|e| e.to_string())?
+    };
+    Ok(conn)
+    }, span).await;
+    let conn = match connected {
+        Ok(c) => c,
+        Err(e) => {
+            let Some(cl) = connlog else { return Err(e) };
+            crate::ssh::connlog::close(&cl);
+            let lines = cl.take();
+            return Err(if lines.is_empty() { e } else { format!("{e}\n\n{}", lines.join("\n")) });
+        }
     };
 
     // Register the finished connection under a brief lock, released immediately

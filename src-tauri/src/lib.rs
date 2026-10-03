@@ -180,10 +180,14 @@ fn init_logging() {
             .with_ansi(false)
             .with_writer(std::sync::Mutex::new(f))
     });
+    use tracing_subscriber::Layer;
+    // Each output has its own filter, so a connection's LogLevel can see
+    // debug messages that the console and the file leave out.
+    let file_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::registry()
-        .with(filter)
-        .with(tracing_subscriber::fmt::layer())
-        .with(file)
+        .with(tracing_subscriber::fmt::layer().with_filter(filter))
+        .with(file.map(|f| f.with_filter(file_filter)))
+        .with(crate::ssh::connlog::ConnLogLayer.with_filter(crate::ssh::connlog::ConnLogFilter))
         .init();
 }
 

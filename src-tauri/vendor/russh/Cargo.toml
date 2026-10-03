@@ -402,6 +402,9 @@ features = [
     "time",
 ]
 
+[dependencies.tracing]
+version = "0.1"
+
 [dependencies.typenum]
 version = "1.17"
 
