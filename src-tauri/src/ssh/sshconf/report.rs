@@ -39,6 +39,8 @@ pub fn support(kw: Kw) -> Support {
         // Kerberos (ssh/gssapi.rs), with the Debian/Fedora patch's options.
         GSSAPIAuthentication | GSSAPIDelegateCredentials | GSSAPIClientIdentity | GSSAPIServerIdentity
         | GSSAPITrustDns => Support::Yes,
+        // Token and security key libraries (ssh/pkcs11.rs, ssh/sk.rs).
+        PKCS11Provider | SecurityKeyProvider => Support::Yes,
         // Host keys (ssh/hostkeys.rs).
         StrictHostKeyChecking | UserKnownHostsFile | GlobalKnownHostsFile | HostKeyAlias | CheckHostIP
         | HashKnownHosts | NoHostAuthenticationForLocalhost | RevokedHostKeys | KnownHostsCommand | VisualHostKey
@@ -61,14 +63,18 @@ pub fn support(kw: Kw) -> Support {
         // hostbased (ssh/hostbased.rs; EnableSSHKeysign is read by
         // ssh-keysign itself from the system's ssh_config, as with ssh).
         UpdateHostKeys | Tunnel | TunnelDevice | HostbasedAuthentication | HostbasedAcceptedAlgorithms | EnableSSHKeysign => Support::Yes,
-        PKCS11Provider | SecurityKeyProvider | GSSAPIKeyExchange | GSSAPIRenewalForcesRekey | GSSAPIKexAlgorithms => Support::NotYet,
+        GSSAPIKeyExchange | GSSAPIRenewalForcesRekey | GSSAPIKexAlgorithms => Support::NotYet,
     }
 }
 
-/// Keywords that run a program on this machine; they need the user's
+/// Keywords that run a program on this machine, or load a library into
+/// Reach (PKCS11Provider, SecurityKeyProvider); they need the user's
 /// approval before Reach runs them.
 pub fn runs_command(kw: Kw) -> bool {
-    matches!(kw, Kw::ProxyCommand | Kw::LocalCommand | Kw::KnownHostsCommand | Kw::XAuthLocation)
+    matches!(
+        kw,
+        Kw::ProxyCommand | Kw::LocalCommand | Kw::KnownHostsCommand | Kw::XAuthLocation | Kw::PKCS11Provider | Kw::SecurityKeyProvider
+    )
 }
 
 /// Settings that make the connection less safe than Reach's defaults,
@@ -167,7 +173,9 @@ pub fn build(r: &Resolved, plan: &Plan, finish_errors: &[String], exec_asked: &[
                 line.weakening = Some(weak.join("; "));
             }
             if runs_command(kw) {
-                if let Some(c) = r.options.first(kw).filter(|c| !c.eq_ignore_ascii_case("none")) {
+                // SecurityKeyProvider internal is built in: nothing to load.
+                let builtin = |c: &str| c.eq_ignore_ascii_case("none") || (kw == Kw::SecurityKeyProvider && c.eq_ignore_ascii_case("internal"));
+                if let Some(c) = r.options.first(kw).filter(|c| !builtin(c)) {
                     line.command = Some(c.to_string());
                     if !commands.iter().any(|x| x == c) {
                         commands.push(c.to_string());

@@ -187,7 +187,7 @@ pub fn plan_for(opts: Option<&SshOptions>, host: &str, port: u16, user: &str, ju
         plan.control = crate::ssh::control::ControlPlan::from(r.options.first(super::keyword::Kw::ControlPath), r.options.first(super::keyword::Kw::ControlMaster), r.options.first(super::keyword::Kw::ControlPersist));
     }
     plan.log = Some((r.options.first(super::keyword::Kw::LogLevel).map(str::to_string), r.options.get(super::keyword::Kw::LogVerbose).map(|s| s.args.clone()).unwrap_or_default()));
-    plan.auth = Some(auth_policy(&r, &plan, opts.imported.is_some()));
+    plan.auth = Some(auth_policy(&r, &plan, opts.imported.is_some(), &opts.approved_commands));
     let hk = hostkey_policy(&r, &plan, opts);
     if hk.use_files {
         // Ask for host certificates too: they are checked against
@@ -426,7 +426,9 @@ fn hostkey_policy(r: &Resolved, plan: &super::apply::Plan, opts: &SshOptions) ->
 
 /// The login policy: IdentityFile and CertificateFile expanded as ssh
 /// expands them when it loads them (`~`, `%` tokens, `${VAR}`).
-fn auth_policy(r: &Resolved, plan: &super::apply::Plan, imported: bool) -> crate::ssh::userauth::AuthPolicy {
+/// PKCS11Provider and SecurityKeyProvider libraries run their code when
+/// loaded, so like commands they apply only once approved.
+fn auth_policy(r: &Resolved, plan: &super::apply::Plan, imported: bool, approved: &[String]) -> crate::ssh::userauth::AuthPolicy {
     use super::expand::{expand, tilde, TokenSet};
     let sys = SystemEnv::new(ExecPolicy::Never);
     let tokens = r.tokens(&sys);
@@ -454,5 +456,7 @@ fn auth_policy(r: &Resolved, plan: &super::apply::Plan, imported: bool) -> crate
         }
     }
     p.hostbased = crate::ssh::hostbased::HostbasedContext::from_options(&r.options, plan);
+    p.pkcs11_provider = crate::ssh::pkcs11::provider_from(&r.options, approved);
+    p.sk_provider = crate::ssh::sk::Provider::from_options(&r.options, approved);
     p
 }

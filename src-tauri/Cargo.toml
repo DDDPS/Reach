@@ -39,6 +39,14 @@ russh = { version = "0.63", default-features = false, features = ["ring", "rsa",
 # about itself (algorithm, fingerprint, whether it is encrypted) without
 # needing the passphrase.
 ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption"] }
+# PKCS11Provider (src/ssh/pkcs11.rs): the token's library, loaded at run time.
+# cryptoki-sys for the one call cryptoki does not offer on its own (C_Sign
+# after C_SignInit); both are already in the tree through sspi.
+cryptoki = "0.12"
+cryptoki-sys = "0.5"
+# SecurityKeyProvider middleware (src/ssh/sk.rs), loaded at run time as
+# OpenSSH dlopens it.
+libloading = "0.8"
 
 # Encryption
 # zeroize: wipe the hashing blocks and the keys ciphers hold when they drop.

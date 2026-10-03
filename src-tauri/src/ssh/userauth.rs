@@ -10,6 +10,7 @@
 //! (`client::cascade_authenticate`): only what the session names.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use russh::MethodKind;
 use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::agent::AgentIdentity;
@@ -66,6 +67,10 @@ pub struct AuthPolicy {
     pub gssapi: Option<super::gssapi::GssapiPolicy>,
     /// HostbasedAuthentication (see `hostbased`), when on.
     pub hostbased: Option<std::sync::Arc<super::hostbased::HostbasedContext>>,
+    /// PKCS11Provider, once approved: the token library whose keys come first.
+    pub pkcs11_provider: Option<String>,
+    /// SecurityKeyProvider: what signs with FIDO keys; `None` skips them.
+    pub sk_provider: Option<super::sk::Provider>,
 }
 
 /// Where to ask the user, and about which host.
@@ -77,7 +82,7 @@ pub(crate) struct Ui<'a> {
 }
 
 impl Ui<'_> {
-    async fn ask(&self, kind: Kind, title: &str, instructions: &str, fields: Vec<Field>) -> Option<Vec<String>> {
+    pub(crate) async fn ask(&self, kind: Kind, title: &str, instructions: &str, fields: Vec<Field>) -> Option<Vec<String>> {
         match self.app {
             Some(a) => a.ask(self.host, self.port, kind, title, instructions, fields).await,
             None => None,
@@ -100,6 +105,8 @@ enum Source {
     File(PathBuf),
     /// A key the agent holds.
     Agent(Box<AgentIdentity>),
+    /// A key on a PKCS#11 token.
+    Pkcs11(Arc<super::pkcs11::Key>),
 }
 
 pub(crate) type Agent = AgentClient<Box<dyn AgentStream + Send + Unpin + 'static>>;
@@ -168,11 +175,19 @@ fn same_key(a: &PublicKey, b: &PublicKey) -> bool {
     a.key_data() == b.key_data()
 }
 
-/// The identity list, as pubkey_prepare builds it: the session's key and
-/// IdentityFile entries first, in order (the agent signing for any it
-/// holds), then the agent's other keys unless IdentitiesOnly.
-async fn prepare(auth: &AuthParams, p: &AuthPolicy, agent: &mut Option<Agent>) -> Vec<Identity> {
+/// The identity list, as pubkey_prepare builds it: PKCS11Provider keys,
+/// then the session's key and IdentityFile entries, in order (the agent
+/// signing for any it holds), then the agent's other keys unless
+/// IdentitiesOnly.
+async fn prepare(auth: &AuthParams, p: &AuthPolicy, agent: &mut Option<Agent>, ui: Ui<'_>) -> Vec<Identity> {
     let mut ids: Vec<Identity> = Vec::new();
+    // ssh.c loads the token's keys before the IdentityFile entries, and
+    // IdentitiesOnly does not remove them.
+    if let Some(path) = &p.pkcs11_provider {
+        for k in super::pkcs11::keys(path, ui, p.batch_mode).await {
+            ids.push(Identity { public: Some(k.public.clone()), cert: None, label: k.label.clone(), source: Source::Pkcs11(Arc::new(k)) });
+        }
+    }
     if let Some(k) = &auth.key {
         let (material, path) = match &k.source {
             KeySource::Path(path) => (std::fs::read_to_string(expand_tilde(path)).unwrap_or_default(), Some(path.clone())),
@@ -203,6 +218,15 @@ async fn prepare(auth: &AuthParams, p: &AuthPolicy, agent: &mut Option<Agent>) -
         }
         ids.push(Identity { public, cert: None, label: f.display().to_string(), source: Source::File(f) });
     }
+    if p.sk_provider.is_none() {
+        ids.retain(|i| {
+            let sk = i.public.as_ref().is_some_and(super::sk::is_sk);
+            if sk {
+                tracing::info!("ignoring authenticator-hosted key {} as no SecurityKeyProvider has been specified", i.label);
+            }
+            !sk
+        });
+    }
     // Certificates: <key>-cert.pub beside a key file, and CertificateFile.
     let mut certs: Vec<Certificate> = Vec::new();
     for i in &ids {
@@ -232,6 +256,7 @@ async fn prepare(auth: &AuthParams, p: &AuthPolicy, agent: &mut Option<Agent>) -
                         }
                         Source::File(f) => Source::File(f.clone()),
                         Source::Agent(a) => Source::Agent(a.clone()),
+                        Source::Pkcs11(k) => Source::Pkcs11(k.clone()),
                     },
                 });
             }
@@ -331,7 +356,7 @@ impl FileSigner<'_> {
         let (material, stored, path) = match self.source {
             Source::Session { material, passphrase, path } => (material.clone(), passphrase.clone(), path.clone()),
             Source::File(f) => (std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?, None, Some(f.display().to_string())),
-            Source::Agent(_) => return Err("agent key".into()),
+            Source::Agent(_) | Source::Pkcs11(_) => return Err("not a key file".into()),
         };
         if let Ok(k) = decode_key(&material, stored.as_deref()) {
             if !k.is_encrypted() {
@@ -380,8 +405,17 @@ impl russh::Signer for FileSigner<'_> {
         mut to_sign: Vec<u8>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send {
         async move {
-            let key = self.load().await.map_err(SignError::Key)?;
-            let blob = sign(&key, hash_alg, &to_sign).map_err(SignError::Key)?;
+            let blob = if let Source::Pkcs11(k) = self.source {
+                k.sign(hash_alg, &to_sign, self.ui).await.map_err(SignError::Key)?
+            } else {
+                let key = self.load().await.map_err(SignError::Key)?;
+                if super::sk::is_sk(key.public_key()) {
+                    let p = self.policy;
+                    super::sk::sign(&key, &to_sign, p.sk_provider.as_ref(), p.batch_mode, self.ui, self.label).await.map_err(SignError::Key)?
+                } else {
+                    sign(&key, hash_alg, &to_sign).map_err(SignError::Key)?
+                }
+            };
             // The signature goes after the data as an SSH string.
             to_sign.extend_from_slice(&(blob.len() as u32).to_be_bytes());
             to_sign.extend_from_slice(&blob);
@@ -467,7 +501,7 @@ pub(crate) async fn authenticate<H: russh::client::Handler>(
         let result = match method {
             MethodKind::PublicKey => {
                 if identities.is_none() {
-                    identities = Some(prepare(auth, p, &mut agent).await);
+                    identities = Some(prepare(auth, p, &mut agent, ui).await);
                 }
                 let ids = identities.as_ref().unwrap();
                 let Some(id) = ids.get(next_identity) else {
@@ -763,6 +797,9 @@ impl AuthPolicy {
             use_keychain: flag(Kw::UseKeychain, false),
             gssapi: flag(Kw::GSSAPIAuthentication, false).then(|| super::gssapi::GssapiPolicy::from_options(o)),
             hostbased: None,
+            // Libraries load only once approved; session.rs sets these.
+            pkcs11_provider: None,
+            sk_provider: super::sk::Provider::from_options(o, &[]),
         }
     }
 }
