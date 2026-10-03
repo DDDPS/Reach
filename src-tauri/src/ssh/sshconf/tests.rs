@@ -253,7 +253,7 @@ fn command_line_overrides_win() {
 
 #[test]
 fn the_legacy_mac_server_from_discord() {
-    let r = run(&Fake::new(), "Host ferratt-centreon\n  HostName 192.168.1.70\n  User root\n  MACs +hmac-sha1\n", "ferratt-centreon");
+    let r = run(&Fake::new(), "Host monitoring\n  HostName 192.168.1.70\n  User root\n  MACs +hmac-sha1\n", "monitoring");
     assert_eq!(r.host, "192.168.1.70");
     assert_eq!(first(&r, Kw::MACs), Some("+hmac-sha1"));
     assert!(!r.has_errors());
