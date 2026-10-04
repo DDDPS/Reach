@@ -387,7 +387,9 @@ const CORPUS: &[(u32, &str, &[&str])] = &[
     (8, "Match !host foo\n  ServerAliveCountMax 7\n", &["foo", "bar"]),
     (8, "Host web\n  HostName web.example.com\nMatch final host web.example.com\n  User deploy\nMatch canonical\n  Port 77\n", &["web", "other"]),
     (8, "Host web\n  LocalForward 8080 db:5432\n  LocalForward [::1]:8081 [fd00::1]:22\n  DynamicForward 1080\n  RemoteForward 9000 localhost:9000\n  RemoteForward 9001\n", &["web"]),
-    (8, "Host web\n  SendEnv LANG LC_*\n  SendEnv -LC_*\n  SetEnv A=1 B=\"x y\" A=2\nHost *\n  SetEnv C=3\n", &["web", "x"]),
+    // OpenSSH 8.9 (Ubuntu 22.04) keeps the second A=; 9.5 and later the
+    // first, as Reach does.
+    (9, "Host web\n  SendEnv LANG LC_*\n  SendEnv -LC_*\n  SetEnv A=1 B=\"x y\" A=2\nHost *\n  SetEnv C=3\n", &["web", "x"]),
     (8, "Host web\n  IdentityFile ~/.ssh/id_a\n  IdentityFile ~/.ssh/id_a\nHost *\n  IdentityFile ~/.ssh/id_b\n  CertificateFile ~/.ssh/c\n", &["web"]),
     (8, "Host web\n  ProxyJump bastion\n  ProxyCommand nc %h %p\nHost db\n  ProxyCommand nc %h %p\n  ProxyJump bastion\n", &["web", "db"]),
     (8, "Host web\n  RekeyLimit 1G 1h\n  EscapeChar ^A\n  AddKeysToAgent confirm 5m\n  StreamLocalBindMask 0077\n  LogLevel debug2\n", &["web"]),
@@ -398,7 +400,8 @@ const CORPUS: &[(u32, &str, &[&str])] = &[
     (10, "Host web\n  ChannelTimeout session=5m agent-connection=1h\n  ObscureKeystrokeTiming interval:40\n  EnableEscapeCommandline yes\n", &["web"]),
     (10, "Match tagged prod\n  User prodadmin\nHost web\n  Tag prod\nMatch tagged \"\"\n  Port 1\n", &["web", "x"]),
     (10, "Host old\n  User a\nMatch version OpenSSH_10*\n  Port 1010\n", &["old"]),
-    (8, "Host web\n  PermitRemoteOpen localhost:80 [::1]:443\n  GatewayPorts yes\n  ExitOnForwardFailure yes\n  ClearAllForwardings no\n", &["web"]),
+    // OpenSSH 8.9's ssh -G prints only the last PermitRemoteOpen value.
+    (9, "Host web\n  PermitRemoteOpen localhost:80 [::1]:443\n  GatewayPorts yes\n  ExitOnForwardFailure yes\n  ClearAllForwardings no\n", &["web"]),
     (8, "Host web\n  KbdInteractiveDevices pam\n  PreferredAuthentications publickey,password\n  NumberOfPasswordPrompts 1\n  BatchMode yes\n  IdentitiesOnly yes\n  PubkeyAuthentication host-bound\n", &["web"]),
     (8, "Host web\n  UserKnownHostsFile ~/.ssh/kh1 ~/.ssh/kh2\n  GlobalKnownHostsFile none\n  HashKnownHosts yes\n  CheckHostIP yes\n  HostKeyAlias WebAlias\n  UpdateHostKeys ask\n", &["web"]),
     (8, "Host web\n  ServerAliveInterval none\n  ConnectionAttempts 3\n  TCPKeepAlive no\n  AddressFamily inet6\n  BindAddress 10.0.0.1\n", &["web"]),

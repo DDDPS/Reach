@@ -439,11 +439,13 @@ mod tests {
 
     #[test]
     fn send_env_sends_nothing_until_approved() {
-        let o = Options { send_env: vec!["PATH".into()], ..Default::default() };
+        // A variable whose exact name is known: cargo sets it for tests (PATH
+        // is "Path" on Windows, and SendEnv matches names as written).
+        let o = Options { send_env: vec!["CARGO_PKG_NAME".into()], ..Default::default() };
         assert!(SessionPolicy::from_options(&o, None, false).env.is_empty());
         let allowed = SessionPolicy::from_options(&o, None, true);
-        assert!(allowed.env.iter().any(|(k, _)| k.eq_ignore_ascii_case("path")) || std::env::var("PATH").is_err());
-        assert_eq!(send_env_key(&o), "SendEnv PATH");
+        assert!(allowed.env.iter().any(|(k, _)| k == "CARGO_PKG_NAME") || std::env::var("CARGO_PKG_NAME").is_err());
+        assert_eq!(send_env_key(&o), "SendEnv CARGO_PKG_NAME");
     }
 
     #[test]

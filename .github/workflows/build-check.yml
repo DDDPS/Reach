@@ -148,6 +148,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/android-test"
           cp "$TEST_BIN" "$RUNNER_TEMP/android-test/reach-tests"
           cp "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android/libc++_shared.so" "$RUNNER_TEMP/android-test/"
+          # The known_hosts tests compare with OpenSSH's output, kept next to them.
+          cp -r src/ssh/knownhosts/testdata "$RUNNER_TEMP/android-test/testdata"
 
       - name: Run the tests on an Android emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -158,7 +160,7 @@ jobs:
           disable-animations: true
           script: |
             adb push "$RUNNER_TEMP/android-test/." /data/local/tmp/reach/
-            adb shell "cd /data/local/tmp/reach && chmod +x reach-tests && HOME=/data/local/tmp/reach TMPDIR=/data/local/tmp/reach LD_LIBRARY_PATH=/data/local/tmp/reach ./reach-tests"
+            adb shell "cd /data/local/tmp/reach && chmod +x reach-tests && REACH_KNOWNHOSTS_TESTDATA=/data/local/tmp/reach/testdata HOME=/data/local/tmp/reach TMPDIR=/data/local/tmp/reach LD_LIBRARY_PATH=/data/local/tmp/reach ./reach-tests"
 
   # The documentation site, built the way its deploy builds it: from docs/
   # alone, with the app never set up.
