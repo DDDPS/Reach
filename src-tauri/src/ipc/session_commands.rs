@@ -214,6 +214,7 @@ pub async fn session_create(
     via_session_id: Option<String>,
     try_agent_keys: Option<bool>,
     ssh_options: Option<crate::ssh::sshconf::session::SshOptions>,
+    wsl_distro: Option<String>,
 ) -> Result<SessionConfig, String> {
     let mut manager = state.vault_manager.lock().await;
     let kind = kind.unwrap_or_default();
@@ -245,6 +246,7 @@ pub async fn session_create(
         username,
         auth_method,
         kind,
+        wsl_distro,
         domain: domain.filter(|d| !d.trim().is_empty()),
         share_path: share_path.filter(|d| !d.trim().is_empty()),
         via_session_id: via_session_id.filter(|s| !s.is_empty()),
