@@ -1,6 +1,6 @@
 [package]
 name = "reach"
-version = "0.7.4"
+version = "0.7.5"
 description = "Cross-platform SSH & Remote Management Tool"
 authors = ["Reach Contributors"]
 edition = "2021"
@@ -27,22 +27,32 @@ thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-log = "0.2"
+log = "0.4"
 uuid = { version = "1", features = ["v4"] }
 
 # SSH
 # ring, the crypto the rest of the app installs for rustls (see run() in
 # lib.rs). rsa keeps RSA keys working.
-russh = { version = "0.63", default-features = false, features = ["ring", "rsa"] }
+russh = { version = "0.63", default-features = false, features = ["ring", "rsa", "des", "flate2"] }
 # Used to read what a key says
 # about itself (algorithm, fingerprint, whether it is encrypted) without
 # needing the passphrase.
 ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption"] }
-ssh2-config = "0.8"
+# PKCS11Provider (src/ssh/pkcs11.rs): the token's library, loaded at run time.
+# cryptoki-sys for the one call cryptoki does not offer on its own (C_Sign
+# after C_SignInit); both are already in the tree through sspi.
+cryptoki = "0.12"
+cryptoki-sys = "0.5"
+# SecurityKeyProvider middleware (src/ssh/sk.rs), loaded at run time as
+# OpenSSH dlopens it.
+libloading = "0.8"
 
 # Encryption
 # zeroize: wipe the hashing blocks and the keys ciphers hold when they drop.
 argon2 = { version = "0.6", features = ["zeroize"] }
 rand = "0.10"
+hickory-resolver = { version = "0.26", features = ["dnssec-ring"] }
 # Locking key material into RAM (VirtualLock / mlock); see src/vault/shield.rs.
 memsec = { version = "0.7", default-features = false, features = ["use_os"] }
 zeroize = { version = "1", features = ["derive"] }
@@ -63,6 +73,15 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 webpki-roots = "1"
 dirs = "7"
 sha2 = "0.11"
+# ssh_config as OpenSSH reads it: %C is a SHA-1, Include takes globs, Match
+# looks at the local host, user and networks.
+sha1 = "0.11"
+glob = "0.3"
+gethostname = "1"
+whoami = "2"
+if-addrs = "0.15"
+# The socket options ssh_config sets (IPQoS, TCPKeepAlive, binding).
+socket2 = { version = "0.6", features = ["all"] }
 # Keychain/credential storage
 # NOTE: Not available on Android - needs tauri-plugin-biometric for Android Keystore
 # The OS credential store holds the key for auto-unlock. keyring-core plus one
@@ -229,7 +248,12 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_Security_Authentication_Identity",
+    "Win32_Security_Credentials",
+    "Win32_Networking_WinSock",
     "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_NetworkManagement_IpHelper",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_RemoteDesktop",
     "Win32_System_Power",
@@ -309,6 +333,11 @@ ironrdp-connector = { path = "vendor/ironrdp-connector" }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# The system's GSSAPI library for Kerberos logins, loaded when first used
+# (see src/ssh/gssapi.rs), so Reach starts without one.
+[target.'cfg(all(unix, not(target_os = "android")))'.dependencies]
+libloading = "0.8"
+
 # Root certificates for HTTPS on Android; see src/http.rs.
 [target.'cfg(target_os = "android")'.dependencies]
 webpki-root-certs = "1"
@@ -321,6 +350,9 @@ kube = { version = "4.2", default-features = false, features = ["webpki-roots"] 
 # vendor/libsql/Cargo.toml.
 [patch.crates-io]
 libsql = { path = "vendor/libsql" }
+# russh with the older MACs and sntrup761x25519-sha512 an ssh_config may ask
+# for, none of them offered by default; see the header of vendor/russh/Cargo.toml.
+russh = { path = "vendor/russh" }
 
 [dev-dependencies]
 # Tests keep keychain entries in memory, never in the OS keychain.

@@ -44,6 +44,8 @@ jobs:
               # Test-only: fixed keys, salts and passwords on purpose (known
               # answers, test vaults). Unit tests live in *_tests.rs files.
               - src-tauri/src/**/*_tests.rs
+              # Modules whose tests sit in a tests.rs beside them.
+              - src-tauri/src/**/tests.rs
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4

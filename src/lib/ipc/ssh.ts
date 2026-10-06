@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import type { SshOptions } from './sessions';
 
 export interface JumpHostConnectParams {
   host: string;
@@ -45,6 +46,8 @@ export interface SshConnectParams {
   showLoginMessage?: boolean;
   /** Key sessions: also offer the SSH agent's keys if the session's key is refused. Off unless the session says so. */
   tryAgentKeys?: boolean;
+  /** The session's ssh_config settings, applied by the backend at connect. */
+  sshOptions?: SshOptions | null;
 }
 
 export interface ConnectionInfo {
@@ -89,6 +92,7 @@ export async function sshConnect(params: SshConnectParams): Promise<string> {
     showLoginMessage: params.showLoginMessage ?? null,
     sessionLog: params.sessionLog ?? null,
     tryAgentKeys: params.tryAgentKeys ?? null,
+    sshOptions: params.sshOptions ?? null,
   });
 }
 
@@ -112,6 +116,10 @@ export interface HostKeyPrompt {
   /** true = the stored key changed (possible MITM); false = unknown host (TOFU). */
   changed: boolean;
   oldFingerprint?: string | null;
+  /** VisualHostKey: the key's randomart. */
+  randomart?: string | null;
+  /** VerifyHostKeyDNS: whether a matching SSHFP record was found. */
+  dnsMatch?: boolean | null;
 }
 
 /** Report the user's accept/reject decision for a host-key prompt. */

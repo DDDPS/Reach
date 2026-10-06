@@ -1035,6 +1035,19 @@ impl VaultManager {
         self.user_uuid.clone()
     }
 
+    /// A key only this identity has (its own devices share it, nobody it
+    /// shares a vault with does), derived from the identity's secret for
+    /// signing the user's approvals of a session's commands and weaker
+    /// settings. `None` while locked.
+    pub fn approval_key(&self) -> Option<zeroize::Zeroizing<[u8; 32]>> {
+        let identity = self.identity.as_ref()?;
+        let secret = zeroize::Zeroizing::new(identity.with_secret(|s| s.to_bytes()));
+        let hk = Hkdf::<sha2::Sha256>::new(Some(b"reach ssh option approvals"), &secret[..]);
+        let mut key = zeroize::Zeroizing::new([0u8; 32]);
+        hk.expand(b"v1", &mut key[..]).ok()?;
+        Some(key)
+    }
+
     /// Export identity for backup.
     pub fn export_identity(&self) -> Result<String, VaultError> {
         let identity = self.identity.as_ref().ok_or(VaultError::Locked)?;

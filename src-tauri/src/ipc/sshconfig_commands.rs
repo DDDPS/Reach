@@ -1,37 +1,44 @@
-//! IPC commands for parsing and importing SSH config files.
+//! IPC commands for ssh_config: importing hosts, and what a session's
+//! settings do.
 
-use crate::ssh::config::{self, SshHostEntry};
+use crate::ssh::sshconf::env::SystemEnv;
+use crate::ssh::sshconf::import::{self, Scan};
+use crate::ssh::sshconf::report::{self, Report};
+use crate::ssh::sshconf::session::{resolve_session, SshOptions};
 
-/// List all named hosts from ~/.ssh/config.
+/// Every concrete host in ~/.ssh/config (and what it includes), resolved as
+/// ssh would, with a report of each line.
 #[tauri::command]
-pub async fn sshconfig_list_hosts() -> Result<Vec<SshHostEntry>, String> {
-    let config = config::parse_ssh_config()?;
-
-    match config {
-        Some(cfg) => Ok(config::list_hosts(&cfg)),
-        None => Ok(Vec::new()),
-    }
-}
-
-/// Resolve a single host from ~/.ssh/config with full details.
-#[tauri::command]
-pub async fn sshconfig_resolve_host(hostname: String) -> Result<SshHostEntry, String> {
-    let config = config::parse_ssh_config()?;
-
-    match config {
-        Some(cfg) => Ok(config::resolve_host(&cfg, &hostname)),
-        None => Err("No SSH config file found".to_string()),
-    }
+pub async fn sshconfig_scan() -> Result<Scan, String> {
+    let user = SystemEnv::user_config().ok_or("No home directory")?;
+    let system = SystemEnv::system_config();
+    tokio::task::spawn_blocking(move || import::scan(&user, &system)).await.map_err(|e| e.to_string())
 }
 
 /// Check if an SSH config file exists.
 #[tauri::command]
 pub async fn sshconfig_exists() -> Result<bool, String> {
-    let path = dirs::home_dir()
-        .map(|h| h.join(".ssh").join("config"));
+    Ok(SystemEnv::user_config().is_some_and(|p| p.exists()))
+}
 
-    match path {
-        Some(p) => Ok(p.exists()),
-        None => Ok(false),
-    }
+/// What a session's ssh_config settings do: every line, how it is used,
+/// what weakens the connection, what would run.
+#[tauri::command]
+pub async fn ssh_options_report(
+    state: tauri::State<'_, crate::state::AppState>,
+    host: String,
+    port: u16,
+    username: String,
+    options: SshOptions,
+) -> Result<Report, String> {
+    // As a connection would see them: only this person's approvals count.
+    let _ = &state;
+    let options = options.effective();
+    tokio::task::spawn_blocking(move || {
+        let res = resolve_session(&options, &host, port, &username);
+        let plan = crate::ssh::sshconf::apply::Plan::new(&res.resolved, russh::client::Config::default(), &options.accepted_weakenings, !options.untrusted_lines);
+        report::build(&res.resolved, &plan, &res.errors, &res.exec_pending)
+    })
+    .await
+    .map_err(|e| e.to_string())
 }

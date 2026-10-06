@@ -78,7 +78,59 @@ pub async fn session_list(state: State<'_, AppState>) -> Result<Vec<SessionConfi
         }
     }
 
-    Ok(unique_sessions(sessions))
+    let mut sessions = unique_sessions(sessions);
+    for s in &mut sessions {
+        open_approvals(&manager, s);
+    }
+    Ok(sessions)
+}
+
+/// What an approval is given for: the session and everything that decides
+/// where and how it connects. Change any of it (a shared vault's other
+/// members can) and the approvals given before no longer count. Credentials
+/// are left out, so saving a password does not cost the approvals.
+fn approval_context(s: &SessionConfig) -> String {
+    use sha2::Digest;
+    let jumps: Option<Vec<(String, u16, String)>> =
+        s.jump_chain.as_ref().map(|c| c.iter().map(|j| (j.host.clone(), j.port, j.username.clone())).collect());
+    let o = s.ssh_options.as_ref();
+    let v = serde_json::json!([
+        s.id,
+        s.host,
+        s.port,
+        s.username,
+        s.kind,
+        s.via_session_id,
+        s.shell,
+        jumps,
+        s.proxy,
+        o.map(|o| &o.imported),
+        o.map(|o| &o.lines),
+    ]);
+    sha2::Sha256::digest(v.to_string().as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// After reading a session: the user's approvals are the ones signed with
+/// their key for this session as it now is; nothing else in the record
+/// counts.
+fn open_approvals(manager: &crate::vault::VaultManager, session: &mut SessionConfig) {
+    let context = approval_context(session);
+    if let Some(o) = session.ssh_options.as_mut() {
+        let key = manager.approval_key();
+        let who = manager.get_user_uuid();
+        o.open_for(key.as_deref(), who.as_deref(), &context);
+    }
+}
+
+/// Before storing a session: the user's approvals signed into it, for it as
+/// it is saved.
+fn seal_approvals(manager: &crate::vault::VaultManager, session: &mut SessionConfig) {
+    let context = approval_context(session);
+    if let Some(o) = session.ssh_options.as_mut() {
+        let key = manager.approval_key();
+        let who = manager.get_user_uuid();
+        o.seal_for(key.as_deref(), who.as_deref(), &context);
+    }
 }
 
 /// One entry per session id, the first one found.
@@ -131,7 +183,9 @@ pub async fn session_get(
     let json = String::from_utf8(plaintext.expose_secret().clone())
         .map_err(|e| format!("Invalid UTF-8: {}", e))?;
 
-    serde_json::from_str(&json).map_err(|e| format!("Invalid session data: {}", e))
+    let mut session: SessionConfig = serde_json::from_str(&json).map_err(|e| format!("Invalid session data: {}", e))?;
+    open_approvals(&manager, &mut session);
+    Ok(session)
 }
 
 /// Create a new session configuration. O(1) insert.
@@ -159,6 +213,7 @@ pub async fn session_create(
     share_path: Option<String>,
     via_session_id: Option<String>,
     try_agent_keys: Option<bool>,
+    ssh_options: Option<crate::ssh::sshconf::session::SshOptions>,
 ) -> Result<SessionConfig, String> {
     let mut manager = state.vault_manager.lock().await;
     let kind = kind.unwrap_or_default();
@@ -182,7 +237,7 @@ pub async fn session_create(
         ensure_sessions_vault(&mut manager).await?
     };
 
-    let session = SessionConfig {
+    let mut session = SessionConfig {
         id: uuid::Uuid::new_v4().to_string(),
         name,
         host,
@@ -210,8 +265,10 @@ pub async fn session_create(
         jump_chain,
         proxy,
         shell,
+        ssh_options: ssh_options.filter(|o| !o.is_empty()),
     };
 
+    seal_approvals(&manager, &mut session);
     let json = serde_json::to_string(&session).map_err(|e| e.to_string())?;
     let plaintext = SecretBox::new(Box::new(json.into_bytes()));
 
@@ -228,6 +285,7 @@ pub async fn session_create(
         .map_err(|e| e.to_string())?;
 
     tracing::info!("Created session: {} in storage vault: {}", session.id, storage_vault_id);
+    open_approvals(&manager, &mut session);
     Ok(session)
 }
 
@@ -236,7 +294,7 @@ pub async fn session_create(
 #[tracing::instrument(skip(state))]
 pub async fn session_update(
     state: State<'_, AppState>,
-    session: SessionConfig,
+    mut session: SessionConfig,
 ) -> Result<SessionConfig, String> {
     let manager = state.vault_manager.lock().await;
 
@@ -248,6 +306,7 @@ pub async fn session_update(
     let storage_vault_id = find_session_vault(&manager, &session.id).await
         .ok_or_else(|| format!("Session not found: {}", session.id))?;
 
+    seal_approvals(&manager, &mut session);
     let json = serde_json::to_string(&session).map_err(|e| e.to_string())?;
     let plaintext = SecretBox::new(Box::new(json.into_bytes()));
 
@@ -258,7 +317,48 @@ pub async fn session_update(
         .map_err(|e| e.to_string())?;
 
     tracing::info!("Updated session: {} in vault: {}", session.id, storage_vault_id);
+    open_approvals(&manager, &mut session);
     Ok(session)
+}
+
+/// Move many sessions into a folder (`None`: out of any folder) in one
+/// go. Only `folder_id` changes: each stored session is read and written
+/// back with every other field as it was, including fields a newer Reach
+/// may have added. Returns how many moved; a session that no longer
+/// exists is skipped.
+#[tauri::command]
+#[tracing::instrument(skip(state, session_ids), fields(count = session_ids.len()))]
+pub async fn session_move_to_folder(
+    state: State<'_, AppState>,
+    session_ids: Vec<String>,
+    folder_id: Option<String>,
+) -> Result<u32, String> {
+    let manager = state.vault_manager.lock().await;
+    if manager.is_locked() {
+        return Err("Vault is locked".to_string());
+    }
+    let mut moved = 0u32;
+    for id in &session_ids {
+        let Some(vault_id) = find_session_vault(&manager, id).await else { continue };
+        let plaintext = manager.read_secret(&vault_id, id).await.map_err(|e| e.to_string())?;
+        use secrecy::ExposeSecret;
+        let mut value: serde_json::Value =
+            serde_json::from_slice(plaintext.expose_secret()).map_err(|e| format!("Invalid session data: {e}"))?;
+        let Some(obj) = value.as_object_mut() else { return Err(format!("Invalid session data: {id}")) };
+        let target = folder_id.clone().map_or(serde_json::Value::Null, serde_json::Value::String);
+        if obj.get("folder_id") == Some(&target) {
+            continue;
+        }
+        obj.insert("folder_id".into(), target);
+        let json = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
+        manager
+            .update_secret(&vault_id, id, SecretBox::new(Box::new(json)))
+            .await
+            .map_err(|e| e.to_string())?;
+        moved += 1;
+    }
+    tracing::info!("Moved {moved} sessions to folder {folder_id:?}");
+    Ok(moved)
 }
 
 /// Delete a session by ID. O(1) delete.
@@ -535,5 +635,53 @@ mod unique_tests {
         let listed = unique_sessions(vec![session("a", "v1"), session("b", "v1"), session("a", "v2")]);
         let ids: Vec<_> = listed.iter().map(|s| (s.id.as_str(), s.vault_id.as_deref())).collect();
         assert_eq!(ids, [("a", Some("v1")), ("b", Some("v1"))]);
+    }
+}
+
+#[cfg(test)]
+mod approval_tests {
+    use super::*;
+
+    fn session() -> SessionConfig {
+        serde_json::from_value(serde_json::json!({
+            "id": "s1", "name": "web", "host": "web.example", "port": 22, "username": "u",
+            "auth_method": { "type": "Agent" }, "folder_id": null, "tags": [],
+            "ssh_options": { "lines": ["StrictHostKeyChecking no"] },
+        }))
+        .unwrap()
+    }
+
+    fn mine_after_reading(s: &SessionConfig, key: &[u8; 32]) -> Vec<String> {
+        let mut s = s.clone();
+        let context = approval_context(&s);
+        let o = s.ssh_options.as_mut().unwrap();
+        o.open_for(Some(key), Some("alice"), &context);
+        o.my_accepted_weakenings.clone().unwrap()
+    }
+
+    #[test]
+    fn an_approval_does_not_follow_a_changed_server() {
+        let key = [3u8; 32];
+        let mut s = session();
+        s.ssh_options.as_mut().unwrap().my_accepted_weakenings = Some(vec!["StrictHostKeyChecking no".into()]);
+        let context = approval_context(&s);
+        s.ssh_options.as_mut().unwrap().seal_for(Some(&key), Some("alice"), &context);
+        assert_eq!(mine_after_reading(&s, &key), vec!["StrictHostKeyChecking no"]);
+
+        // Someone points the session at their own server: the approval stays
+        // in the record but counts for nothing.
+        let mut moved = s.clone();
+        moved.host = "attacker.example".into();
+        assert!(mine_after_reading(&moved, &key).is_empty());
+        let mut lines = s.clone();
+        lines.ssh_options.as_mut().unwrap().lines.push("ProxyJump evil".into());
+        assert!(mine_after_reading(&lines, &key).is_empty());
+
+        // Saving a password, a name or a folder changes none of that.
+        let mut renamed = s.clone();
+        renamed.name = "web (prod)".into();
+        renamed.folder_id = Some("f".into());
+        renamed.auth_method = AuthMethod::Password { password: Some("pw".into()) };
+        assert_eq!(mine_after_reading(&renamed, &key), vec!["StrictHostKeyChecking no"]);
     }
 }

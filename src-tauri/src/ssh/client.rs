@@ -354,8 +354,8 @@ fn describe_key_load_error(
 /// server refused it on the way.
 #[derive(Debug, Default)]
 pub(crate) struct AuthOutcome {
-    by: Option<AuthBy>,
-    refused_key: Option<String>,
+    pub(crate) by: Option<AuthBy>,
+    pub(crate) refused_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -363,6 +363,10 @@ pub(crate) enum AuthBy {
     Key,
     Agent,
     Password,
+    /// Kerberos, through gssapi-with-mic.
+    Gssapi,
+    /// The server let the user in without credentials ("none").
+    NoCredentials,
 }
 
 impl AuthOutcome {
@@ -384,6 +388,26 @@ impl AuthOutcome {
 /// refuse SHA-1 (OpenSSH 8.8+) sends its list, as all have since 7.2.
 fn rsa_hashes(known: Option<Option<russh::keys::HashAlg>>) -> Vec<Option<russh::keys::HashAlg>> {
     vec![known.flatten()]
+}
+
+/// Log in on one hop: under its ssh_config settings when it has some
+/// (OpenSSH's rules, see `userauth`), else Reach's own cascade.
+pub(crate) async fn login<H: russh::client::Handler>(
+    handle: &mut russh::client::Handle<H>,
+    username: &str,
+    auth: &AuthParams,
+    opts: &HopOptions,
+    app: Option<&dyn crate::ssh::prompt::Asker>,
+    host: &str,
+    port: u16,
+) -> Result<AuthOutcome, SshError> {
+    match &opts.auth {
+        Some(policy) => {
+            let ui = crate::ssh::userauth::Ui { app, host, port };
+            crate::ssh::userauth::authenticate(handle, username, auth, policy, ui).await
+        }
+        None => cascade_authenticate(handle, username, auth).await,
+    }
 }
 
 pub(crate) async fn cascade_authenticate<H: russh::client::Handler>(
@@ -550,7 +574,7 @@ async fn try_agent_auth<H: russh::client::Handler>(
 /// Pageant announces itself with a hidden window of class and title
 /// "Pageant"; that window is how every client finds it.
 #[cfg(windows)]
-fn pageant_is_running() -> bool {
+pub(crate) fn pageant_is_running() -> bool {
     use windows::core::w;
     use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
     // SAFETY: two valid, NUL-terminated wide strings; no other state involved.
@@ -878,6 +902,73 @@ pub struct JumpHostParams {
     pub port: u16,
     pub username: String,
     pub auth: AuthParams,
+    pub opts: HopOptions,
+}
+
+/// What ssh_config makes of one hop (see `crate::ssh::sshconf`): the SSH
+/// engine's settings and how its socket is opened. The default is Reach's
+/// own behaviour.
+#[derive(Debug, Clone)]
+pub struct HopOptions {
+    pub config: Arc<russh::client::Config>,
+    pub socket: crate::ssh::sshconf::apply::SocketPlan,
+    /// How to log in, when ssh_config says; `None` keeps Reach's own login.
+    pub auth: Option<crate::ssh::userauth::AuthPolicy>,
+    /// How to check the host key, when ssh_config says; `None` keeps
+    /// Reach's own store and question.
+    pub hostkeys: Option<Arc<crate::ssh::hostkeys::HostKeyPolicy>>,
+    /// The session itself, when ssh_config says (target only).
+    pub session: Option<Arc<crate::ssh::session_opts::SessionPolicy>>,
+    /// Why not to connect (RefuseConnection, an unapproved ProxyCommand).
+    pub refused: Option<String>,
+    /// ProxyCommand, approved.
+    pub proxy_command: Option<crate::ssh::proxycmd::ProxyCommand>,
+    /// Forwards and agent forwarding (target only).
+    pub forwards: Option<Arc<crate::ssh::forwarding::ForwardTable>>,
+    /// LogLevel and LogVerbose (target only).
+    pub log: Option<(Option<String>, Vec<String>)>,
+    /// The connection's log, made from `log` when connecting.
+    pub connlog: Option<Arc<crate::ssh::connlog::ConnLog>>,
+    /// ControlMaster/ControlPath/ControlPersist (target only).
+    pub control: Option<crate::ssh::control::ControlPlan>,
+}
+
+impl Default for HopOptions {
+    fn default() -> Self {
+        Self { config: Arc::new(russh::client::Config::default()), socket: Default::default(), auth: None, hostkeys: None, session: None, refused: None, proxy_command: None, forwards: None, log: None, connlog: None, control: None }
+    }
+}
+
+impl From<crate::ssh::sshconf::apply::Plan> for HopOptions {
+    fn from(p: crate::ssh::sshconf::apply::Plan) -> Self {
+        Self { config: Arc::new(p.config), socket: p.socket, auth: p.auth, hostkeys: p.hostkeys.map(Arc::new), session: p.session.map(Arc::new), refused: p.refused, proxy_command: p.proxy_command, forwards: p.forwards.map(crate::ssh::forwarding::ForwardTable::new), log: p.log, connlog: None, control: p.control }
+    }
+}
+
+impl HopOptions {
+    /// The engine's settings for `host`: with GSSAPIKeyExchange, the
+    /// GSS-API key exchange methods in front once a Kerberos context for the
+    /// server can be made, as ssh_kex2 in the GSSAPI patch does.
+    pub(crate) async fn engine_config(&self, host: &str) -> Arc<russh::client::Config> {
+        let Some(k) = self.auth.as_ref().and_then(|a| a.gss_kex.as_ref()) else {
+            return self.config.clone();
+        };
+        match crate::ssh::gssapi::kex_config(&self.config, k, host).await {
+            Some(c) => Arc::new(c),
+            None => self.config.clone(),
+        }
+    }
+
+    /// The whole connect, handshake and login within `base`, stretched to
+    /// leave room for every ConnectionAttempts try of ConnectTimeout.
+    fn connect_limit(&self, base: std::time::Duration) -> std::time::Duration {
+        let per_try = self.socket.connect_timeout.unwrap_or(base) + std::time::Duration::from_secs(1);
+        let attempts = self.socket.attempts.max(1);
+        if attempts == 1 && self.socket.connect_timeout.is_none_or(|t| t <= base) {
+            return base;
+        }
+        base + per_try * attempts
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -944,39 +1035,47 @@ impl SshManager {
         proxy: Option<ProxyConfig>,
         shell: Option<String>,
         login: LoginOptions,
+        opts: HopOptions,
     ) -> Result<ActiveConnection, SshError> {
         tracing::info!("SSH connecting to {}@{}:{}", username, host, port);
 
-        let timeout_duration = std::time::Duration::from_secs(15);
+        if let Some(msg) = &opts.refused {
+            return Err(SshError::ConnectionFailed(msg.clone()));
+        }
+        let info = ConnectionInfo { id: id.to_string(), host: host.to_string(), port, username: username.to_string() };
+        if let Some(conn) = shared_session(&info, &opts, cols, rows, shell.as_deref(), &login, &app_handle).await {
+            return conn;
+        }
+        // X11 first: a first start of Reach's X server (download, unpack,
+        // start) must not count against the connect timeout.
+        if let Some(t) = &opts.forwards {
+            t.prepare_x11().await;
+        }
+        let timeout_duration = opts.connect_limit(std::time::Duration::from_secs(15));
         let connect_future = async {
-            let handle = Self::handshake_direct(host, port, username, &auth, proxy.as_ref(), app_handle.clone()).await?;
+            let handle = Self::handshake_direct(host, port, username, &auth, proxy.as_ref(), app_handle.clone(), &opts, true).await?;
             tracing::info!("SSH authenticated for {}@{}:{}", username, host, port);
 
-            let channel = handle.channel_open_session().await
-                .map_err(|e| SshError::ChannelError(format!("Failed to open session: {}", e)))?;
-
-            open_interactive_shell(&channel, cols, rows, shell.as_deref()).await?;
+            let (channel, tty) = open_session(&handle, &opts, cols, rows, shell.as_deref()).await?;
 
             tracing::info!("SSH shell opened for {}@{}:{}", username, host, port);
 
-            Ok((handle, channel))
+            Ok((handle, channel, tty))
         };
 
-        let (handle, channel) = within_connect_limit(timeout_duration, connect_future).await?;
+        let (handle, channel, tty) = within_connect_limit(timeout_duration, connect_future).await?;
 
-        let info = ConnectionInfo {
-            id: id.to_string(),
-            host: host.to_string(),
-            port,
-            username: username.to_string(),
-        };
-
-        into_active_connection(channel, handle, info, shell.as_deref(), login, app_handle, Vec::new()).await
+        let shared: SharedHandle = Arc::new(tokio::sync::Mutex::new(handle));
+        if let Some(cp) = &opts.control {
+            crate::ssh::control::register(cp, &shared, &[], &crate::ssh::control::target(&info.username, &info.host, info.port));
+        }
+        into_active_connection(channel, shared, info, shell.as_deref(), login, app_handle, Vec::new(), opts.session.clone(), tty, opts.forwards.clone(), opts.connlog.clone()).await
     }
 
     /// Connect and authenticate, directly or through a proxy. Opens no channel:
     /// the terminal asks for a shell on top, a database tunnel only for
     /// direct-tcpip channels.
+    #[expect(clippy::too_many_arguments, reason = "one hop's settings, passed through as they are")]
     async fn handshake_direct(
         host: &str,
         port: u16,
@@ -984,9 +1083,11 @@ impl SshManager {
         auth: &AuthParams,
         proxy: Option<&ProxyConfig>,
         app_handle: tauri::AppHandle,
+        opts: &HopOptions,
+        interactive: bool,
     ) -> Result<russh::client::Handle<SshClientHandler>, SshError> {
-        let config = Arc::new(russh::client::Config::default());
-        let handler = SshClientHandler::new(host, port, Some(app_handle.clone()));
+        let config = opts.engine_config(host).await;
+        let handler = SshClientHandler::new(host, port, Some(app_handle.clone())).with_hostkeys(opts.hostkeys.clone()).with_forwards(opts.forwards.clone());
 
         let mut handle = if let Some(proxy) = proxy {
             tracing::info!("SSH connecting via {} proxy {}:{}", proxy.proxy_type, proxy.host, proxy.port);
@@ -994,19 +1095,31 @@ impl SshManager {
             russh::client::connect_stream(config, stream, handler)
                 .await
                 .map_err(|e| SshError::ConnectionFailed(format!("Proxy SSH handshake failed: {}", e)))?
+        } else if let Some(pc) = &opts.proxy_command {
+            let cmd = crate::ssh::proxycmd::expand(pc, host, port, username).map_err(SshError::ConnectionFailed)?;
+            tracing::info!("SSH connecting through ProxyCommand: {cmd}");
+            let failed = |e: String| SshError::ConnectionFailed(format!("ProxyCommand: {e}"));
+            if pc.use_fdpass {
+                let stream = crate::ssh::proxycmd::fdpass(&cmd).await.map_err(|e| failed(e.to_string()))?;
+                russh::client::connect_stream(config, stream, handler).await.map_err(|e| failed(e.to_string()))?
+            } else {
+                let stream = crate::ssh::proxycmd::spawn(&cmd).map_err(|e| failed(e.to_string()))?;
+                russh::client::connect_stream(config, stream, handler).await.map_err(|e| failed(e.to_string()))?
+            }
         } else {
-            russh::client::connect(config, (host, port), handler)
+            // "No route to host" on a Mac usually means the local network
+            // permission, not the route (issue #47).
+            let describe = |e: russh::Error| SshError::ConnectionFailed(crate::ssh::netdiag::describe_connect_error(host, &e));
+            let stream = crate::ssh::sshconf::net::connect(host, port, &opts.socket, interactive)
                 .await
-                // "No route to host" on a Mac usually means the local
-                // network permission, not the route (issue #47).
-                .map_err(|e| SshError::ConnectionFailed(
-                    crate::ssh::netdiag::describe_connect_error(host, &e),
-                ))?
+                .map_err(|e| describe(russh::Error::IO(e)))?;
+            crate::ssh::hostbased::remember_socket(opts.auth.as_ref(), &stream);
+            russh::client::connect_stream(config, stream, handler).await.map_err(describe)?
         };
 
         // Authenticate using a cascading strategy: configured key → agent → password.
         // The first method the server accepts wins. Mirrors OpenSSH's progressive auth.
-        let outcome = cascade_authenticate(&mut handle, username, auth).await?;
+        let outcome = login(&mut handle, username, auth, opts, Some(&app_handle as &dyn crate::ssh::prompt::Asker), host, port).await?;
         let refused = outcome.refused_key.clone();
         let by = outcome.into_result()?;
         // Logged in, but not with the session's key: the agent or a password
@@ -1116,13 +1229,25 @@ impl SshManager {
         app_handle: tauri::AppHandle,
         shell: Option<String>,
         login: LoginOptions,
+        opts: HopOptions,
     ) -> Result<ActiveConnection, SshError> {
         tracing::info!(
             "SSH connecting to {}@{}:{} via {} jump host(s)",
             target_username, target_host, target_port, jump_chain.len()
         );
+        if let Some(msg) = &opts.refused {
+            return Err(SshError::ConnectionFailed(msg.clone()));
+        }
+        let shared_info = ConnectionInfo { id: id.to_string(), host: target_host.to_string(), port: target_port, username: target_username.to_string() };
+        if let Some(conn) = shared_session(&shared_info, &opts, cols, rows, shell.as_deref(), &login, &app_handle).await {
+            return conn;
+        }
 
-        let timeout_duration = std::time::Duration::from_secs(30);
+        if let Some(t) = &opts.forwards {
+            t.prepare_x11().await;
+        }
+        let base = std::time::Duration::from_secs(30);
+        let timeout_duration = jump_chain.first().map_or(base, |j| j.opts.connect_limit(base));
         let connect_future = Self::handshake_via_jump(
             target_host,
             target_port,
@@ -1130,6 +1255,7 @@ impl SshManager {
             &target_auth,
             &jump_chain,
             app_handle.clone(),
+            &opts,
         );
 
         let (target_handle, jump_handles) =
@@ -1141,12 +1267,7 @@ impl SshManager {
         );
 
         // Open session, request PTY and the (optionally overridden) shell on target
-        let channel = target_handle
-            .channel_open_session()
-            .await
-            .map_err(|e| SshError::ChannelError(format!("Failed to open session: {}", e)))?;
-
-        open_interactive_shell(&channel, cols, rows, shell.as_deref()).await?;
+        let (channel, tty) = open_session(&target_handle, &opts, cols, rows, shell.as_deref()).await?;
 
         tracing::info!(
             "SSH shell opened for {}@{}:{} (via jump)",
@@ -1160,7 +1281,11 @@ impl SshManager {
             username: target_username.to_string(),
         };
 
-        into_active_connection(channel, target_handle, info, shell.as_deref(), login, app_handle, jump_handles).await
+        let shared: SharedHandle = Arc::new(tokio::sync::Mutex::new(target_handle));
+        if let Some(cp) = &opts.control {
+            crate::ssh::control::register(cp, &shared, &jump_handles, &crate::ssh::control::target(&info.username, &info.host, info.port));
+        }
+        into_active_connection(channel, shared, info, shell.as_deref(), login, app_handle, jump_handles, opts.session.clone(), tty, opts.forwards.clone(), opts.connlog.clone()).await
     }
 
     /// Connect and authenticate on the target through each jump host in turn.
@@ -1172,29 +1297,25 @@ impl SshManager {
         target_auth: &AuthParams,
         jump_chain: &[JumpHostParams],
         app_handle: tauri::AppHandle,
+        target_opts: &HopOptions,
     ) -> Result<(russh::client::Handle<SshClientHandler>, Vec<SharedHandle>), SshError> {
         let mut jump_handles: Vec<SharedHandle> = Vec::new();
 
         // Step 1: Connect to the first jump host directly
         let first_jump = &jump_chain[0];
-        let config = Arc::new(russh::client::Config::default());
-        let handler = SshClientHandler::new(first_jump.host.as_str(), first_jump.port, Some(app_handle.clone()));
+        let config = first_jump.opts.engine_config(&first_jump.host).await;
+        let handler = SshClientHandler::new(first_jump.host.as_str(), first_jump.port, Some(app_handle.clone())).with_hostkeys(first_jump.opts.hostkeys.clone());
 
-        let mut current_handle = russh::client::connect(
-            config,
-            (first_jump.host.as_str(), first_jump.port),
-            handler,
-        )
-        .await
-        .map_err(|e| {
-            SshError::ConnectionFailed(format!(
-                "Jump host {} connection failed: {}",
-                first_jump.host, e
-            ))
-        })?;
+        let failed = |e: String| SshError::ConnectionFailed(format!("Jump host {} connection failed: {}", first_jump.host, e));
+        let stream = crate::ssh::sshconf::net::connect(&first_jump.host, first_jump.port, &first_jump.opts.socket, false)
+            .await
+            .map_err(|e| failed(e.to_string()))?;
+        let mut current_handle = russh::client::connect_stream(config, stream, handler)
+            .await
+            .map_err(|e| failed(e.to_string()))?;
 
         // Authenticate on first jump host
-        Self::authenticate_handle(&mut current_handle, &first_jump.username, &first_jump.auth)
+        Self::authenticate_handle(&mut current_handle, &first_jump.username, &first_jump.auth, &first_jump.opts, &app_handle, &first_jump.host, first_jump.port)
             .await?;
 
         tracing::info!("Authenticated on jump host {}", first_jump.host);
@@ -1228,8 +1349,8 @@ impl SshManager {
                 };
 
                 let stream = channel.into_stream();
-                let config = Arc::new(russh::client::Config::default());
-                let handler = SshClientHandler::new(next_jump.host.as_str(), next_jump.port, Some(app_handle.clone()));
+                let config = next_jump.opts.engine_config(&next_jump.host).await;
+                let handler = SshClientHandler::new(next_jump.host.as_str(), next_jump.port, Some(app_handle.clone())).with_hostkeys(next_jump.opts.hostkeys.clone());
 
                 let mut next_handle =
                     russh::client::connect_stream(config, stream, handler)
@@ -1245,6 +1366,10 @@ impl SshManager {
                     &mut next_handle,
                     &next_jump.username,
                     &next_jump.auth,
+                    &next_jump.opts,
+                    &app_handle,
+                    &next_jump.host,
+                    next_jump.port,
                 )
                 .await?;
 
@@ -1275,8 +1400,8 @@ impl SshManager {
             };
 
             let stream = channel.into_stream();
-            let config = Arc::new(russh::client::Config::default());
-            let handler = SshClientHandler::new(target_host, target_port, Some(app_handle.clone()));
+            let config = target_opts.engine_config(target_host).await;
+            let handler = SshClientHandler::new(target_host, target_port, Some(app_handle.clone())).with_hostkeys(target_opts.hostkeys.clone()).with_forwards(target_opts.forwards.clone());
 
             let mut target_handle =
                 russh::client::connect_stream(config, stream, handler)
@@ -1292,6 +1417,10 @@ impl SshManager {
                 &mut target_handle,
                 target_username,
                 target_auth,
+                target_opts,
+                &app_handle,
+                target_host,
+                target_port,
             )
             .await?;
 
@@ -1320,8 +1449,8 @@ impl SshManager {
             };
 
             let stream = channel.into_stream();
-            let config = Arc::new(russh::client::Config::default());
-            let handler = SshClientHandler::new(target_host, target_port, Some(app_handle.clone()));
+            let config = target_opts.engine_config(target_host).await;
+            let handler = SshClientHandler::new(target_host, target_port, Some(app_handle.clone())).with_hostkeys(target_opts.hostkeys.clone()).with_forwards(target_opts.forwards.clone());
 
             let mut target_handle =
                 russh::client::connect_stream(config, stream, handler)
@@ -1337,6 +1466,10 @@ impl SshManager {
                 &mut target_handle,
                 target_username,
                 target_auth,
+                target_opts,
+                &app_handle,
+                target_host,
+                target_port,
             )
             .await?;
 
@@ -1347,6 +1480,7 @@ impl SshManager {
     /// An authenticated connection with no shell, for callers that only need
     /// channels — a database reached through a saved session, for one. Uses
     /// the same handshake, host-key check and jump chain as the terminal.
+    #[expect(clippy::too_many_arguments, reason = "one connection's settings, passed through as they are")]
     pub(crate) async fn open_headless(
         host: &str,
         port: u16,
@@ -1355,14 +1489,19 @@ impl SshManager {
         jump_chain: Vec<JumpHostParams>,
         proxy: Option<ProxyConfig>,
         app_handle: tauri::AppHandle,
+        opts: HopOptions,
     ) -> Result<HeadlessConnection, SshError> {
-        let timeout = std::time::Duration::from_secs(if jump_chain.is_empty() { 15 } else { 30 });
+        if let Some(msg) = &opts.refused {
+            return Err(SshError::ConnectionFailed(msg.clone()));
+        }
+        let base = std::time::Duration::from_secs(if jump_chain.is_empty() { 15 } else { 30 });
+        let timeout = jump_chain.first().map_or(&opts, |j| &j.opts).connect_limit(base);
         let connect = async {
             if jump_chain.is_empty() {
-                let handle = Self::handshake_direct(host, port, username, &auth, proxy.as_ref(), app_handle).await?;
+                let handle = Self::handshake_direct(host, port, username, &auth, proxy.as_ref(), app_handle, &opts, false).await?;
                 Ok::<_, SshError>((handle, Vec::new()))
             } else {
-                Self::handshake_via_jump(host, port, username, &auth, &jump_chain, app_handle).await
+                Self::handshake_via_jump(host, port, username, &auth, &jump_chain, app_handle, &opts).await
             }
         };
         let (handle, jump_handles) = within_connect_limit(timeout, connect).await?;
@@ -1376,8 +1515,12 @@ impl SshManager {
         handle: &mut russh::client::Handle<SshClientHandler>,
         username: &str,
         auth: &AuthParams,
+        opts: &HopOptions,
+        app: &tauri::AppHandle,
+        host: &str,
+        port: u16,
     ) -> Result<(), SshError> {
-        cascade_authenticate(handle, username, auth).await?.into_result().map(|_| ())
+        login(handle, username, auth, opts, Some(app as &dyn crate::ssh::prompt::Asker), host, port).await?.into_result().map(|_| ())
     }
 
     pub fn send_data(&self, id: &str, data: &[u8]) -> Result<(), SshError> {
@@ -1729,7 +1872,7 @@ pub(crate) async fn within_connect_limit<T>(
         tokio::select! {
             done = &mut attempt => return done,
             _ = tokio::time::sleep(tick) => {
-                if hostkey_prompts().lock().unwrap().is_empty() {
+                if hostkey_prompts().lock().unwrap().is_empty() && !crate::ssh::prompt::any_open() {
                     spent += tick;
                 }
                 if spent >= limit {
@@ -1776,6 +1919,12 @@ struct HostKeyPrompt {
     /// brand-new (unknown) host being trusted on first use (TOFU).
     changed: bool,
     old_fingerprint: Option<String>,
+    /// VisualHostKey: the key's randomart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    randomart: Option<String>,
+    /// VerifyHostKeyDNS: whether a matching SSHFP record was found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dns_match: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -1783,11 +1932,37 @@ pub struct SshClientHandler {
     host: String,
     port: u16,
     app_handle: Option<tauri::AppHandle>,
+    hostkeys: Option<Arc<crate::ssh::hostkeys::HostKeyPolicy>>,
+    forwards: Option<Arc<crate::ssh::forwarding::ForwardTable>>,
+    /// VerifyHostKeyDNS's finding for the host-key question.
+    dns_match: Option<bool>,
+    hostkey_update: crate::ssh::hostkey_update::UpdateState,
 }
 
 impl SshClientHandler {
     pub fn new(host: impl Into<String>, port: u16, app_handle: Option<tauri::AppHandle>) -> Self {
-        Self { host: host.into(), port, app_handle }
+        Self { host: host.into(), port, app_handle, hostkeys: None, forwards: None, dns_match: None, hostkey_update: Default::default() }
+    }
+
+    /// Answer channels the server opens for forwards (see `forwarding`).
+    pub fn with_forwards(mut self, table: Option<Arc<crate::ssh::forwarding::ForwardTable>>) -> Self {
+        self.forwards = table;
+        self
+    }
+
+    /// Check host keys under ssh_config settings (see `hostkeys`).
+    pub fn with_hostkeys(mut self, policy: Option<Arc<crate::ssh::hostkeys::HostKeyPolicy>>) -> Self {
+        self.hostkeys = policy;
+        self
+    }
+
+    /// Tell the user why a host key was refused; the connection error alone
+    /// would only say the key was not accepted.
+    fn refused(&self, reason: &str) {
+        tracing::warn!("Host key for {}:{} refused: {reason}", self.host, self.port);
+        if let Some(app) = &self.app_handle {
+            let _ = app.emit("ssh-hostkey-refused", serde_json::json!({ "host": self.host, "port": self.port, "reason": reason }));
+        }
     }
 
     fn known_hosts_path() -> std::path::PathBuf {
@@ -1805,6 +1980,7 @@ impl SshClientHandler {
         key_type: &str,
         changed: bool,
         old_fingerprint: Option<String>,
+        randomart: Option<String>,
     ) -> bool {
         let Some(app) = self.app_handle.clone() else {
             tracing::warn!(
@@ -1830,6 +2006,8 @@ impl SshClientHandler {
             key_type: key_type.to_string(),
             changed,
             old_fingerprint,
+            randomart,
+            dns_match: self.dns_match,
         };
         if app.emit("ssh-hostkey-prompt", &payload).is_err() {
             return false;
@@ -1848,6 +2026,83 @@ struct KnownHosts {
 impl russh::client::Handler for SshClientHandler {
     type Error = russh::Error;
 
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        let ok = self.forwards.clone().is_some_and(|t| crate::ssh::forwarding::on_forwarded_tcpip(t, channel, connected_address, connected_port));
+        if ok { reply.accept().await } else { reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await }
+        Ok(())
+    }
+
+    async fn server_channel_open_forwarded_streamlocal(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        socket_path: &str,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        let ok = self.forwards.clone().is_some_and(|t| crate::ssh::forwarding::on_forwarded_streamlocal(t, channel, socket_path));
+        if ok { reply.accept().await } else { reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await }
+        Ok(())
+    }
+
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        let ok = self.forwards.clone().is_some_and(|t| crate::ssh::forwarding::on_agent(t, channel));
+        if ok { reply.accept().await } else { reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await }
+        Ok(())
+    }
+
+    async fn server_channel_open_x11(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        let ok = self.forwards.clone().is_some_and(|t| crate::ssh::forwarding::on_x11(t, channel));
+        if ok { reply.accept().await } else { reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await }
+        Ok(())
+    }
+
+    /// The server's login banner, shown as ssh shows it: through the log,
+    /// at LogLevel INFO and above.
+    async fn auth_banner(&mut self, banner: &str, _session: &mut russh::client::Session) -> Result<(), Self::Error> {
+        tracing::warn!(target: crate::ssh::connlog::BANNER_TARGET, "{banner}");
+        Ok(())
+    }
+
+    /// WarnWeakCrypto, as OpenSSH 10.1+ warns: a key exchange that is not
+    /// post-quantum could be recorded now and broken later.
+    async fn kex_done(
+        &mut self,
+        _shared_secret: Option<&[u8]>,
+        names: &russh::Names,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        let kex: &str = names.kex.as_ref();
+        let pq = matches!(kex, "mlkem768x25519-sha256" | "sntrup761x25519-sha512" | "sntrup761x25519-sha512@openssh.com");
+        if !pq && self.hostkeys.as_ref().is_some_and(|p| p.warn_weak_crypto) {
+            tracing::warn!("{}:{} uses the key exchange {kex}, which is not post-quantum", self.host, self.port);
+            if let Some(app) = &self.app_handle {
+                let _ = app.emit("ssh-weak-kex", serde_json::json!({ "host": self.host, "port": self.port, "kex": kex }));
+            }
+        }
+        Ok(())
+    }
+
     async fn check_server_key(
         &mut self,
         server_public_key: &russh::keys::PublicKeyOrCertificate,
@@ -1857,7 +2112,78 @@ impl russh::client::Handler for SshClientHandler {
         let fingerprint = host_key_fingerprint(&key);
         let key_type = key.algorithm().to_string();
 
-        Ok(verify_host_identity(self.app_handle.clone(), &self.host, self.port, &host_id, &fingerprint, &key_type).await)
+        let Some(policy) = self.hostkeys.clone() else {
+            return Ok(verify_host_identity(self.app_handle.clone(), &self.host, self.port, &host_id, &fingerprint, &key_type).await);
+        };
+        use crate::ssh::hostkeys::{Strict, Verdict};
+        // VerifyHostKeyDNS, after the revocation checks and before
+        // known_hosts, as sshconnect.c verify_host_key. Certificates are
+        // checked by their plain key.
+        if policy.verify_dns != 0 && policy.pre_check(&self.host, server_public_key).is_none() {
+            let dns = crate::ssh::dnsfp::check(&self.host, &key).await;
+            if let Some(d) = dns.filter(|d| d.found) {
+                if policy.verify_dns == 1 && d.matched && d.secure {
+                    tracing::info!("Host key for {} verified by DNSSEC-secured SSHFP records", self.host);
+                    return Ok(true);
+                }
+                if !d.matched {
+                    tracing::warn!("The host key for {} does not match its SSHFP records in DNS; update the SSHFP RR with the new host key", self.host);
+                }
+            }
+            self.dns_match = Some(dns.is_some_and(|d| d.found && d.matched));
+        }
+        if !policy.use_files {
+            // Reach's own store, with what ssh_config says on top.
+            if let Some(v) = policy.pre_check(&self.host, server_public_key) {
+                return Ok(match v {
+                    Verdict::Refuse(r) => {
+                        self.refused(&r);
+                        false
+                    }
+                    _ => true,
+                });
+            }
+            return Ok(verify_host_identity_with(self.app_handle.clone(), &self.host, self.port, &host_id, &fingerprint, &key_type, policy.strict).await);
+        }
+        // A few small files, and KnownHostsCommand when the user allowed it.
+        let verdict = policy.verify(&self.host, self.port, server_public_key);
+        // UpdateHostKeys needs a key known or confirmed, not just added.
+        let (asked, added) = (matches!(verdict, Verdict::Ask { .. }), verdict == Verdict::AddAndAccept);
+        let ok = match verdict {
+            Verdict::Accept => true,
+            Verdict::AddAndAccept => {
+                policy.record(&self.host, self.port, server_public_key);
+                true
+            }
+            Verdict::Ask { fingerprint, randomart } => {
+                let _ = Strict::Ask;
+                let yes = self.prompt_hostkey(&fingerprint, &key_type, false, None, randomart).await;
+                if yes {
+                    policy.record(&self.host, self.port, server_public_key);
+                }
+                yes
+            }
+            Verdict::Refuse(r) => {
+                self.refused(&r);
+                false
+            }
+        };
+        if ok && !added {
+            self.hostkey_update.after_check(&policy, &self.host, self.port, server_public_key, asked);
+        }
+        Ok(ok)
+    }
+
+    /// UpdateHostKeys: the server's announcement of all its host keys.
+    async fn openssh_ext_host_keys_announced(
+        &mut self,
+        keys: Vec<russh::keys::PublicKey>,
+        session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        match self.hostkeys.clone() {
+            Some(policy) => self.hostkey_update.announced(policy, &self.host, self.port, keys, session, self.app_handle.clone()),
+            None => Ok(()),
+        }
     }
 }
 
@@ -1881,6 +2207,20 @@ pub(crate) async fn verify_host_identity(
     fingerprint: &str,
     key_type: &str,
 ) -> bool {
+    verify_host_identity_with(app_handle, host, port, host_id, fingerprint, key_type, crate::ssh::hostkeys::Strict::Ask).await
+}
+
+/// The same, under a StrictHostKeyChecking setting.
+pub(crate) async fn verify_host_identity_with(
+    app_handle: Option<tauri::AppHandle>,
+    host: &str,
+    port: u16,
+    host_id: &str,
+    fingerprint: &str,
+    key_type: &str,
+    strict: crate::ssh::hostkeys::Strict,
+) -> bool {
+    use crate::ssh::hostkeys::Strict;
     let path = SshClientHandler::known_hosts_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -1910,9 +2250,19 @@ pub(crate) async fn verify_host_identity(
     };
 
     let handler = SshClientHandler::new(host, port, app_handle);
-    let accepted = handler
-        .prompt_hostkey(fingerprint, key_type, changed, old_fingerprint)
-        .await;
+    let accepted = match strict {
+        Strict::Ask => handler.prompt_hostkey(fingerprint, key_type, changed, old_fingerprint, None).await,
+        // A changed key: only StrictHostKeyChecking no lets it through.
+        _ if changed && strict != Strict::No => {
+            handler.refused(&format!("The host key for {host_id} has CHANGED and StrictHostKeyChecking does not allow asking"));
+            false
+        }
+        Strict::Yes => {
+            handler.refused(&format!("No host key is known for {host_id} and StrictHostKeyChecking is on"));
+            false
+        }
+        Strict::AcceptNew | Strict::No => true,
+    };
 
     if accepted {
         known.entries.insert(host_id.to_string(), fingerprint.to_string());
@@ -1929,30 +2279,107 @@ pub(crate) async fn verify_host_identity(
 /// Finish a connection once the channel is open: inject shell color/prompt init
 /// (when enabled for the shell), spawn the streaming session task, and build the
 /// `ActiveConnection`. Shared by both the direct and jump-host connect paths.
+/// Open the terminal's session channel: as ssh_config says when it says
+/// (see `session_opts`), else Reach's own shell. `None` for SessionType
+/// none. Also whether a terminal was allocated.
+async fn open_session(
+    handle: &russh::client::Handle<SshClientHandler>,
+    opts: &HopOptions,
+    cols: u16,
+    rows: u16,
+    shell: Option<&str>,
+) -> Result<(Option<russh::Channel<russh::client::Msg>>, bool), SshError> {
+    use crate::ssh::session_opts::{setup_channel, SessionType};
+    if let Some(p) = &opts.session {
+        if p.session_type == SessionType::None {
+            return Ok((None, false));
+        }
+        let channel = handle.channel_open_session().await.map_err(|e| SshError::ChannelError(format!("Failed to open session: {}", e)))?;
+        let x11 = match &opts.forwards {
+            Some(t) => match t.prepared_x11() {
+                Some(a) => Some(a),
+                None => t.prepare_x11().await,
+            },
+            None => None,
+        };
+        let tty = setup_channel(&channel, p, cols, rows, shell, x11.as_ref()).await.map_err(SshError::ChannelError)?;
+        return Ok((Some(channel), tty));
+    }
+    let channel = handle.channel_open_session().await.map_err(|e| SshError::ChannelError(format!("Failed to open session: {}", e)))?;
+    open_interactive_shell(&channel, cols, rows, shell).await?;
+    Ok((Some(channel), true))
+}
+
+/// ControlMaster: a session on a live master for the same ControlPath,
+/// with no new handshake or login. `None` when there is none to use (or
+/// the master's user said no), so the caller connects as usual.
+async fn shared_session(
+    info: &ConnectionInfo,
+    opts: &HopOptions,
+    cols: u16,
+    rows: u16,
+    shell: Option<&str>,
+    login: &LoginOptions,
+    app_handle: &tauri::AppHandle,
+) -> Option<Result<ActiveConnection, SshError>> {
+    let cp = opts.control.as_ref().filter(|c| c.may_use())?;
+    let (shared, jumps, asks) = crate::ssh::control::existing(&cp.path, &crate::ssh::control::target(&info.username, &info.host, info.port))?;
+    if asks {
+        let title = format!("Allow shared connection to {}?", info.host);
+        let yes = crate::ssh::prompt::ask(Some(app_handle), &info.host, info.port, crate::ssh::prompt::Kind::Confirm, &title, "", vec![]).await;
+        if yes.is_none() {
+            tracing::info!("ControlMaster: the shared connection to {} was refused; connecting anew", info.host);
+            return None;
+        }
+    }
+    tracing::info!("ControlMaster: {}@{}:{} shares the connection at {}", info.username, info.host, info.port, cp.path);
+    let opened = {
+        let h = shared.lock().await;
+        open_session(&h, opts, cols, rows, shell).await
+    };
+    let (channel, tty) = match opened {
+        Ok(x) => x,
+        // A master that cannot open sessions any more: connect anew.
+        Err(e) => {
+            tracing::info!("ControlMaster: the master at {} did not open a session ({e}); connecting anew", cp.path);
+            return None;
+        }
+    };
+    Some(into_active_connection(channel, shared, info.clone(), shell, login.clone(), app_handle.clone(), jumps, opts.session.clone(), tty, opts.forwards.clone(), opts.connlog.clone()).await)
+}
+
+#[expect(clippy::too_many_arguments, reason = "everything a finished login hands to its session")]
 async fn into_active_connection(
-    channel: russh::Channel<russh::client::Msg>,
-    handle: russh::client::Handle<SshClientHandler>,
+    channel: Option<russh::Channel<russh::client::Msg>>,
+    shared: SharedHandle,
     info: ConnectionInfo,
     shell: Option<&str>,
     login: LoginOptions,
     app_handle: tauri::AppHandle,
     jump_handles: Vec<SharedHandle>,
+    session: Option<Arc<crate::ssh::session_opts::SessionPolicy>>,
+    tty: bool,
+    forwards: Option<Arc<crate::ssh::forwarding::ForwardTable>>,
+    connlog: Option<Arc<crate::ssh::connlog::ConnLog>>,
 ) -> Result<ActiveConnection, SshError> {
     // Inject shell-appropriate color/prompt init (chosen per shell family so a
     // fish login never gets bash syntax), unless the user disabled it. `None`
     // shell-family => nothing injected. Keeping the login message means
     // typing it later, once the server is quiet; otherwise it goes now.
-    let init = if login.inject_colors { shell_init(shell) } else { None };
-    let flow = match init {
-        Some(init) if login.show_login_message => Some(LoginFlow::new(init, std::time::Instant::now())),
-        Some(init) => {
+    // Typed into an interactive shell only: never into a RemoteCommand or a
+    // subsystem, which a session with ssh_config settings may run.
+    let shell_session = channel.is_some() && session.as_ref().is_none_or(|p| p.remote_command.is_none() && tty);
+    let init = if login.inject_colors && shell_session { shell_init(shell) } else { None };
+    let flow = match (init, channel.as_ref()) {
+        (Some(init), Some(_)) if login.show_login_message => Some(LoginFlow::new(init, std::time::Instant::now())),
+        (Some(init), Some(channel)) => {
             channel
                 .data(init.as_bytes())
                 .await
                 .map_err(|e| SshError::ChannelError(format!("Color init failed: {}", e)))?;
             None
         }
-        None => None,
+        _ => None,
     };
 
     // A log that cannot be opened does not stop the session, but the user
@@ -1978,16 +2405,67 @@ async fn into_active_connection(
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let task_id = info.id.clone();
     let task_handle = app_handle.clone();
-    tokio::spawn(async move {
-        ssh_session_task(channel, cmd_rx, task_id, task_handle, flow, log).await;
-    });
+    let task_shared = shared.clone();
+    let host_label = format!("{}:{}", info.host, info.port);
+    // Forwards from ssh_config, set up as ssh does once logged in; under
+    // ExitOnForwardFailure one that fails ends the connection.
+    let (forwarder, forward_notes) = match forwards {
+        Some(table) => match crate::ssh::forwarding::Forwarder::start(shared.clone(), table).await {
+            Ok((f, notes)) => (Some(f), notes),
+            Err(e) => return Err(SshError::ConnectionFailed(e)),
+        },
+        None => (None, Vec::new()),
+    };
+    tokio::spawn(tracing::Instrument::in_current_span(async move {
+        match channel {
+            Some(channel) => ssh_session_task(channel, cmd_rx, task_id, task_handle, flow, log, SessionExtras { policy: session, tty, handle: task_shared, host: host_label, forwarder, notes: forward_notes, connlog: connlog.clone() }).await,
+            None => {
+                if let Some(cl) = connlog.as_ref() {
+                    crate::ssh::connlog::close(cl);
+                }
+                ssh_idle_task(cmd_rx, task_id, task_handle).await
+            }
+        }
+    }));
 
     Ok(ActiveConnection {
         cmd_tx,
         info,
-        handle: Arc::new(tokio::sync::Mutex::new(handle)),
+        handle: shared,
         jump_handles,
     })
+}
+
+/// What ssh_config adds to a session's loop.
+struct SessionExtras {
+    policy: Option<Arc<crate::ssh::session_opts::SessionPolicy>>,
+    tty: bool,
+    handle: SharedHandle,
+    host: String,
+    forwarder: Option<Arc<crate::ssh::forwarding::Forwarder>>,
+    /// Lines to show once the tab is listening (forwards set up).
+    notes: Vec<String>,
+    /// LogLevel: what ssh would print about the connection.
+    connlog: Option<Arc<crate::ssh::connlog::ConnLog>>,
+}
+
+/// SessionType none: the connection carries no session, only what else it
+/// was asked for. The tab says so and stays until closed.
+async fn ssh_idle_task(mut cmd_rx: mpsc::UnboundedReceiver<SessionCommand>, connection_id: String, app_handle: tauri::AppHandle) {
+    let data_event = format!("ssh-data-{}", connection_id);
+    let note = "Connected. SessionType none: no shell or command was started; the connection stays open for its forwards.\r\n";
+    let mut shown = false;
+    while let Some(cmd) = cmd_rx.recv().await {
+        match cmd {
+            SessionCommand::Ready if !shown => {
+                shown = true;
+                let _ = app_handle.emit(&data_event, note);
+            }
+            SessionCommand::Close => break,
+            _ => {}
+        }
+    }
+    let _ = app_handle.emit(&format!("ssh-exit-{}", connection_id), ());
 }
 
 async fn ssh_session_task(
@@ -1997,7 +2475,33 @@ async fn ssh_session_task(
     app_handle: tauri::AppHandle,
     mut flow: Option<LoginFlow>,
     mut log: Option<crate::ssh::session_log::SessionLog>,
+    extras: SessionExtras,
 ) {
+    use crate::ssh::session_opts::{EscapeAction, Escapes, Obscure};
+    let policy = extras.policy.clone();
+    // The escape character works where ssh's does: a session with a
+    // terminal, under ssh_config settings that do not turn it off.
+    let mut escapes = policy.as_ref().filter(|_| extras.tty).and_then(|p| p.escape.map(|c| Escapes::new(c, p.escape_cmdline)));
+    let mut obscure = policy.as_ref().filter(|p| extras.tty && p.obscure_ms > 0).map(|p| Obscure::new(p.obscure_ms));
+    let mut extras = extras;
+    let mut obscure_tick = tokio::time::interval(std::time::Duration::from_millis(5));
+    obscure_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let stdin_null = policy.as_ref().is_some_and(|p| p.stdin_null);
+    let idle_limit = policy.as_ref().and_then(|p| p.timeout_for("session"));
+    let mut last_activity = std::time::Instant::now();
+    let mut idle_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    idle_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // LocalCommand: run once the session is up; its output shows in the tab.
+    let (local_tx, mut local_rx) = mpsc::unbounded_channel::<String>();
+    if let Some(cmd) = policy.as_ref().and_then(|p| p.local_command.clone()) {
+        tokio::task::spawn_blocking(move || {
+            let text = match run_local_command(&cmd) {
+                Ok(out) => out,
+                Err(e) => format!("LocalCommand: {e}\r\n"),
+            };
+            let _ = local_tx.send(text);
+        });
+    }
     let data_event = format!("ssh-data-{}", connection_id);
     // Drives the login flow while it runs: types the init once the server
     // is quiet, and lets go of output if the init's marker never comes.
@@ -2019,6 +2523,19 @@ async fn ssh_session_task(
     let mut ready = false;
     let mut backlog: Vec<String> = Vec::new();
     let mut backlog_bytes = 0usize;
+    // LogLevel: what was logged while connecting (the banner among it)
+    // comes first; later lines follow as they are logged.
+    let (connlog_tx, mut connlog_rx) = mpsc::unbounded_channel::<String>();
+    if let Some(cl) = extras.connlog.as_ref() {
+        for l in cl.attach(connlog_tx.clone()) {
+            let text = format!("{l}\r\n");
+            if let Some(f) = log.as_mut() {
+                f.push(&text);
+            }
+            backlog_bytes += text.len();
+            backlog.push(text);
+        }
+    }
 
     // Tap for the MCP server. Output is mirrored into the shared-session
     // buffer *before* the ready/backlog logic, because an AI client attaches
@@ -2071,6 +2588,7 @@ async fn ssh_session_task(
             msg = channel.wait() => {
                 match msg {
                     Some(ChannelMsg::Data { ref data }) => {
+                        last_activity = std::time::Instant::now();
                         let mut text = out_decoder.push(data);
                         if let Some(f) = flow.as_mut() {
                             text = f.output(&text, std::time::Instant::now());
@@ -2112,9 +2630,84 @@ async fn ssh_session_task(
                     deliver!(held);
                 }
             }
+            Some(text) = local_rx.recv() => {
+                deliver!(text.replace('\n', "\r\n").replace("\r\r\n", "\r\n"));
+            }
+            Some(line) = connlog_rx.recv() => {
+                deliver!(format!("{line}\r\n"));
+            }
+            _ = obscure_tick.tick(), if obscure.as_ref().is_some_and(|o| o.active()) => {
+                let now = std::time::Instant::now();
+                if let Some(bytes) = obscure.as_mut().and_then(|o| o.tick(now)) {
+                    if bytes.is_empty() {
+                        // Chaff: a ping, as ssh sends when no key was typed.
+                        let h = extras.handle.lock().await;
+                        let _ = h.send_ping().await;
+                    } else if let Err(e) = channel.data(&bytes[..]).await {
+                        tracing::error!("SSH '{}' write error: {}", connection_id, e);
+                        break;
+                    }
+                }
+            }
+            _ = idle_tick.tick(), if idle_limit.is_some() => {
+                if let Some(limit) = idle_limit {
+                    if last_activity.elapsed() >= limit {
+                        let note = format!("\r\nClosed after {}s without activity (ChannelTimeout).\r\n", limit.as_secs());
+                        let _ = app_handle.emit(&data_event, &note);
+                        let _ = channel.close().await;
+                        break;
+                    }
+                }
+            }
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(SessionCommand::Data(data)) => {
+                        last_activity = std::time::Instant::now();
+                        if stdin_null {
+                            continue;
+                        }
+                        let (data, actions) = match escapes.as_mut() {
+                            Some(e) => e.feed(&data),
+                            None => (data, Vec::new()),
+                        };
+                        let mut disconnect = false;
+                        for a in actions {
+                            match a {
+                                EscapeAction::Show(t) => deliver!(t),
+                                EscapeAction::Disconnect => disconnect = true,
+                                EscapeAction::Break => {
+                                    let _ = channel.send_break(1000).await;
+                                }
+                                EscapeAction::Rekey => {
+                                    let h = extras.handle.lock().await;
+                                    let _ = h.rekey_soon().await;
+                                }
+                                EscapeAction::ListChannels => {
+                                    let mut text = format!("The following connections are open:\r\n  #0 session (interactive, {})\r\n", extras.host);
+                                    if let Some(f) = &extras.forwarder {
+                                        for (i, l) in f.list().await.into_iter().enumerate() {
+                                            text.push_str(&format!("  #{} {l}\r\n", i + 1));
+                                        }
+                                    }
+                                    deliver!(text);
+                                }
+                                EscapeAction::Command(line) => {
+                                    let text = escape_command(&line, extras.forwarder.as_ref(), &extras.handle).await;
+                                    deliver!(text);
+                                }
+                            }
+                        }
+                        if disconnect {
+                            let _ = channel.close().await;
+                            break;
+                        }
+                        if data.is_empty() {
+                            continue;
+                        }
+                        if let Some(o) = obscure.as_mut() {
+                            o.keystroke(&data);
+                            continue;
+                        }
                         if let Err(e) = channel.data(&data[..]).await {
                             tracing::error!("SSH '{}' write error: {}", connection_id, e);
                             break;
@@ -2128,6 +2721,9 @@ async fn ssh_session_task(
                     Some(SessionCommand::Ready) => {
                         if !ready {
                             ready = true;
+                            for n in extras.notes.drain(..) {
+                                let _ = app_handle.emit(&data_event, format!("{n}\r\n"));
+                            }
                             for p in backlog.drain(..) {
                                 let _ = app_handle.emit(&data_event, &p);
                             }
@@ -2154,6 +2750,9 @@ async fn ssh_session_task(
 
     if let Err(e) = app_handle.emit(&exit_event, ()) {
         tracing::error!("Failed to emit '{}': {}", exit_event, e);
+    }
+    if let Some(cl) = extras.connlog.as_ref() {
+        crate::ssh::connlog::close(cl);
     }
     tracing::info!("SSH '{}' session task exiting", connection_id);
 }
@@ -2458,4 +3057,92 @@ mod connect_limit_tests {
         hostkey_prompts().lock().unwrap().remove("test-prompt");
         assert_eq!(out.unwrap(), "done");
     }
+}
+
+
+/// The ~C command line (clientloop.c process_cmdline): add or cancel
+/// forwards while the session runs.
+async fn escape_command(line: &str, forwarder: Option<&Arc<crate::ssh::forwarding::Forwarder>>, handle: &SharedHandle) -> String {
+    use crate::ssh::sshconf::forward;
+    let line = line.trim();
+    if line.is_empty() {
+        return String::new();
+    }
+    let spec = |prefix: &str| line.strip_prefix(prefix).map(str::trim);
+    let new_forwarder;
+    let f = match forwarder {
+        Some(f) => f.clone(),
+        None => {
+            let table = crate::ssh::forwarding::ForwardTable::new(Default::default());
+            new_forwarder = crate::ssh::forwarding::Forwarder::start(handle.clone(), table).await.map(|(f, _)| f);
+            match &new_forwarder {
+                Ok(f) => f.clone(),
+                Err(e) => return format!("{e}\r\n"),
+            }
+        }
+    };
+    let port_of = |s: &str| s.rsplit(':').next().and_then(|p| p.parse::<u16>().ok());
+    let result = if let Some(s) = spec("-KL").or(spec("-KD")) {
+        match port_of(s) {
+            Some(p) if f.cancel_local(p).await => Ok(format!("Canceled forwarding on port {p}")),
+            _ => Err(format!("Unknown forward {s}")),
+        }
+    } else if let Some(s) = spec("-KR") {
+        match port_of(s) {
+            Some(p) => f.cancel_remote(p).await.map(|_| format!("Canceled remote forwarding on port {p}")),
+            None => Err(format!("Bad forwarding port {s}")),
+        }
+    } else if let Some(s) = spec("-L") {
+        match forward::parse(s, false, false) {
+            Some(fw) => f.add_local(fw).await,
+            None => Err("Bad local forwarding specification".into()),
+        }
+    } else if let Some(s) = spec("-R") {
+        let dynamic = s.split(':').count() <= 2 && !s.contains('/');
+        match forward::parse(s, dynamic, true) {
+            Some(fw) => f.add_remote(fw).await,
+            None => Err("Bad remote forwarding specification".into()),
+        }
+    } else if let Some(s) = spec("-D") {
+        match forward::parse(s, true, false) {
+            Some(fw) => f.add_local(fw).await,
+            None => Err("Bad dynamic forwarding specification".into()),
+        }
+    } else {
+        Err(String::new())
+    };
+    match result {
+        Ok(m) => return format!("{m}\r\n"),
+        Err(e) if !e.is_empty() => return format!("{e}\r\n"),
+        Err(_) => {}
+    }
+    if line == "?" || line == "-h" {
+        return "Commands:\r\n      -L[bind_address:]port:host:hostport    Request local forward\r\n      -R[bind_address:]port:host:hostport    Request remote forward\r\n      -D[bind_address:]port                  Request dynamic forward\r\n      -KL[bind_address:]port                 Cancel local forward\r\n      -KR[bind_address:]port                 Cancel remote forward\r\n      -KD[bind_address:]port                 Cancel dynamic forward\r\n".into();
+    }
+    "Invalid command.\r\n".to_string()
+}
+
+/// LocalCommand, run on this machine with the user's shell; its output.
+#[cfg(not(target_os = "android"))]
+fn run_local_command(cmd: &str) -> Result<String, String> {
+    #[cfg(windows)]
+    let out = {
+        use std::os::windows::process::CommandExt;
+        // Raw, so cmd sees the command line as written.
+        std::process::Command::new("cmd").arg("/C").raw_arg(cmd).stdin(std::process::Stdio::null()).output()
+    };
+    #[cfg(not(windows))]
+    let out = {
+        let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
+        std::process::Command::new(shell).args(["-c", cmd]).stdin(std::process::Stdio::null()).output()
+    };
+    let out = out.map_err(|e| e.to_string())?;
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    Ok(text)
+}
+
+#[cfg(target_os = "android")]
+fn run_local_command(cmd: &str) -> Result<String, String> {
+    Err(format!("A phone cannot run \"{cmd}\""))
 }

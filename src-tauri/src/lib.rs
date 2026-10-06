@@ -60,6 +60,7 @@ use ipc::dragout_commands::*;
 use ipc::webview_commands::*;
 use ipc::ssh_commands::*;
 use ipc::sshconfig_commands::*;
+use ipc::x11server_commands::*;
 use ipc::sshkey_commands::*;
 use ipc::tofu_commands::*;
 use ipc::theme_commands::*;
@@ -180,10 +181,14 @@ fn init_logging() {
             .with_ansi(false)
             .with_writer(std::sync::Mutex::new(f))
     });
+    use tracing_subscriber::Layer;
+    // Each output has its own filter, so a connection's LogLevel can see
+    // debug messages that the console and the file leave out.
+    let file_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::registry()
-        .with(filter)
-        .with(tracing_subscriber::fmt::layer())
-        .with(file)
+        .with(tracing_subscriber::fmt::layer().with_filter(filter))
+        .with(file.map(|f| f.with_filter(file_filter)))
+        .with(crate::ssh::connlog::ConnLogLayer.with_filter(crate::ssh::connlog::ConnLogFilter))
         .init();
 }
 
@@ -328,6 +333,7 @@ pub fn run() {
             ssh_send,
             ssh_ready,
             ssh_hostkey_response,
+            ssh_auth_prompt_response,
             session_log_default_dir,
             app_update_check,
             ctr_open,
@@ -375,9 +381,13 @@ pub fn run() {
             ssh_detect_os,
             inspect_key_file,
             // SSH Config commands
-            sshconfig_list_hosts,
-            sshconfig_resolve_host,
+            sshconfig_scan,
+            x11server_status,
+            x11server_install,
+            x11server_cancel,
+            x11server_remove,
             sshconfig_exists,
+            ssh_options_report,
             ssh_key_import,
             ssh_key_list,
             ssh_key_update,
@@ -406,6 +416,7 @@ pub fn run() {
             session_create,
             session_update,
             session_delete,
+            session_move_to_folder,
             session_list_folders,
             session_create_folder,
             session_delete_folder,
@@ -710,6 +721,7 @@ pub fn run() {
             ssh_send,
             ssh_ready,
             ssh_hostkey_response,
+            ssh_auth_prompt_response,
             session_log_default_dir,
             app_update_check,
             ctr_open,
@@ -757,9 +769,13 @@ pub fn run() {
             ssh_detect_os,
             inspect_key_file,
             // SSH Config commands
-            sshconfig_list_hosts,
-            sshconfig_resolve_host,
+            sshconfig_scan,
+            x11server_status,
+            x11server_install,
+            x11server_cancel,
+            x11server_remove,
             sshconfig_exists,
+            ssh_options_report,
             ssh_key_import,
             ssh_key_list,
             ssh_key_update,
@@ -788,6 +804,7 @@ pub fn run() {
             session_create,
             session_update,
             session_delete,
+            session_move_to_folder,
             session_list_folders,
             session_create_folder,
             session_delete_folder,

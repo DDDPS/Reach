@@ -15,6 +15,7 @@
 	import UpdateDialog from '$lib/components/shared/UpdateDialog.svelte';
 	import ActiveSessionsDialog from '$lib/components/shared/ActiveSessionsDialog.svelte';
 	import HostKeyDialog from '$lib/components/shared/HostKeyDialog.svelte';
+	import AuthPromptDialog from '$lib/components/shared/AuthPromptDialog.svelte';
 	import DuplicateVaultsDialog from '$lib/components/vault/DuplicateVaultsDialog.svelte';
 	import { addToast } from '$lib/state/toasts.svelte';
 	import { t } from '$lib/state/i18n.svelte';
@@ -120,6 +121,14 @@
 		const stopLogError = listen<{ host: string; message: string }>('ssh-log-error', (e) => {
 			addToast(t('ssh.log_failed', { host: e.payload.host, message: e.payload.message }), 'error', 20000);
 		});
+		// A host key refused under ssh_config settings: the connection error
+		// only says the key was not accepted, this says why.
+		const stopHostKey = listen<{ host: string; port: number; reason: string }>('ssh-hostkey-refused', (e) => {
+			addToast(t('hostkey.refused', { host: `${e.payload.host}:${e.payload.port}`, reason: e.payload.reason }), 'error', 20000);
+		});
+		const stopWeakKex = listen<{ host: string; port: number; kex: string }>('ssh-weak-kex', (e) => {
+			addToast(t('ssh.weak_kex', { host: `${e.payload.host}:${e.payload.port}`, kex: e.payload.kex }), 'warning', 12000);
+		});
 		const unlisten = listen<{ host: string; fingerprint: string; via: 'agent' | 'password' }>('ssh-key-refused-notice', (e) => {
 			const { host, fingerprint, via } = e.payload;
 			addToast(t(via === 'agent' ? 'ssh.key_refused_agent' : 'ssh.key_refused_password', { host, fingerprint }), 'warning', 20000);
@@ -127,6 +136,8 @@
 		return () => {
 			void unlisten.then((stop) => stop());
 			void stopLogError.then((stop) => stop());
+			void stopHostKey.then((stop) => stop());
+			void stopWeakKex.then((stop) => stop());
 		};
 	});
 
@@ -240,6 +251,7 @@
 		oncancel={postponeUpdate}
 	/>
 	<HostKeyDialog />
+	<AuthPromptDialog />
 	<McpConfirmDialog />
 </div>
 

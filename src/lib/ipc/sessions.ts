@@ -44,6 +44,31 @@ export interface SessionConfig {
   via_session_id?: string | null;
   /** Key sessions: also offer the SSH agent's keys if this key is refused. Off by default. */
   try_agent_keys?: boolean | null;
+  /** ssh_config settings: imported files, lines set in Reach, approvals. */
+  ssh_options?: SshOptions | null;
+}
+
+/** A config file as it was read at import. */
+export interface SshConfigFile {
+  path: string;
+  text: string;
+  role: 'user' | 'system' | 'included';
+}
+
+/** A session's ssh_config settings (see src-tauri/src/ssh/sshconf). */
+export interface SshOptions {
+  /** What the session was imported from; resolved again at every connect. */
+  imported?: { alias: string; files: SshConfigFile[]; at: number } | null;
+  /** Lines set in Reach ("MACs +hmac-sha1"); they win over the files. */
+  lines?: string[];
+  /** Local commands the user allowed for this session, exactly as written. */
+  approved_commands?: string[];
+  /** Weakening settings the user has seen and kept ("Keyword value"). */
+  accepted_weakenings?: string[];
+  /** This person's approvals in plain words: filled from the signed ones when
+   *  a session is read, signed by the backend when it is saved. */
+  my_approved_commands?: string[] | null;
+  my_accepted_weakenings?: string[] | null;
 }
 
 export type SessionKind = 'ssh' | 'rdp' | 'vnc';
@@ -94,6 +119,7 @@ export async function sessionCreate(params: {
   sharePath?: string | null;
   viaSessionId?: string | null;
   tryAgentKeys?: boolean | null;
+  sshOptions?: SshOptions | null;
 }): Promise<SessionConfig> {
   return invoke<SessionConfig>('session_create', {
     name: params.name,
@@ -113,6 +139,7 @@ export async function sessionCreate(params: {
     sharePath: params.sharePath?.trim() ? params.sharePath.trim() : null,
     viaSessionId: params.viaSessionId || null,
     tryAgentKeys: params.tryAgentKeys || null,
+    sshOptions: params.sshOptions ?? null,
   });
 }
 
@@ -122,6 +149,12 @@ export async function sessionUpdate(session: SessionConfig): Promise<SessionConf
 
 export async function sessionDelete(sessionId: string): Promise<void> {
   return invoke('session_delete', { sessionId });
+}
+
+/** Move sessions into a folder (`null`: out of any folder) in one call.
+ *  Only the folder changes; returns how many moved. */
+export async function sessionMoveToFolder(sessionIds: string[], folderId: string | null): Promise<number> {
+  return invoke<number>('session_move_to_folder', { sessionIds, folderId });
 }
 
 export async function sessionListFolders(): Promise<Folder[]> {

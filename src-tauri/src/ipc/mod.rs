@@ -17,6 +17,7 @@ pub mod session_commands;
 pub mod sftp_commands;
 pub mod ssh_commands;
 pub mod sshconfig_commands;
+pub mod x11server_commands;
 pub mod sshkey_commands;
 pub mod ansible_commands;
 pub mod container_commands;
