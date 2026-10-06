@@ -798,8 +798,29 @@ impl VaultManager {
         let stored: StoredIdentity = serde_json::from_str(&data)?;
 
         // Get secret key from keychain
-        let secret_key_bytes = zeroize::Zeroizing::new(get_key_from_keychain(&stored.user_uuid)?);
-        self.open_with_secret_key(stored, &secret_key_bytes).await
+        match get_key_from_keychain(&stored.user_uuid) {
+            Ok(key) => {
+                let secret_key_bytes = zeroize::Zeroizing::new(key);
+                self.open_with_secret_key(stored, &secret_key_bytes).await
+            }
+            // The keychain lost the key. On Linux the kernel keyring is
+            // emptied by every reboot and expires after a few days, so this
+            // is routine there (issue #87). An identity set up without a
+            // password keeps its key in the identity file under the empty
+            // password: open with that and put the key back, instead of
+            // leaving every session behind a lock nobody can open. With a
+            // real password this fails and the lock screen asks for it.
+            Err(e @ (VaultError::KeychainKeyMissing | VaultError::KeychainUnavailable(_))) => {
+                match self.unlock_with_password("").await {
+                    Ok(true) => {
+                        tracing::warn!("auto_unlock: the vault key was missing from the OS keychain ({e}); opened with the identity's stored key and put it back");
+                        Ok(true)
+                    }
+                    _ => Err(e),
+                }
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Unlock with the identity's secret key, however it was obtained: from
