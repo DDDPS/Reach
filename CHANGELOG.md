@@ -2,6 +2,10 @@
 
 All notable changes to Reach are documented here.
 
+## v0.7.6
+- **Fixed: on Linux, saved sessions seemed gone after a restart** — Reach kept the vault's key only in the kernel keyring, which every reboot empties and which expires after a few days, so the vault could no longer be opened and looked empty. Nothing was deleted. Reach now opens it with the key kept in the identity file (for a vault set up without a password) and puts the key back; a vault with a master password asks for it, as before (#87).
+- **Fixed: the update dialog could not be dismissed** — It now always offers Later. A .deb or a build from source cannot update itself in place, and was stuck in front of it.
+
 ## v0.7.5
 - **Your ssh_config, in full** — An imported host connects exactly as it does from a terminal. Reach reads ssh_config the way OpenSSH does (Host and Match with every criterion, Include, tokens, `+`/`-`/`^` algorithm lists, first value wins) and acts on every keyword: legacy algorithms for old servers (`MACs +hmac-sha1` and the like), identities, certificates, the agent, keyboard-interactive, host keys with hashing, @cert-authority, @revoked and KRLs, VerifyHostKeyDNS with DNSSEC, UpdateHostKeys, ProxyCommand and ProxyJump, local, remote and dynamic forwards, agent and X11 forwarding, Tunnel, ControlMaster, LogLevel, RemoteCommand, SetEnv and SendEnv, escape commands and more. A line Reach cannot apply is shown, never dropped.
 - **Kerberos, smart cards and security keys** — GSSAPI logins and GSS key exchange (Windows through its own Kerberos, Linux and macOS through the system's), PKCS#11 tokens, FIDO security keys and hostbased logins.
