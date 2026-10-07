@@ -81,11 +81,11 @@
 			{/if}
 
 			<div class="actions">
-				{#if showEscapeHatch}
-					<button class="btn-ghost" onclick={handleSkip}>
-						{t('updater.continue_without')}
-					</button>
-				{/if}
+				<!-- Always a way past: an update is offered, never forced. A .deb
+				     or a build from source cannot install it in place (#87). -->
+				<button class="btn-ghost" onclick={handleSkip} disabled={updater.installing}>
+					{showEscapeHatch ? t('updater.continue_without') : t('updater.later')}
+				</button>
 				<button
 					class="btn-primary"
 					disabled={buttonDisabled}
