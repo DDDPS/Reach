@@ -643,12 +643,10 @@
 		if (session.username?.trim()) {
 			args.push("-u", session.username.trim());
 		}
-		const tab = createTab("local", `${distro} · WSL`, undefined, session.name, "ubuntu");
-		tab.localCommand = {
-			program: "wsl.exe",
-			args,
-		};
+
 		setActivePage("terminal");
+
+		createTab("local", `${distro} · WSL`, undefined, session.name, "ubuntu",{ program: "wsl.exe", args });
 		addToast(t("session.connected_toast", { name: session.name }), "success");
 	}
 

@@ -143,7 +143,7 @@
 		if (editSession) {
 			kind = sessionKind(editSession);
 			domain = editSession.domain ?? "";
-			wslDistro = editSession.wsl_distro ?? "ubuntu";
+			wslDistro = editSession.wsl_distro ?? "";
 			os = editSession.detected_os === "linux" ? "linux" : "windows";
 			sharePath = editSession.share_path ?? "";
 			viaSessionId = editSession.via_session_id ?? "";
@@ -224,7 +224,7 @@
 			proxyEnabled = false;
 			proxyType = "socks5";
 			proxyHost = "127.0.0.1";
-			wslDistro = "Ubuntu";
+			wslDistro = "";
 			proxyPort = "9050";
 			proxyUsername = "";
 			proxyPassword = "";
