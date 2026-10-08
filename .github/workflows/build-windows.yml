@@ -26,6 +26,11 @@ jobs:
       - name: Install Frontend Dependencies
         run: npm ci
 
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
       - name: Build Tauri App
         run: npm run tauri build -- --no-bundle
 
