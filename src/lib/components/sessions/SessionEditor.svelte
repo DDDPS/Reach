@@ -82,7 +82,7 @@
 		ssh: "22",
 		rdp: "3389",
 		vnc: "5900",
-		wsl: "22",
+		wsl: "0",
 	};
 
 	function setKind(next: SessionKind): void {
@@ -239,7 +239,7 @@
 
 		const port =
 			kind === "wsl"
-				? 22
+				? 0
 				: parseInt(portStr, 10) ||
 					parseInt(DEFAULT_PORT[kind], 10) ||
 					22;
@@ -345,7 +345,7 @@
 					name: name.trim(),
 					host:
 						kind === "wsl"
-							? host.trim() || "localhost"
+							? host.trim() || "wsl"
 							: host.trim(),
 					port,
 					username: vnc ? "" : username.trim(),
