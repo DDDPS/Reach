@@ -40,7 +40,7 @@
 	/** RDP only: the protocol cannot say what the machine is (xrdp claims to be Windows), so the user does. */
 	let os = $state<"windows" | "linux">("windows");
 	let sharePath = $state("");
-	let wslDistro = $state("ubuntu");
+	let wslDistro = $state("");
 	let availableDistros = $state<string[]>([]);
 	/** VNC only: the saved SSH session to go through, or '' for direct. */
 	let viaSessionId = $state("");
@@ -63,8 +63,10 @@
 			wslListDistros()
 				.then((list) => {
 					availableDistros = list;
-					if (list.length > 0 && !wslDistro) {
-						wslDistro = list[0];
+					if (list.length > 0) {
+						if (!wslDistro || !list.includes(wslDistro)) {
+							wslDistro = list[0];
+						}
 					}
 				})
 				.catch(() => {
@@ -487,8 +489,7 @@
 					{t("session.protocol_vnc")}
 				</button>
 				<!-- Only show WSL option on Windows -->
-				<!-- temp remove isWindows() check -->
-				{#if isWindows() || true}
+				{#if isWindows()}
 					<button
 						type="button"
 						class="auth-btn"
