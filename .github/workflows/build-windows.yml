@@ -1,6 +1,9 @@
 name: Build Windows App (Manual)
 
 on:
+  push:
+    branches:
+      - temp/build
   workflow_dispatch:
 
 jobs:
