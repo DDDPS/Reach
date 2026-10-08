@@ -192,3 +192,8 @@ export async function sessionShare(
     expires_in_hours: expiresInHours
   });
 }
+
+/** Fetch installed WSL distributions on Windows */
+export async function wslListDistros(): Promise<string[]> {
+  return invoke<string[]>('wsl_list_distros');
+}

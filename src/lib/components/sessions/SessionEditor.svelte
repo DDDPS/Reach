@@ -1,12 +1,13 @@
 <script lang="ts">
-	import Modal from '$lib/components/shared/Modal.svelte';
-	import Button from '$lib/components/shared/Button.svelte';
-	import KeyPicker from './KeyPicker.svelte';
-	import Input from '$lib/components/shared/Input.svelte';
-	import { sessionCreate, sessionList, sessionUpdate, sessionKind, type SessionConfig, type SessionKind, type AuthMethod, type JumpHostConfig, type Folder, type SshOptions } from '$lib/ipc/sessions';
+	import Modal from "$lib/components/shared/Modal.svelte";
+	import Button from "$lib/components/shared/Button.svelte";
+	import KeyPicker from "./KeyPicker.svelte";
+	import Input from "$lib/components/shared/Input.svelte";
+	import { isWindows } from "$lib/platform";
+	import { sessionCreate, sessionList, sessionUpdate, sessionKind, wslListDistros,type SessionConfig, type SessionKind, type AuthMethod, type JumpHostConfig, type Folder, type SshOptions } from '$lib/ipc/sessions';
 	import SshOptionsSection from './SshOptionsSection.svelte';
-	import { t } from '$lib/state/i18n.svelte';
-	import { open as openDialog } from '@tauri-apps/plugin-dialog';
+	import { t } from "$lib/state/i18n.svelte";
+	import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 	interface Props {
 		open: boolean;
@@ -40,6 +41,7 @@
 	let os = $state<"windows" | "linux">("windows");
 	let sharePath = $state("");
 	let wslDistro = $state("ubuntu");
+	let availableDistros = $state<string[]>([]);
 	/** VNC only: the saved SSH session to go through, or '' for direct. */
 	let viaSessionId = $state("");
 	let sshSessions = $state<SessionConfig[]>([]);
@@ -54,6 +56,20 @@
 						)),
 				)
 				.catch(() => (sshSessions = []));
+		}
+	});
+	$effect(() => {
+		if (open && kind === "wsl") {
+			wslListDistros()
+				.then((list) => {
+					availableDistros = list;
+					if (list.length > 0 && !wslDistro) {
+						wslDistro = list[0];
+					}
+				})
+				.catch(() => {
+					availableDistros = [];
+				});
 		}
 	});
 
@@ -470,15 +486,19 @@
 				>
 					{t("session.protocol_vnc")}
 				</button>
-				<button
-					type="button"
-					class="auth-btn"
-					class:active={kind === "wsl"}
-					disabled={saving}
-					onclick={() => setKind("wsl")}
-				>
-					WSL
-				</button>
+				<!-- Only show WSL option on Windows -->
+				<!-- temp remove isWindows() check -->
+				{#if isWindows() || true}
+					<button
+						type="button"
+						class="auth-btn"
+						class:active={kind === "wsl"}
+						disabled={saving}
+						onclick={() => setKind("wsl")}
+					>
+						WSL
+					</button>
+				{/if}
 			</div>
 		</div>
 
@@ -489,15 +509,29 @@
 			disabled={saving}
 		/>
 		{#if kind === "wsl"}
-			<div class="row">
-				<div class="field-host">
+			<div class="shell-field">
+				<label class="via-label" for="wsl-distro"
+					>WSL Distribution</label
+				>
+				{#if availableDistros.length > 0}
+					<select
+						id="wsl-distro"
+						class="via-select"
+						bind:value={wslDistro}
+						disabled={saving}
+					>
+						{#each availableDistros as d}
+							<option value={d}>{d}</option>
+						{/each}
+					</select>
+				{:else}
 					<Input
 						label="WSL Distribution"
 						bind:value={wslDistro}
 						placeholder="Ubuntu (or Debian, Arch, etc.)"
 						disabled={saving}
 					/>
-				</div>
+				{/if}
 			</div>
 		{:else}
 			<div class="row">
