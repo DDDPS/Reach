@@ -42,7 +42,7 @@ export function getActiveTab(): Tab | undefined {
 	return activeTab;
 }
 
-export function createTab(type: TabType, title?: string, connectionId?: string, sessionName?: string, detectedOs?: string | null): Tab {
+export function createTab(type: TabType, title?: string, connectionId?: string, sessionName?: string, detectedOs?: string | null, localCommand?: { program: string; args: string[] }): Tab {
 	const id = crypto.randomUUID();
 
 	// Deactivate all existing tabs
@@ -57,7 +57,8 @@ export function createTab(type: TabType, title?: string, connectionId?: string, 
 		connectionId,
 		active: true,
 		sessionName,
-		detectedOs
+		detectedOs,
+		localCommand,
 	};
 
 	tabs.push(tab);
