@@ -636,9 +636,29 @@
 		addToast(t('session.connected_toast', { name: session.name }), 'success');
 	}
 
+	/** Launch a local WSL session as a terminal tab */
+	function openWsl(session: SessionConfig): void {
+		const distro = session.wsl_distro?.trim() || "Ubuntu";
+		const args = ["-d", distro];
+		if (session.username?.trim()) {
+			args.push("-u", session.username.trim());
+		}
+		const tab = createTab("local", `${distro} · WSL`, undefined, session.name, "ubuntu");
+		tab.localCommand = {
+			program: "wsl.exe",
+			args,
+		};
+		setActivePage("terminal");
+		addToast(t("session.connected_toast", { name: session.name }), "success");
+	}
+
 	async function handleConnect(session: SessionConfig): Promise<void> {
 		if (sessionKind(session) === 'vnc') {
 			openVnc(session);
+			return;
+		}
+		if (sessionKind(session) === 'wsl') {
+			openWsl(session);
 			return;
 		}
 		// Check if credentials are stored in the session (from vault)
