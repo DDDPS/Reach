@@ -365,7 +365,7 @@
 				<!-- Only show WSL option on Windows -->
 				{#if isWindows()}
 					<button type="button" class="auth-btn" class:active={kind === 'wsl'} disabled={saving} onclick={() => setKind('wsl')}>
-						WSL
+						{t('session.protocol_wsl')}
 					</button>
 				{/if}
 			</div>
@@ -373,16 +373,36 @@
 
 		<Input label={t('session.name')} bind:value={name} placeholder={kind === 'rdp' ? 'Office PC' : 'My Server'} disabled={saving} />
 
-		<div class="row">
-			<div class="field-host">
-				<Input label={t('session.host')} bind:value={host} placeholder="192.168.1.1" disabled={saving} />
+		{#if kind === 'wsl'}
+			<div class="shell-field">
+				<label class="via-label" for="wsl-distro">{t('session.wsl_distro')}</label>
+				{#if availableDistros.length > 0}
+					<select id="wsl-distro" class="via-select" bind:value={wslDistro} disabled={saving}>
+						{#each availableDistros as d}
+							<option value={d}>{d}</option>
+						{/each}
+					</select>
+				{:else}
+					<Input
+						label={t('session.wsl_distro')}
+						bind:value={wslDistro}
+						placeholder={t('session.wsl_distro_placeholder')}
+						disabled={saving}
+					/>
+				{/if}
 			</div>
-			<div class="field-port">
-				<Input label={t('session.port')} bind:value={portStr} type="number" placeholder={DEFAULT_PORT[kind]} disabled={saving} />
+		{:else}
+			<div class="row">
+				<div class="field-host">
+					<Input label={t('session.host')} bind:value={host} placeholder="192.168.1.1" disabled={saving} />
+				</div>
+				<div class="field-port">
+					<Input label={t('session.port')} bind:value={portStr} type="number" placeholder={DEFAULT_PORT[kind]} disabled={saving} />
+				</div>
 			</div>
-		</div>
+		{/if}
 
-		{#if kind !== 'vnc'}
+		{#if kind !== 'vnc' && kind !== 'wsl'}
 			<Input label={t('session.username')} bind:value={username} placeholder={kind === 'rdp' ? 'Administrator' : 'root'} disabled={saving} />
 		{/if}
 
