@@ -101,21 +101,14 @@
 	// Start monitoring for new SSH connections (poll-based)
 	$effect(() => {
 		for (const tab of tabs) {
-			if (tab.connectionId && !monitoredConnections.has(tab.connectionId)) {
+			if (tab.type === 'ssh' && tab.connectionId && !monitoredConnections.has(tab.connectionId)) {
 				const connId = tab.connectionId;
-				if (tab.type === 'ssh') {
-					monitoredConnections.add(connId);
-					monitoringStart(connId).catch((err) => {
-						console.error(`Failed to start monitoring for ${connId}:`, err);
-					});
-				} else if (tab.wslDistro !== undefined) {
-					monitoredConnections.add(connId);
-					monitoringStartWsl(connId, tab.wslDistro).catch((err) => {
-						console.error(`Failed to start WSL monitoring for ${connId}:`, err);
-					});
-				} else {
-					continue;
-				}
+				monitoredConnections.add(connId);
+
+				monitoringStart(connId).catch((err) => {
+					console.error(`Failed to start monitoring for ${connId}:`, err);
+				});
+
 				// Poll for stats every 3 seconds
 				const poll = async () => {
 					try {
@@ -132,6 +125,40 @@
 			}
 		}
 	});
+
+	// WSL monitoring: only poll while the WSL tab is in view to let the WSL VM go idle
+	$effect(() => {
+		const isWslInView = activePage === 'terminal' && activeTab?.wslDistro !== undefined && activeTab?.connectionId;
+		if (isWslInView) {
+			const connId = activeTab!.connectionId!;
+			const distro = activeTab!.wslDistro!;
+
+			monitoringStartWsl(connId, distro).catch((err) => {
+				console.error(`Failed to start WSL monitoring for ${connId}:`, err);
+			});
+
+			const poll = async () => {
+				try {
+					const stats = await monitoringGetStats(connId);
+					updateStats(connId, stats);
+				} catch {
+					// Stats not available yet — ignore
+				}
+			};
+
+			const initialTimer = setTimeout(poll, 1500);
+			const interval = setInterval(poll, 3000);
+
+			return () => {
+				clearTimeout(initialTimer);
+				clearInterval(interval);
+				monitoringStop(connId).catch((err) => {
+					console.error(`Failed to stop WSL monitoring for ${connId}:`, err);
+				});
+			};
+		}
+	});
+
 
 	// Clean up PTYs, SSH connections, and monitoring for closed tabs
 	$effect(() => {
