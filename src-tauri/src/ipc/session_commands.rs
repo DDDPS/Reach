@@ -709,8 +709,10 @@ pub async fn wsl_list_distros() -> Result<Vec<String>, String> {
         let stdout = output.stdout;
         let text = if stdout.len() >= 2 && (stdout[1] == 0 || stdout[0] == 0) {
             let u16_vec: Vec<u16> = stdout
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&[b0, b1]| u16::from_le_bytes([b0, b1]))
                 .collect();
             String::from_utf16_lossy(&u16_vec)
         } else {
