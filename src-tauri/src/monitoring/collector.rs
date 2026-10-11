@@ -348,6 +348,21 @@ fn parse_users(output: &str) -> Vec<String> {
 
 // ==================== WSL Monitoring ====================
 
+const WSL_ALL_STATS_COMMAND: &str = concat!(
+    "c1=$(head -1 /proc/stat 2>/dev/null); ",
+    "n1=$(cat /proc/net/dev 2>/dev/null); ",
+    "sleep 0.5; ",
+    "c2=$(head -1 /proc/stat 2>/dev/null); ",
+    "n2=$(cat /proc/net/dev 2>/dev/null); ",
+    "echo \"$c1\"; echo '===REACH_SEP==='; ",
+    "echo \"$c2\"; echo '===REACH_SEP==='; ",
+    "echo \"$n1\"; echo '===REACH_SEP==='; ",
+    "echo \"$n2\"; echo '===REACH_SEP==='; ",
+    "cat /proc/meminfo 2>/dev/null; echo '===REACH_SEP==='; ",
+    "df -P / 2>/dev/null; echo '===REACH_SEP==='; ",
+    "w -hs 2>/dev/null || who 2>/dev/null"
+);
+
 async fn exec_wsl(distro: &str, cmd: &str) -> Result<String, String> {
     let distro = distro.to_string();
     let cmd = cmd.to_string();
@@ -424,7 +439,6 @@ fn parse_net_dev(output: &str) -> Option<NetSnapshot> {
     Some(NetSnapshot { rx_bytes: rx_total, tx_bytes: tx_total })
 }
 
-
 async fn wsl_monitoring_loop(
     connection_id: String,
     distro: String,
@@ -434,54 +448,54 @@ async fn wsl_monitoring_loop(
     let mut prev_cpu = CpuSnapshot::default();
 
     loop {
-        let cpu1 = exec_wsl(&distro, CPU_COMMAND).await.ok().and_then(|o| parse_cpu_stat(&o)).unwrap_or_default();
-        let net1 = exec_wsl(&distro, NET_COMMAND).await.ok().and_then(|o| parse_net_dev(&o)).unwrap_or_default();
-
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        let cpu2 = exec_wsl(&distro, CPU_COMMAND).await.ok().and_then(|o| parse_cpu_stat(&o)).unwrap_or_default();
-        let net2 = exec_wsl(&distro, NET_COMMAND).await.ok().and_then(|o| parse_net_dev(&o)).unwrap_or_default();
-
-        let net_down = if net2.rx_bytes >= net1.rx_bytes { (net2.rx_bytes - net1.rx_bytes) * 2 } else { 0 };
-        let net_up = if net2.tx_bytes >= net1.tx_bytes { (net2.tx_bytes - net1.tx_bytes) * 2 } else { 0 };
-
-        let cpu = if cpu2.total > cpu1.total {
-            let total_delta = cpu2.total - cpu1.total;
-            let idle_delta = cpu2.idle - cpu1.idle;
-            ((total_delta - idle_delta) as f64 / total_delta as f64 * 100.0).round()
-        } else if cpu2.total > prev_cpu.total {
-            let total_delta = cpu2.total - prev_cpu.total;
-            let idle_delta = cpu2.idle - prev_cpu.idle;
-            ((total_delta - idle_delta) as f64 / total_delta as f64 * 100.0).round()
-        } else {
-            0.0
-        };
-        prev_cpu = cpu2;
-
-        if let Ok(output) = exec_wsl(&distro, STATS_COMMAND).await {
+        // Run only ONE wsl.exe process per cycle to collect all metrics in a single shot
+        if let Ok(output) = exec_wsl(&distro, WSL_ALL_STATS_COMMAND).await {
             let sections: Vec<&str> = output.split("===REACH_SEP===").collect();
-            let (ram_total, ram_used) = sections.first().map(|s| parse_memory(s)).unwrap_or((0, 0));
-            let ram = if ram_total > 0 { (ram_used as f64 / ram_total as f64) * 100.0 } else { 0.0 };
-            let disk = sections.get(1).map(|s| parse_disk(s)).unwrap_or(0.0);
-            let users = sections.get(2).map(|s| parse_users(s)).unwrap_or_default();
+            if sections.len() >= 7 {
+                let cpu1 = sections.first().and_then(|s| parse_cpu_stat(s)).unwrap_or_default();
+                let cpu2 = sections.get(1).and_then(|s| parse_cpu_stat(s)).unwrap_or_default();
+                let net1 = sections.get(2).and_then(|s| parse_net_dev(s)).unwrap_or_default();
+                let net2 = sections.get(3).and_then(|s| parse_net_dev(s)).unwrap_or_default();
 
-            let stats = SystemStats {
-                cpu,
-                ram,
-                ram_total,
-                ram_used,
-                disk,
-                users,
-                net_up,
-                net_down,
-            };
+                let net_down = if net2.rx_bytes >= net1.rx_bytes { (net2.rx_bytes - net1.rx_bytes) * 2 } else { 0 };
+                let net_up = if net2.tx_bytes >= net1.tx_bytes { (net2.tx_bytes - net1.tx_bytes) * 2 } else { 0 };
 
-            {
-                let state = app_handle.state::<AppState>();
-                let mut monitoring = state.monitoring.write().await;
-                monitoring.insert(connection_id.clone(), stats.clone());
+                let cpu = if cpu2.total > cpu1.total {
+                    let total_delta = cpu2.total - cpu1.total;
+                    let idle_delta = cpu2.idle - cpu1.idle;
+                    ((total_delta - idle_delta) as f64 / total_delta as f64 * 100.0).round()
+                } else if cpu2.total > prev_cpu.total {
+                    let total_delta = cpu2.total - prev_cpu.total;
+                    let idle_delta = cpu2.idle - prev_cpu.idle;
+                    ((total_delta - idle_delta) as f64 / total_delta as f64 * 100.0).round()
+                } else {
+                    0.0
+                };
+                prev_cpu = cpu2;
+
+                let (ram_total, ram_used) = sections.get(4).map(|s| parse_memory(s)).unwrap_or((0, 0));
+                let ram = if ram_total > 0 { (ram_used as f64 / ram_total as f64) * 100.0 } else { 0.0 };
+                let disk = sections.get(5).map(|s| parse_disk(s)).unwrap_or(0.0);
+                let users = sections.get(6).map(|s| parse_users(s)).unwrap_or_default();
+
+                let stats = SystemStats {
+                    cpu,
+                    ram,
+                    ram_total,
+                    ram_used,
+                    disk,
+                    users,
+                    net_up,
+                    net_down,
+                };
+
+                {
+                    let state = app_handle.state::<AppState>();
+                    let mut monitoring = state.monitoring.write().await;
+                    monitoring.insert(connection_id.clone(), stats.clone());
+                }
+                let _ = app_handle.emit(&event_name, &stats);
             }
-            let _ = app_handle.emit(&event_name, &stats);
         }
 
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
