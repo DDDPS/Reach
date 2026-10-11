@@ -639,27 +639,23 @@
 	/** Launch a local WSL session as a terminal tab */
 	function openWsl(session: SessionConfig): void {
 		const distro = session.wsl_distro?.trim();
-		const args = distro ? ["-d", distro] : [];
+		const args = distro ? ['-d', distro] : [];
 		if (session.username?.trim()) {
-			args.push("-u", session.username.trim());
+			args.push('-u', session.username.trim());
 		}
-
-		setActivePage("terminal");
-
+		setActivePage('terminal');
 		const connectionId = `wsl-${crypto.randomUUID()}`;
 		createTab(
-			"local",
-			distro ? `${distro} · WSL` : "WSL",
+			'local',
+			distro ? `${distro} · WSL` : 'WSL',
 			connectionId,
 			session.name,
 			undefined,
-			{ program: "wsl.exe", args },
-			distro ?? ""
+			{ program: 'wsl.exe', args },
+			distro ?? ''
 		);
-		addToast(t("session.connected_toast", { name: session.name }), "success");
+		addToast(t('session.connected_toast', { name: session.name }), 'success');
 	}
-
-
 	async function handleConnect(session: SessionConfig): Promise<void> {
 		if (sessionKind(session) === 'vnc') {
 			openVnc(session);
