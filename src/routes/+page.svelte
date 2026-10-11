@@ -79,15 +79,24 @@
 		for (const tab of tabs) {
 			if (tab.type === 'local' && !spawnedPtys.has(tab.id)) {
 				spawnedPtys.add(tab.id);
-				ptySpawn(tab.id, tab.localCommand?.program, undefined, undefined, tab.localCommand?.args).catch((err) => {
-					console.error(`Failed to spawn PTY for tab ${tab.id}:`, err);
-				});
+				const spawn = () => {
+					ptySpawn(tab.id, tab.localCommand?.program, undefined, undefined, tab.localCommand?.args).catch((err) => {
+						console.error(`Failed to spawn PTY for tab ${tab.id}:`, err);
+					});
+				};
+				// Give WSL tabs a brief delay so Terminal finishes font loading and mounts listeners before the initial prompt emits
+				if (tab.wslDistro !== undefined || tab.localCommand?.program === 'wsl.exe') {
+					setTimeout(spawn, 120);
+				} else {
+					spawn();
+				}
 			}
 			if (tab.type === 'ssh' && tab.connectionId) {
 				connectedSsh.add(tab.connectionId);
 			}
 		}
 	});
+
 
 	// Start monitoring for new SSH connections (poll-based)
 	$effect(() => {

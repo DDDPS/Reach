@@ -648,26 +648,22 @@
 
 		loadAddons(term, fit, containerEl);
 
-		term.open(containerEl);
-		setupInputHandler(term);
-		void setupEventListeners(term);
-		safeFitAndResize(term, fit, containerEl);
-		sendResize(term.cols, term.rows);
-		term.focus();
-		setupResizeObserver(term, fit, containerEl);
-
-		// Asynchronously refresh once custom fonts are loaded
+		// Wait for font to load before opening (canvas needs the font ready)
 		const fontSize = getSettings().fontSize ?? 14;
 		Promise.all([
 			document.fonts.load(`${fontSize}px "${font}"`),
 			document.fonts.load(`bold ${fontSize}px "${font}"`)
-		]).then(() => {
-			if (term.element) {
-				term.clearTextureAtlas();
-				safeFitAndResize(term, fit, containerEl!);
-			}
-		}).catch(() => {});
+		]).catch(() => {}).finally(() => {
+			if (!containerEl) return;
+			term.open(containerEl);
 
+			requestAnimationFrame(() => {
+				safeFitAndResize(term, fit, containerEl!);
+			});
+
+			setupInputHandler(term);
+			setupEventListeners(term);
+			setupResizeObserver(term, fit, containerEl);
 
 			// Detect user changes (e.g. sudo su -) via OSC 2 terminal title updates
 			term.onTitleChange((title: string) => {
@@ -769,6 +765,7 @@
 				},
 				lineCount: () => term.buffer.active.length
 			});
+		});
 
 		return () => {
 			const bufferId = termType === 'ssh' && currentConnectionId ? currentConnectionId : ptyId;
