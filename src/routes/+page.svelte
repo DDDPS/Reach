@@ -74,28 +74,23 @@
 	let monitoredConnections = $state(new Set<string>());
 	let pollIntervals = $state(new Map<string, ReturnType<typeof setInterval>>());
 
+	function handleTerminalReady(tab: (typeof tabs)[number]) {
+    if (tab.type === 'local' && !spawnedPtys.has(tab.id)) {
+        spawnedPtys.add(tab.id);
+        ptySpawn(tab.id, tab.localCommand?.program, undefined, undefined, tab.localCommand?.args).catch((err) => {
+            console.error(`Failed to spawn PTY for tab ${tab.id}:`, err);
+        });
+    }
+}
+
 	// Spawn PTY for new local tabs
 	$effect(() => {
-		for (const tab of tabs) {
-			if (tab.type === 'local' && !spawnedPtys.has(tab.id)) {
-				spawnedPtys.add(tab.id);
-				const spawn = () => {
-					ptySpawn(tab.id, tab.localCommand?.program, undefined, undefined, tab.localCommand?.args).catch((err) => {
-						console.error(`Failed to spawn PTY for tab ${tab.id}:`, err);
-					});
-				};
-				// Give WSL tabs a brief delay so Terminal finishes font loading and mounts listeners before the initial prompt emits
-				if (tab.wslDistro !== undefined || tab.localCommand?.program === 'wsl.exe') {
-					setTimeout(spawn, 120);
-				} else {
-					spawn();
-				}
-			}
-			if (tab.type === 'ssh' && tab.connectionId) {
-				connectedSsh.add(tab.connectionId);
-			}
-		}
-	});
+    for (const tab of tabs) {
+        if (tab.type === 'ssh' && tab.connectionId) {
+            connectedSsh.add(tab.connectionId);
+        }
+    }
+});
 
 
 	// Start monitoring for new SSH connections (poll-based)
@@ -253,7 +248,7 @@
 									onTitleChange={(title) => handleTerminalTitleChange(tab.id, title)}
 									sshConnectParams={tab.sshConnectParams}
 									onReconnected={(newId) => updateTabConnection(tab.id, newId)}
-								/>
+									onReady={() => handleTerminalReady(tab)}/>
 							{/if}
 						</div>
 					{/each}

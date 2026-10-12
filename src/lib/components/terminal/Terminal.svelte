@@ -33,9 +33,10 @@
 		onTitleChange?: (title: string) => void;
 		sshConnectParams?: SshConnectParams;
 		onReconnected?: (newConnectionId: string) => void;
+		onReady?: () => void;
 	}
 
-	let { ptyId, type: termType, connectionId, active, onTitleChange, sshConnectParams, onReconnected }: Props = $props();
+	let { ptyId, type: termType, connectionId, active, onTitleChange, sshConnectParams, onReconnected, onReady }: Props = $props();
 
 	// Local state seeded from the `connectionId` prop and overridden in-place on
 	// reconnect (handleReconnect assigns a new UUID and notifies the parent via
@@ -584,6 +585,8 @@
 				disconnected = true;
 			}
 		});
+
+		onReady?.();
 
 		// Listeners are attached — tell the SSH backend to flush any buffered
 		// output (motd/banner) emitted before this terminal mounted.
