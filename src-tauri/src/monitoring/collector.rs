@@ -371,7 +371,7 @@ async fn exec_wsl(distro: &str, cmd: &str) -> Result<String, String> {
         if !distro.is_empty() {
             c.args(["-d", &distro]);
         }
-        c.args(["--", "sh", "-c", &cmd]);
+        c.args(["-e", "sh", "-c", &cmd]);
         c.stdin(std::process::Stdio::null());
         #[cfg(target_os = "windows")]
         {
